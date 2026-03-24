@@ -6,21 +6,19 @@ import { auth, db } from '@/lib/firebase';
 import { RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { Toaster, toast } from 'react-hot-toast';
+import Link from 'next/link'; // 🟢 確保引入了 Link
 
 export default function LoginPage() {
   const router = useRouter();
   
-  // 流程狀態：'phone' (輸入電話) -> 'otp' (輸入驗證碼) -> 'register' (新客填寫資料)
   const [step, setStep] = useState('phone'); 
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
 
-  // 登入資料
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otp, setOtp] = useState('');
   const [confirmationResult, setConfirmationResult] = useState(null);
 
-  // 註冊資料 (新客專用)
   const [formData, setFormData] = useState({
     name: '',
     birthMonth: '',
@@ -28,30 +26,28 @@ export default function LoginPage() {
     interest: ''
   });
 
-  // 🟢 智慧路由：檢查登入狀態與身分
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      // 如果正在填寫註冊表單，不要打斷他
       if (user && step !== 'register') {
         try {
           const docRef = doc(db, 'users', user.uid);
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
-            // 是老客戶或員工
             const role = docSnap.data().role;
             if (['admin', 'manager', 'staff', 'reception'].includes(role)) {
-              router.push('/admin'); // 內部人員去大後台
+              router.push('/admin'); 
             } else {
-              router.push('/dashboard'); // 一般客人去前台
+              router.push('/dashboard'); 
             }
           } else {
-            // 是第一次登入的新客，Firestore 還沒有他的資料 -> 進入註冊畫面
             setStep('register');
+            setLoading(false); // 🟢 修復 1：切換到註冊畫面時，強制解除按鈕的 Loading 鎖定狀態
             setPageLoading(false);
           }
         } catch (error) {
           console.error("權限讀取失敗", error);
+          setLoading(false);
           setPageLoading(false);
         }
       } else {
@@ -61,7 +57,6 @@ export default function LoginPage() {
     return () => unsubscribe();
   }, [router, step]);
 
-  // 初始化 Recaptcha (防機器人)
   const setupRecaptcha = () => {
     if (!window.recaptchaVerifier) {
       window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
@@ -70,12 +65,10 @@ export default function LoginPage() {
     }
   };
 
-  // 步驟 1：發送 SMS 驗證碼
   const handleSendOtp = async (e) => {
     e.preventDefault();
     if (!phoneNumber) return toast.error("請輸入手機號碼");
     
-    // 確保號碼帶有區碼 (預設加香港 +852)
     const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+852${phoneNumber}`;
     
     setLoading(true);
@@ -89,13 +82,12 @@ export default function LoginPage() {
       toast.success("驗證碼已發送！", { id: toastId });
     } catch (error) {
       console.error(error);
-      toast.error("發送失敗，請確認號碼格式或稍後再試", { id: toastId });
+      toast.error("發送失敗，請確認號碼格式", { id: toastId });
     } finally {
       setLoading(false);
     }
   };
 
-  // 步驟 2：驗證 OTP (由 onAuthStateChanged 接手後續導航)
   const handleVerifyOtp = async (e) => {
     e.preventDefault();
     if (!otp || !confirmationResult) return;
@@ -105,14 +97,13 @@ export default function LoginPage() {
     try {
       await confirmationResult.confirm(otp);
       toast.success("手機驗證成功！", { id: toastId });
-      // 驗證成功後，上面的 useEffect 會自動觸發，去檢查他是老客還是新客
+      setLoading(false); // 🟢 修復 2：OTP 驗證成功後，解除 Loading 狀態
     } catch (error) {
       toast.error("驗證碼錯誤", { id: toastId });
       setLoading(false);
     }
   };
 
-  // 步驟 3：新客完成自助註冊
   const handleRegister = async (e) => {
     e.preventDefault();
     const user = auth.currentUser;
@@ -130,7 +121,7 @@ export default function LoginPage() {
         birthMonth: formData.birthMonth,
         gender: formData.gender,
         interest: formData.interest,
-        tDollarBalance: 100, // 🟢 新客註冊自動派發 $100 迎新
+        tDollarBalance: 100,
         points: 0,
         role: 'member',
         createdAt: new Date().toISOString()
@@ -139,7 +130,8 @@ export default function LoginPage() {
       router.push('/dashboard');
     } catch (error) {
       toast.error("註冊失敗，請重試", { id: toastId });
-      setLoading(false);
+    } finally {
+      setLoading(false); // 🟢 確保最後無論如何都會解除 Loading
     }
   };
 
@@ -153,7 +145,6 @@ export default function LoginPage() {
       
       <div className="w-full max-w-md">
         
-        {/* Logo 區塊 */}
         <div className="text-center mb-10">
           <h1 className="text-4xl font-black tracking-widest text-white italic mb-2">TRUST<span className="text-[#D4AF37] not-italic">.</span></h1>
           <p className="text-[10px] text-gray-500 uppercase tracking-[0.4em] font-bold">Member Portal</p>
@@ -162,7 +153,6 @@ export default function LoginPage() {
         <div className="bg-[#121212] p-10 rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden">
           <div className="absolute -top-10 -right-10 w-32 h-32 bg-[#D4AF37] opacity-10 rounded-full blur-3xl"></div>
           
-          {/* 🟢 Step 1: 輸入手機號碼 */}
           {step === 'phone' && (
             <form onSubmit={handleSendOtp} className="space-y-6 relative z-10 animate-fade-in">
               <div>
@@ -182,7 +172,6 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* 🟢 Step 2: 輸入 OTP 驗證碼 */}
           {step === 'otp' && (
             <form onSubmit={handleVerifyOtp} className="space-y-6 relative z-10 animate-fade-in">
               <div>
@@ -202,7 +191,6 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* 🟢 Step 3: 新客自助註冊表單 */}
           {step === 'register' && (
             <form onSubmit={handleRegister} className="space-y-5 relative z-10 animate-fade-in">
               <div className="border-b border-white/10 pb-4 mb-2">
@@ -257,7 +245,8 @@ export default function LoginPage() {
         </div>
         
         <div className="text-center mt-8">
-           <a href="#" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-[#D4AF37] transition-colors border-b border-white/5 pb-1">內部員工通道 (Staff Only)</a>
+           {/* 🟢 修復 3：使用 Link 元件正確跳轉到大後台登入頁 */}
+           <Link href="/admin/login" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-[#D4AF37] transition-colors border-b border-white/5 pb-1">內部員工通道 (Staff Only)</Link>
         </div>
       </div>
 
