@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, query, where } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, addDoc, query, where, deleteDoc } from 'firebase/firestore';
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function UserManagementPage() {
@@ -20,7 +20,7 @@ export default function UserManagementPage() {
   const [staffStats, setStaffStats] = useState({ clientCount: 0, revenue: 0 });
   const [isSaving, setIsSaving] = useState(false);
 
-  // 🟢 權限定義矩陣 Modal
+  // 權限定義矩陣 Modal
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
   useEffect(() => {
@@ -118,6 +118,28 @@ export default function UserManagementPage() {
     } catch (e) { toast.error("更新失敗"); }
   };
 
+  // 🟢 新增：帳號停權 / 復權
+  const toggleUserStatus = async (user) => {
+    const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
+    if (!window.confirm(`確定要將此帳戶設定為「${newStatus === 'suspended' ? '停權' : '正常'}」嗎？\n停權後客人將無法登入前台。`)) return;
+    
+    try {
+      await updateDoc(doc(db, "users", user.id), { status: newStatus });
+      toast.success(`帳號已${newStatus === 'suspended' ? '停權' : '恢復正常'}`);
+      fetchUsers();
+    } catch(e) { toast.error("操作失敗"); }
+  };
+
+  // 🟢 新增：徹底刪除帳號
+  const deleteUser = async (userId) => {
+    if (!window.confirm("⚠️ 警告：這將徹底刪除該客人的所有餘額與資料，且無法復原！確定刪除？")) return;
+    try {
+      await deleteDoc(doc(db, "users", userId));
+      toast.success("帳號已徹底刪除");
+      fetchUsers();
+    } catch(e) { toast.error("刪除失敗"); }
+  };
+
   const filteredUsers = filterRole === 'all' ? users : users.filter(u => u.role === filterRole);
 
   if (loading) return <div className="p-10 text-[#D4AF37]">載入用戶資料中...</div>;
@@ -141,7 +163,6 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      {/* 🟢 擴充的篩選器：加入 manager 與 reception */}
       <div className="flex flex-wrap gap-3 mb-8">
         {['all', 'member', 'reception', 'staff', 'manager', 'admin'].map(role => (
           <button key={role} onClick={() => setFilterRole(role)}
@@ -191,7 +212,6 @@ export default function UserManagementPage() {
                     </div>
                   </td>
                   <td className="p-6">
-                    {/* 🟢 擴充的權限選單 */}
                     <select 
                       value={u.role || 'member'} 
                       onChange={(e) => handleRoleChange(u.id, e.target.value)}
@@ -210,8 +230,15 @@ export default function UserManagementPage() {
                       <option value="admin">老闆 (Admin)</option>
                     </select>
                   </td>
-                  <td className="p-6 text-right">
-                     <button onClick={() => openDetails(u)} className="text-[10px] bg-white/5 hover:bg-[#D4AF37] hover:text-black px-5 py-2.5 rounded-xl text-gray-400 transition font-bold uppercase tracking-widest">
+                  {/* 🟢 操作區塊：加入停用與刪除按鈕 */}
+                  <td className="p-6 text-right flex justify-end gap-2 items-center">
+                     <button onClick={() => toggleUserStatus(u)} className={`text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition ${u.status === 'suspended' ? 'bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white'}`}>
+                       {u.status === 'suspended' ? '復權' : '停用'}
+                     </button>
+                     <button onClick={() => deleteUser(u.id)} className="text-[10px] bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition">
+                       刪除
+                     </button>
+                     <button onClick={() => openDetails(u)} className="text-[10px] bg-white/5 hover:bg-[#D4AF37] hover:text-black px-4 py-2 rounded-xl text-gray-400 transition font-bold uppercase tracking-widest ml-2">
                        Details
                      </button>
                   </td>
@@ -222,7 +249,7 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      {/* 🟢 彈出視窗 1：新增用戶 */}
+      {/* 新增用戶 */}
       {isCreateOpen && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-white/10 shadow-2xl relative">
@@ -255,7 +282,7 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 🟢 彈出視窗 2：權限對照矩陣 (Role Permission Matrix) */}
+      {/* 權限對照矩陣 */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative">
@@ -317,17 +344,16 @@ export default function UserManagementPage() {
             <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl">
               <p className="text-[10px] text-red-400 tracking-widest leading-relaxed">
                 <i className="fa-solid fa-shield-halved mr-1"></i> <strong>安全性提示：</strong> 
-                此權限表由底層 <code>layout.js</code> 的路由守衛 (Route Guard) 強制執行。如果員工試圖透過輸入網址強行進入無權限的模組，系統會自動將其攔截並踢回授權頁面。
+                此權限表由底層 <code>layout.js</code> 的路由守衛強制執行。
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* 🟢 彈出視窗 3：用戶詳情與編輯 (維持原樣) */}
+      {/* 用戶詳情與編輯 */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
-          {/* ... 原本的 User Detail 內容 ... (為了節省篇幅，這部分代碼與上一個版本相同，可直接保留) */}
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
             
             <div className="sticky top-0 bg-[#121212]/90 backdrop-blur px-10 py-8 border-b border-white/5 flex justify-between items-start z-10">
