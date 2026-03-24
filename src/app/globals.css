@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* 我們自訂的深色背景與無捲軸樣式 */
+body {
+  background-color: #121212;
+  color: #e5e7eb;
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
