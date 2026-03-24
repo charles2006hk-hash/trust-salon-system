@@ -12,6 +12,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState(null);
   const [balance, setBalance] = useState(0);
   const [points, setPoints] = useState(0); 
+  const [expiryDate, setExpiryDate] = useState(null); 
   const [loading, setLoading] = useState(true);
 
   // 我的預約與歷史
@@ -30,7 +31,7 @@ export default function DashboardPage() {
   const [bookedSlots, setBookedSlots] = useState([]); 
   const allTimeSlots = ['11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
 
-  // 🟢 積分商品庫：改為動態狀態，從後台讀取
+  // 積分商品庫
   const [rewardsList, setRewardsList] = useState([]);
 
   useEffect(() => {
@@ -43,19 +44,33 @@ export default function DashboardPage() {
 
           if (userDocSnap.exists()) {
             const userData = userDocSnap.data();
+            
+            // 🟢 帳號停權攔截
+            if (userData.status === 'suspended') {
+              alert("⚠️ 您的帳戶已被暫停使用。如有疑問請聯繫門市人員。");
+              await signOut(auth);
+              router.push('/login');
+              return;
+            }
+
             setBalance(userData.tDollarBalance || 0);
             setPoints(userData.points || 0); 
+            setExpiryDate(userData.tDollarExpiry || null);
           } else {
-            // 新註冊送 $100
+            // 🟢 新註冊送 $100，並預設有效期為 365 天
+            const defaultExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
             await setDoc(userDocRef, {
               phoneNumber: currentUser.phoneNumber,
               tDollarBalance: 100,
               points: 0,
+              tDollarExpiry: defaultExpiry,
+              status: 'active',
               createdAt: new Date().toISOString(),
               role: 'member'
             });
             setBalance(100);
             setPoints(0);
+            setExpiryDate(defaultExpiry);
           }
           fetchBookingData();
           fetchMyAppointments(currentUser.phoneNumber);
@@ -68,17 +83,14 @@ export default function DashboardPage() {
     return () => unsubscribe();
   }, [router]);
 
-  // 🟢 抓取後台資料：髮型師、服務、以及「積分商城」
   const fetchBookingData = async () => {
     const [sSnap, svSnap, rSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
-      getDocs(collection(db, 'rewards')) // 從資料庫抓取積分商品
+      getDocs(collection(db, 'rewards')) 
     ]);
     setStylists(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => d.data().name));
-    
-    // 將後台的積分商品存入狀態中
     setRewardsList(rSnap.docs.map(d => ({ id: d.id, ...d.data() })));
   };
 
@@ -119,44 +131,8 @@ export default function DashboardPage() {
     } catch (error) { alert("預約失敗，請稍後再試"); } finally { setBookingLoading(false); }
   };
 
-  // 🟢 充值邏輯 (賺取贈金與積分)
-  const topUp = async (packagePrice) => {
-    let tDollarReward = 0;
-    let pointsReward = packagePrice; // 充值多少 HKD 就送多少積分
-
-    if (packagePrice === 1000) tDollarReward = 1100;
-    if (packagePrice === 3000) tDollarReward = 3500;
-
-    const isConfirmed = window.confirm(`【線上支付網關模擬】\n確定支付 $${packagePrice} HKD？\n\n您將獲得：\n💰 ${tDollarReward} T-Dollar\n🌟 ${pointsReward} 積分`);
-    if (!isConfirmed) return;
-
-    setLoading(true);
-    try {
-      const userRef = doc(db, 'users', user.uid);
-      await runTransaction(db, async (transaction) => {
-        const userDoc = await transaction.get(userRef);
-        const currentBalance = userDoc.data().tDollarBalance || 0;
-        const currentPoints = userDoc.data().points || 0;
-        
-        const newBalance = currentBalance + tDollarReward;
-        const newPoints = currentPoints + pointsReward;
-
-        transaction.update(userRef, { tDollarBalance: newBalance, points: newPoints });
-        transaction.set(doc(collection(db, "transactions")), {
-          userId: user.uid, phoneNumber: user.phoneNumber, type: "topup",
-          tDollarAdded: tDollarReward, pointsAdded: pointsReward, amountPaidHKD: packagePrice,
-          timestamp: new Date().toISOString()
-        });
-      });
-
-      setBalance(prev => prev + tDollarReward);
-      setPoints(prev => prev + pointsReward);
-      alert(`🎉 充值成功！已存入 ${tDollarReward} T-Dollar 與 ${pointsReward} 積分。`);
-    } catch (error) { alert("充值失敗"); } finally { setLoading(false); }
-  };
-
   const redeemItem = (item) => {
-    const requiredPoints = Number(item.points); // 確保轉為數字進行比較
+    const requiredPoints = Number(item.points); 
     if (points < requiredPoints) {
       alert(`餘額不足！需要 ${requiredPoints} 積分，您目前只有 ${points} 積分。`);
       return;
@@ -179,6 +155,14 @@ export default function DashboardPage() {
     router.push('/login');
   };
 
+  // 🟢 計算距離到期日還有幾天
+  const getExpiryDaysLeft = () => {
+    if (!expiryDate) return 999;
+    const diffTime = new Date(expiryDate) - new Date();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+  const daysLeft = getExpiryDaysLeft();
+
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">資料同步中...</div>;
 
   return (
@@ -200,7 +184,7 @@ export default function DashboardPage() {
         <div className="bg-gradient-to-br from-[#1a1a1a] to-[#080808] rounded-[40px] p-8 relative overflow-hidden border border-[#D4AF37]/30 shadow-[0_15px_40px_rgba(212,175,55,0.1)]">
           <div className="absolute -top-10 -right-10 w-48 h-48 bg-[#D4AF37] opacity-10 rounded-full blur-3xl"></div>
           
-          <div className="flex justify-between items-start mb-8 relative z-10">
+          <div className="flex justify-between items-start mb-6 relative z-10">
             <div>
               <p className="text-[10px] text-[#D4AF37] uppercase tracking-[0.3em] mb-1 font-bold">Member ID</p>
               <h2 className="text-xl font-bold text-white tracking-widest">{user?.phoneNumber}</h2>
@@ -208,21 +192,35 @@ export default function DashboardPage() {
             <i className="fa-solid fa-crown text-[#D4AF37] text-3xl opacity-60 drop-shadow-lg"></i>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 mb-8 relative z-10 border-b border-white/10 pb-8">
+          <div className="grid grid-cols-2 gap-4 mb-6 relative z-10 border-b border-white/10 pb-6">
             <div>
               <p className="text-[10px] text-gray-400 mb-1 uppercase tracking-widest">T-Dollar 餘額</p>
               <div className="flex items-baseline gap-1">
                 <span className="text-lg text-[#D4AF37] font-bold">$</span>
-                <span className="text-4xl font-black text-white tracking-tighter">{balance.toLocaleString()}</span>
+                <span className={`text-4xl font-black tracking-tighter ${daysLeft < 0 ? 'text-red-500' : 'text-white'}`}>{balance.toLocaleString()}</span>
               </div>
             </div>
             <div className="text-right border-l border-white/5 pl-4">
               <p className="text-[10px] text-gray-400 mb-1 uppercase tracking-widest">可用積分</p>
               <div className="flex items-baseline justify-end gap-1">
-                <span className="text-3xl font-light text-[#D4AF37]">{points.toLocaleString()}</span>
+                <span className={`text-3xl font-light ${daysLeft < 0 ? 'text-red-500' : 'text-[#D4AF37]'}`}>{points.toLocaleString()}</span>
                 <span className="text-[10px] text-[#D4AF37] font-bold">PTS</span>
               </div>
             </div>
+          </div>
+
+          {/* 🟢 有效期警告區塊 */}
+          <div className={`mb-6 p-3 rounded-xl border relative z-10 flex items-center gap-3 ${daysLeft < 0 ? 'bg-red-500/10 border-red-500/30 text-red-400' : daysLeft <= 30 ? 'bg-orange-500/10 border-orange-500/30 text-orange-400' : 'bg-white/5 border-white/5 text-gray-400'}`}>
+             <i className="fa-solid fa-circle-exclamation text-lg"></i>
+             <div className="text-xs">
+                {daysLeft < 0 ? (
+                  <p><strong>餘額已過期！</strong> 請即回店增值以重新激活餘額。</p>
+                ) : daysLeft <= 30 ? (
+                  <p><strong>即將到期：</strong> 距離到期僅剩 <strong>{daysLeft}</strong> 天，請盡快回店增值延長有效期。</p>
+                ) : (
+                  <p>餘額與積分有效期至：{expiryDate ? new Date(expiryDate).toLocaleDateString() : '無期限'}</p>
+                )}
+             </div>
           </div>
 
           <div onClick={() => setShowQRModal(true)} className="bg-white hover:bg-gray-200 text-black p-4 rounded-2xl flex items-center justify-center gap-3 cursor-pointer transition-all shadow-xl font-black uppercase tracking-widest text-xs relative z-10">
@@ -276,34 +274,26 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* 4. 線上充值方案 (Top Up) */}
+        {/* 4. 線上充值方案改為 -> 門市充值引導 */}
         <div className="pt-4 border-t border-white/5">
           <div className="flex justify-between items-end mb-6">
             <div>
                <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 mb-1">
-                 <i className="fa-solid fa-wallet text-[#D4AF37]"></i> T-Dollar 增值
+                 <i className="fa-solid fa-wallet text-[#D4AF37]"></i> T-Dollar 門市增值
                </h3>
                <p className="text-[10px] text-gray-500">充值即享贈金，再賺同等積分</p>
             </div>
           </div>
           
-          <div className="space-y-4">
-            <div onClick={() => topUp(1000)} className="bg-[#121212] border border-white/5 rounded-3xl p-6 flex justify-between items-center cursor-pointer hover:border-[#D4AF37]/50 transition-all group">
-              <div>
-                <h4 className="text-white font-bold text-2xl mb-1">$1,000</h4>
-                <p className="text-[10px] text-gray-400 tracking-widest">實得 <span className="text-[#D4AF37] font-bold">1,100</span> T-Dollar + 1000 積分</p>
-              </div>
-              <div className="bg-white/5 text-white text-xs font-bold px-4 py-2 rounded-full group-hover:bg-[#D4AF37] group-hover:text-black transition-colors">購買</div>
-            </div>
-            
-            <div onClick={() => topUp(3000)} className="bg-gradient-to-r from-[#1a1a1a] to-[#2a220b] border border-[#D4AF37]/50 rounded-3xl p-6 flex justify-between items-center cursor-pointer relative overflow-hidden group shadow-[0_0_15px_rgba(212,175,55,0.15)]">
-              <div className="absolute top-0 right-6 bg-[#D4AF37] text-black text-[9px] font-black px-3 py-1 rounded-b-lg uppercase tracking-widest">VIP 最愛</div>
-              <div>
-                <h4 className="text-white font-bold text-2xl mb-1 mt-2">$3,000</h4>
-                <p className="text-[10px] text-gray-300 tracking-widest">實得 <span className="text-[#D4AF37] font-black text-sm">3,500</span> T-Dollar + 3000 積分</p>
-              </div>
-              <div className="bg-[#D4AF37] text-black text-xs font-bold px-4 py-2 rounded-full group-hover:scale-110 transition-transform shadow-lg">購買</div>
-            </div>
+          <div className="bg-[#121212] border border-dashed border-white/20 rounded-[32px] p-8 text-center">
+             <i className="fa-solid fa-store text-4xl text-gray-600 mb-4"></i>
+             <h4 className="text-white font-bold text-lg mb-2">請親臨門市辦理增值</h4>
+             <p className="text-xs text-gray-500 leading-relaxed mb-6">為保障您的財務安全，T-Dollar 增值服務目前僅限於門市辦理。增值後將自動為您的餘額與積分<strong className="text-[#D4AF37]">延長 365 天</strong>有效期。</p>
+             <div className="flex justify-center gap-4 text-[10px] font-bold text-gray-400 tracking-widest uppercase">
+                <span><i className="fa-brands fa-alipay text-blue-400 mr-1"></i> Alipay</span>
+                <span><i className="fa-brands fa-cc-visa text-blue-600 mr-1"></i> Visa</span>
+                <span><i className="fa-solid fa-money-bill text-green-400 mr-1"></i> Cash</span>
+             </div>
           </div>
         </div>
 
@@ -319,7 +309,6 @@ export default function DashboardPage() {
             <span className="text-[10px] text-[#D4AF37] border border-[#D4AF37] px-2 py-1 rounded-md font-bold">你有 {points} 積分</span>
           </div>
 
-          {/* 橫向滑動卡片：動態讀取 rewardsList */}
           {rewardsList.length === 0 ? (
             <div className="bg-[#121212] border border-dashed border-white/10 rounded-3xl p-8 text-center text-gray-500 text-xs tracking-widest uppercase">
                目前尚無可兌換之商品
@@ -402,7 +391,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* QR Code 與歷史紀錄維持不變 */}
+      {/* QR Code */}
       {showQRModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col justify-center items-center backdrop-blur-md p-8" onClick={() => setShowQRModal(false)}>
           <div className="bg-white p-8 rounded-[40px] flex flex-col items-center shadow-[0_0_60px_rgba(255,255,255,0.15)]" onClick={e => e.stopPropagation()}>
@@ -413,6 +402,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* 歷史紀錄 */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col justify-end backdrop-blur-sm">
           <div className="bg-[#121212] w-full h-[85vh] rounded-t-[40px] p-8 overflow-hidden flex flex-col border-t border-white/10 shadow-[0_-10px_50px_rgba(0,0,0,0.5)]">
@@ -424,7 +414,7 @@ export default function DashboardPage() {
               {transactions.map((tx) => (
                 <div key={tx.id} className="bg-black/50 p-6 rounded-3xl border border-white/5 flex justify-between items-center hover:border-white/20 transition-colors">
                   <div>
-                    <p className="text-white font-bold">{tx.type === 'topup' ? '線上增值 (Top-up)' : tx.service}</p>
+                    <p className="text-white font-bold">{tx.type === 'topup' ? '門市增值 (Top-up)' : tx.service}</p>
                     <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest">{new Date(tx.timestamp).toLocaleString()}</p>
                     {tx.pointsAdded && <p className="text-[10px] text-[#D4AF37] font-bold mt-1">獲得 {tx.pointsAdded} 積分</p>}
                   </div>
