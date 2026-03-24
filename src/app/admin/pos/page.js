@@ -14,6 +14,7 @@ export default function SmartPOS() {
   const [appointments, setAppointments] = useState([]); 
   const [staff, setStaff] = useState([]); 
   const [services, setServices] = useState([]); 
+  const [packages, setPackages] = useState([]); // 🟢 儲存後台抓來的增值方案
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
@@ -30,7 +31,7 @@ export default function SmartPOS() {
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('');
   const [topUpUser, setTopUpUser] = useState(null);
-  const [topUpForm, setTopUpForm] = useState({ package: 1000, paymentMethod: 'Cash' });
+  const [topUpForm, setTopUpForm] = useState({ packageId: '', paymentMethod: 'Cash', customAmount: '' });
 
   useEffect(() => {
     onAuthStateChanged(auth, (user) => { if (!user) router.push('/login'); });
@@ -50,9 +51,17 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    const [sSnap, svSnap] = await Promise.all([getDocs(collection(db, 'staff')), getDocs(collection(db, 'services'))]);
+    const [sSnap, svSnap, pSnap] = await Promise.all([
+      getDocs(collection(db, 'staff')), 
+      getDocs(collection(db, 'services')),
+      getDocs(collection(db, 'packages')) // 🟢 抓取增值方案
+    ]);
     setStaff(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    
+    const pkgs = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    pkgs.sort((a, b) => Number(b.price) - Number(a.price));
+    setPackages(pkgs);
   };
 
   const handleKeyDown = (e) => {
@@ -171,16 +180,12 @@ export default function SmartPOS() {
 
   const cancelSession = async (sessionId) => {
     if (!window.confirm("確定要取消此服務嗎？\n這將會直接釋放髮型師，且不會扣除客人任何款項。")) return;
-    
     try {
       await deleteDoc(doc(db, "active_sessions", sessionId));
       toast.success("服務已取消，髮型師已釋放！");
-    } catch (e) {
-      toast.error("取消失敗");
-    }
+    } catch (e) { toast.error("取消失敗"); }
   };
 
-  // 🟢 搜尋要增值的客人
   const searchTopUpUser = async () => {
     if(!topUpPhone) return;
     const q = query(collection(db, "users"), where("phoneNumber", "==", topUpPhone));
@@ -193,23 +198,34 @@ export default function SmartPOS() {
     }
   };
 
-  // 🟢 執行門市實體增值
+  // 🟢 升級：動態讀取增值方案並計算
   const handleStoreTopUp = async (e) => {
     e.preventDefault();
     if (!topUpUser) return;
+    if (!topUpForm.packageId) return toast.error("請選擇增值方案");
     
     let tDollarReward = 0;
-    let pointsReward = Number(topUpForm.package);
-    if (Number(topUpForm.package) === 1000) tDollarReward = 1100;
-    else if (Number(topUpForm.package) === 3000) tDollarReward = 3500;
-    else tDollarReward = Number(topUpForm.package); 
+    let pointsReward = 0;
+    let paidHKD = 0;
 
-    const isConfirmed = window.confirm(`確認收取客人 ${topUpForm.paymentMethod} $${topUpForm.package}？\n將存入 ${tDollarReward} T-Dollar`);
+    if (topUpForm.packageId === 'custom') {
+      if (!topUpForm.customAmount || isNaN(topUpForm.customAmount) || topUpForm.customAmount <= 0) return toast.error("請輸入有效的自訂金額");
+      paidHKD = Number(topUpForm.customAmount);
+      tDollarReward = paidHKD; // 自訂金額 1:1 兌換，無額外贈金
+      pointsReward = paidHKD;
+    } else {
+      const selectedPkg = packages.find(p => p.id === topUpForm.packageId);
+      if (!selectedPkg) return toast.error("方案錯誤");
+      paidHKD = Number(selectedPkg.price);
+      tDollarReward = Number(selectedPkg.tDollar);
+      pointsReward = Number(selectedPkg.points);
+    }
+
+    const isConfirmed = window.confirm(`確認收取客人 ${topUpForm.paymentMethod} $${paidHKD}？\n將存入 ${tDollarReward} T-Dollar 與 ${pointsReward} 積分`);
     if (!isConfirmed) return;
 
     try {
       const userRef = doc(db, 'users', topUpUser.id);
-      // 展延 365 天有效期
       const newExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
 
       await runTransaction(db, async (transaction) => {
@@ -221,7 +237,7 @@ export default function SmartPOS() {
           tDollarBalance: newBalance, 
           points: newPoints,
           tDollarExpiry: newExpiry, 
-          status: 'active' // 如果之前停權，增值後自動復權
+          status: 'active' 
         });
         
         transaction.set(doc(collection(db, "transactions")), {
@@ -230,8 +246,8 @@ export default function SmartPOS() {
           type: "topup",
           tDollarAdded: tDollarReward, 
           pointsAdded: pointsReward, 
-          amountPaidHKD: Number(topUpForm.package),
-          paymentMethod: topUpForm.paymentMethod, // 紀錄付款方式
+          amountPaidHKD: paidHKD,
+          paymentMethod: topUpForm.paymentMethod, 
           timestamp: new Date().toISOString()
         });
       });
@@ -240,6 +256,7 @@ export default function SmartPOS() {
       setShowTopUpModal(false);
       setTopUpUser(null);
       setTopUpPhone('');
+      setTopUpForm({ packageId: '', paymentMethod: 'Cash', customAmount: '' });
     } catch (error) { toast.error("增值失敗"); }
   };
 
@@ -247,7 +264,6 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
       
-      {/* 頂部：品牌與概況 */}
       <header className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 px-4">
         <div>
           <h1 className="text-3xl font-black tracking-tighter flex items-center gap-3">
@@ -255,7 +271,6 @@ export default function SmartPOS() {
           </h1>
         </div>
         <div className="flex gap-4">
-           {/* 🟢 新增的增值按鈕 */}
            <button onClick={() => setShowTopUpModal(true)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-green-900/50">
              <i className="fa-solid fa-hand-holding-dollar"></i> 門市客席增值
            </button>
@@ -270,8 +285,6 @@ export default function SmartPOS() {
         
         {/* 左側：報到與預約 */}
         <div className="lg:col-span-4 space-y-8">
-          
-          {/* 路過客 / 掃碼報到區 */}
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
             <div className="space-y-4">
@@ -298,7 +311,6 @@ export default function SmartPOS() {
             </div>
           </div>
 
-          {/* 今日預約名單 */}
           <div className="space-y-4">
             <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest px-4">今日預約客 (點擊報到)</h3>
             {appointments.length === 0 ? (
@@ -391,7 +403,7 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 門市實體增值 Modal */}
+      {/* 🟢 動態下拉選單的門市增值 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -414,12 +426,22 @@ export default function SmartPOS() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">選擇方案 (HKD)</label>
-                  <select value={topUpForm.package} onChange={e => setTopUpForm({...topUpForm, package: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
-                    <option value="1000">$1,000 (實得 $1,100 T-Dollar)</option>
-                    <option value="3000">$3,000 (實得 $3,500 T-Dollar)</option>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">選擇方案 (與後台同步)</label>
+                  <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
+                    <option value="" disabled>-- 請選擇方案 --</option>
+                    {packages.map(p => (
+                       <option key={p.id} value={p.id}>【{p.name}】收 ${p.price} (得 ${p.tDollar} T-Dollar + {p.points} PTS)</option>
+                    ))}
+                    <option value="custom">自訂金額 (1:1 兌換，無額外贈金與積分)</option>
                   </select>
                 </div>
+
+                {topUpForm.packageId === 'custom' && (
+                   <div className="space-y-2 animate-fade-in">
+                     <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">輸入自訂收取金額 (HKD)</label>
+                     <input type="number" required value={topUpForm.customAmount} onChange={e => setTopUpForm({...topUpForm, customAmount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="例如: 500" />
+                   </div>
+                )}
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式 (Payment Method)</label>
@@ -441,7 +463,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 未註冊客人攔截彈窗 */}
+      {/* 結帳與攔截彈窗 (略縮不變) */}
       {showRegModal && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#1a1a1a] w-full max-w-sm rounded-[40px] p-10 border border-red-500/30 shadow-[0_0_50px_rgba(239,68,68,0.15)] relative">
@@ -471,7 +493,6 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 結帳彈窗 (Settlement Modal) */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
