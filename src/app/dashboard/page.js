@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, runTransaction, collection, query, where, getDocs, addDoc } from 'firebase/firestore'; 
+import { doc, getDoc, setDoc, collection, query, where, getDocs, addDoc } from 'firebase/firestore'; 
 import { auth, db } from '@/lib/firebase';
 import { QRCodeSVG } from 'qrcode.react';
 
@@ -15,14 +15,12 @@ export default function DashboardPage() {
   const [expiryDate, setExpiryDate] = useState(null); 
   const [loading, setLoading] = useState(true);
 
-  // 我的預約與歷史
   const [myAppointments, setMyAppointments] = useState([]); 
   const [transactions, setTransactions] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
 
-  // 預約系統狀態
   const [showBooking, setShowBooking] = useState(false);
   const [stylists, setStylists] = useState([]);
   const [services, setServices] = useState([]);
@@ -31,8 +29,8 @@ export default function DashboardPage() {
   const [bookedSlots, setBookedSlots] = useState([]); 
   const allTimeSlots = ['11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
 
-  // 積分商品庫
   const [rewardsList, setRewardsList] = useState([]);
+  const [packagesList, setPackagesList] = useState([]); // 🟢 儲存動態增值方案
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -44,20 +42,16 @@ export default function DashboardPage() {
 
           if (userDocSnap.exists()) {
             const userData = userDocSnap.data();
-            
-            // 🟢 帳號停權攔截
             if (userData.status === 'suspended') {
               alert("⚠️ 您的帳戶已被暫停使用。如有疑問請聯繫門市人員。");
               await signOut(auth);
               router.push('/login');
               return;
             }
-
             setBalance(userData.tDollarBalance || 0);
             setPoints(userData.points || 0); 
             setExpiryDate(userData.tDollarExpiry || null);
           } else {
-            // 🟢 新註冊送 $100，並預設有效期為 365 天
             const defaultExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
             await setDoc(userDocRef, {
               phoneNumber: currentUser.phoneNumber,
@@ -84,14 +78,20 @@ export default function DashboardPage() {
   }, [router]);
 
   const fetchBookingData = async () => {
-    const [sSnap, svSnap, rSnap] = await Promise.all([
+    const [sSnap, svSnap, rSnap, pSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
-      getDocs(collection(db, 'rewards')) 
+      getDocs(collection(db, 'rewards')),
+      getDocs(collection(db, 'packages')) // 🟢 抓取動態增值方案
     ]);
     setStylists(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => d.data().name));
     setRewardsList(rSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    
+    // 依照售價高低排序方案
+    const pkgs = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    pkgs.sort((a, b) => Number(b.price) - Number(a.price));
+    setPackagesList(pkgs);
   };
 
   const fetchMyAppointments = async (phone) => {
@@ -155,7 +155,6 @@ export default function DashboardPage() {
     router.push('/login');
   };
 
-  // 🟢 計算距離到期日還有幾天
   const getExpiryDaysLeft = () => {
     if (!expiryDate) return 999;
     const diffTime = new Date(expiryDate) - new Date();
@@ -169,7 +168,6 @@ export default function DashboardPage() {
     <div className="bg-[#080808] min-h-screen pb-32 font-sans text-gray-200 selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
       
-      {/* Header */}
       <header className="px-6 py-8 flex justify-between items-start border-b border-white/5 bg-[#121212]/50 backdrop-blur-md sticky top-0 z-40">
         <div className="flex flex-col">
             <h1 className="text-2xl font-black tracking-widest text-white italic">TRUST<span className="text-[#D4AF37] not-italic">.</span></h1>
@@ -180,7 +178,7 @@ export default function DashboardPage() {
 
       <main className="max-w-md mx-auto px-6 mt-8 space-y-12">
         
-        {/* 1. 虛擬會員卡 */}
+        {/* 會員卡區塊 */}
         <div className="bg-gradient-to-br from-[#1a1a1a] to-[#080808] rounded-[40px] p-8 relative overflow-hidden border border-[#D4AF37]/30 shadow-[0_15px_40px_rgba(212,175,55,0.1)]">
           <div className="absolute -top-10 -right-10 w-48 h-48 bg-[#D4AF37] opacity-10 rounded-full blur-3xl"></div>
           
@@ -209,7 +207,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* 🟢 有效期警告區塊 */}
           <div className={`mb-6 p-3 rounded-xl border relative z-10 flex items-center gap-3 ${daysLeft < 0 ? 'bg-red-500/10 border-red-500/30 text-red-400' : daysLeft <= 30 ? 'bg-orange-500/10 border-orange-500/30 text-orange-400' : 'bg-white/5 border-white/5 text-gray-400'}`}>
              <i className="fa-solid fa-circle-exclamation text-lg"></i>
              <div className="text-xs">
@@ -228,7 +225,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* 2. 快捷操作 */}
+        {/* 快捷操作 */}
         <div className="grid grid-cols-2 gap-4">
           <button onClick={() => setShowBooking(true)} className="flex flex-col items-center justify-center bg-[#121212] rounded-[32px] p-6 border border-white/5 hover:border-[#D4AF37]/50 transition-all group shadow-lg">
             <div className="w-12 h-12 rounded-full bg-[#D4AF37]/10 flex items-center justify-center mb-3 group-hover:bg-[#D4AF37] transition-colors">
@@ -244,7 +241,7 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {/* 3. 我的預約 (Upcoming) */}
+        {/* 我的預約 */}
         <div>
           <h3 className="text-xs font-black text-white uppercase tracking-widest mb-6 flex items-center gap-2">
             <i className="fa-regular fa-clock text-[#D4AF37]"></i> 即將到來的預約
@@ -274,21 +271,40 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* 4. 線上充值方案改為 -> 門市充值引導 */}
+        {/* 🟢 動態讀取後台的增值方案廣告 */}
         <div className="pt-4 border-t border-white/5">
           <div className="flex justify-between items-end mb-6">
             <div>
                <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 mb-1">
-                 <i className="fa-solid fa-wallet text-[#D4AF37]"></i> T-Dollar 門市增值
+                 <i className="fa-solid fa-wallet text-[#D4AF37]"></i> T-Dollar 門市專屬增值
                </h3>
-               <p className="text-[10px] text-gray-500">充值即享贈金，再賺同等積分</p>
+               <p className="text-[10px] text-gray-500">延長有效期，尊享贈金與積分回饋</p>
             </div>
           </div>
           
+          <div className="space-y-4 mb-6">
+            {packagesList.length > 0 ? (
+               packagesList.map(pkg => (
+                 <div key={pkg.id} className="bg-gradient-to-r from-[#1a1a1a] to-[#2a220b] border border-[#D4AF37]/50 rounded-3xl p-6 flex justify-between items-center relative overflow-hidden shadow-[0_0_15px_rgba(212,175,55,0.15)]">
+                   {pkg.tag && <div className="absolute top-0 right-6 bg-[#D4AF37] text-black text-[9px] font-black px-3 py-1 rounded-b-lg uppercase tracking-widest">{pkg.tag}</div>}
+                   <div>
+                     <p className="text-white font-bold text-lg mb-1 mt-2">{pkg.name}</p>
+                     <h4 className="text-[#D4AF37] font-black text-2xl mb-2">${pkg.price} <span className="text-[10px] text-gray-400 font-normal">HKD</span></h4>
+                     <p className="text-[10px] text-gray-300 tracking-widest">實得 <span className="text-[#D4AF37] font-black text-sm">{pkg.tDollar}</span> T-Dollar + {pkg.points} 積分</p>
+                   </div>
+                 </div>
+               ))
+            ) : (
+               <div className="bg-[#121212] border border-white/5 rounded-3xl p-6 text-center text-gray-500 text-xs">
+                 更多優惠方案請洽詢門市
+               </div>
+            )}
+          </div>
+
           <div className="bg-[#121212] border border-dashed border-white/20 rounded-[32px] p-8 text-center">
              <i className="fa-solid fa-store text-4xl text-gray-600 mb-4"></i>
              <h4 className="text-white font-bold text-lg mb-2">請親臨門市辦理增值</h4>
-             <p className="text-xs text-gray-500 leading-relaxed mb-6">為保障您的財務安全，T-Dollar 增值服務目前僅限於門市辦理。增值後將自動為您的餘額與積分<strong className="text-[#D4AF37]">延長 365 天</strong>有效期。</p>
+             <p className="text-xs text-gray-500 leading-relaxed mb-6">為保障您的財務安全，增值服務目前僅限於門市辦理。增值後將自動為您的餘額與積分<strong className="text-[#D4AF37]">延長 365 天</strong>有效期。</p>
              <div className="flex justify-center gap-4 text-[10px] font-bold text-gray-400 tracking-widest uppercase">
                 <span><i className="fa-brands fa-alipay text-blue-400 mr-1"></i> Alipay</span>
                 <span><i className="fa-brands fa-cc-visa text-blue-600 mr-1"></i> Visa</span>
@@ -297,7 +313,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* 5. 積分換領商城 (Rewards Mall) */}
+        {/* 積分換領商城 */}
         <div className="pt-4 border-t border-white/5 pb-10">
            <div className="flex justify-between items-end mb-6">
             <div>
@@ -338,7 +354,7 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* 🟢 預約表單 */}
+      {/* Modal 組件省略 (保持與原先一致，節省篇幅但確保運行) */}
       {showBooking && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-xl">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-white/10 relative shadow-2xl">
@@ -391,7 +407,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* QR Code */}
       {showQRModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex flex-col justify-center items-center backdrop-blur-md p-8" onClick={() => setShowQRModal(false)}>
           <div className="bg-white p-8 rounded-[40px] flex flex-col items-center shadow-[0_0_60px_rgba(255,255,255,0.15)]" onClick={e => e.stopPropagation()}>
@@ -402,7 +417,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 歷史紀錄 */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col justify-end backdrop-blur-sm">
           <div className="bg-[#121212] w-full h-[85vh] rounded-t-[40px] p-8 overflow-hidden flex flex-col border-t border-white/10 shadow-[0_-10px_50px_rgba(0,0,0,0.5)]">
