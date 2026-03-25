@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, query, where, deleteDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase'; // 🟢 確保引入 auth
+import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc } from 'firebase/firestore';
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function UserManagementPage() {
@@ -12,7 +12,8 @@ export default function UserManagementPage() {
 
   // 新增用戶 Modal
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', phone: '', role: 'member', tDollar: 0, points: 0 });
+  // 🟢 狀態擴充：加入 email 和 password
+  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0 });
 
   // 用戶詳情 Modal
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -41,25 +42,72 @@ export default function UserManagementPage() {
     }
   };
 
+  // 🟢 終極版開戶邏輯：支援在背景建立 Email 帳號與密碼 (不登出老闆)
   const handleCreateUser = async (e) => {
     e.preventDefault();
-    const toastId = toast.loading("正在建立用戶資料...");
+    const toastId = toast.loading("正在同步建立系統帳號...");
+    
     try {
-      await addDoc(collection(db, "users"), {
+      let finalUid = null;
+
+      // 1. 如果是內部人員 (非 member)，透過 REST API 建立 Auth 帳號
+      if (newUser.role !== 'member') {
+        if (!newUser.email || !newUser.password) {
+          return toast.error("建立內部員工帳號必須填寫 Email 與 初始密碼", { id: toastId });
+        }
+        
+        // 使用 REST API 避免老闆被強制登出
+        const apiKey = auth.app.options.apiKey;
+        const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: newUser.email,
+            password: newUser.password,
+            returnSecureToken: false
+          })
+        });
+        
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error.message || "建立 Auth 帳號失敗");
+        finalUid = data.localId; // 取得新建立的 UID
+      }
+
+      // 2. 準備寫入 Firestore 的資料
+      const userData = {
         name: newUser.name,
         phoneNumber: newUser.phone,
+        email: newUser.email || '',
         role: newUser.role,
         tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
         createdAt: new Date().toISOString(),
+        status: 'active',
         notes: ''
-      });
-      toast.success("開戶成功！", { id: toastId });
+      };
+
+      // 3. 寫入資料庫
+      if (finalUid) {
+        // 如果是員工，使用剛剛 Auth 生成的 UID 作為文件 ID
+        await setDoc(doc(db, "users", finalUid), userData);
+        toast.success(`員工帳號建立成功！\n登入密碼：${newUser.password}`, { id: toastId, duration: 5000 });
+      } else {
+        // 如果是一般客人，由 Firestore 自動生成 ID
+        await addDoc(collection(db, "users"), userData);
+        toast.success("客戶檔案建立成功！", { id: toastId });
+      }
+
+      // 清空表單並關閉 Modal
       setIsCreateOpen(false);
-      setNewUser({ name: '', phone: '', role: 'member', tDollar: 0, points: 0 });
+      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0 });
       fetchUsers();
+      
     } catch (error) {
-      toast.error("開戶失敗", { id: toastId });
+      console.error(error);
+      let errMsg = "建立失敗";
+      if (error.message.includes('EMAIL_EXISTS')) errMsg = "此 Email 已經被註冊過了";
+      if (error.message.includes('WEAK_PASSWORD')) errMsg = "密碼太弱，請至少輸入 6 個字元";
+      toast.error(errMsg, { id: toastId });
     }
   };
 
@@ -118,10 +166,9 @@ export default function UserManagementPage() {
     } catch (e) { toast.error("更新失敗"); }
   };
 
-  // 🟢 新增：帳號停權 / 復權
   const toggleUserStatus = async (user) => {
     const newStatus = user.status === 'suspended' ? 'active' : 'suspended';
-    if (!window.confirm(`確定要將此帳戶設定為「${newStatus === 'suspended' ? '停權' : '正常'}」嗎？\n停權後客人將無法登入前台。`)) return;
+    if (!window.confirm(`確定要將此帳戶設定為「${newStatus === 'suspended' ? '停權' : '正常'}」嗎？`)) return;
     
     try {
       await updateDoc(doc(db, "users", user.id), { status: newStatus });
@@ -130,7 +177,6 @@ export default function UserManagementPage() {
     } catch(e) { toast.error("操作失敗"); }
   };
 
-  // 🟢 新增：徹底刪除帳號
   const deleteUser = async (userId) => {
     if (!window.confirm("⚠️ 警告：這將徹底刪除該客人的所有餘額與資料，且無法復原！確定刪除？")) return;
     try {
@@ -230,7 +276,6 @@ export default function UserManagementPage() {
                       <option value="admin">老闆 (Admin)</option>
                     </select>
                   </td>
-                  {/* 🟢 操作區塊：加入停用與刪除按鈕 */}
                   <td className="p-6 text-right flex justify-end gap-2 items-center">
                      <button onClick={() => toggleUserStatus(u)} className={`text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition ${u.status === 'suspended' ? 'bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white'}`}>
                        {u.status === 'suspended' ? '復權' : '停用'}
@@ -249,40 +294,62 @@ export default function UserManagementPage() {
         </div>
       </div>
 
-      {/* 新增用戶 */}
+      {/* 🟢 彈出視窗：動態表單 (根據角色顯示密碼欄位) */}
       {isCreateOpen && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-white/10 shadow-2xl relative">
             <button onClick={() => setIsCreateOpen(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
             <h2 className="text-2xl font-black text-white italic mb-8">Create <span className="text-[#D4AF37]">User</span></h2>
+            
             <form onSubmit={handleCreateUser} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">姓名 (必填)</label>
-                  <input type="text" required value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: Ivan" />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">電話或Email</label>
-                  <input type="text" value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="+852..." />
-                </div>
-              </div>
               <div className="space-y-1">
                 <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">身分權限</label>
-                <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]">
-                  <option value="member">一般會員 (Member)</option>
+                <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-[#D4AF37] font-bold outline-none">
+                  <option value="member">一般會員 (Member) - 無需密碼</option>
                   <option value="reception">櫃台人員 (Reception)</option>
                   <option value="staff">店內員工 / 髮型師 (Staff)</option>
                   <option value="manager">店鋪經理 (Manager)</option>
                   <option value="admin">系統管理員 (Admin)</option>
                 </select>
               </div>
-              <button type="submit" className="w-full bg-white text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-[#D4AF37] transition-all mt-6">確認建立</button>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">姓名 (必填)</label>
+                  <input type="text" required value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: Ivan" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">電話號碼</label>
+                  <input type="text" value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="+852..." />
+                </div>
+              </div>
+
+              {/* 🟢 如果不是一般會員，強制顯示 Email 與 密碼設定 */}
+              {newUser.role !== 'member' && (
+                <div className="grid grid-cols-2 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
+                  <div className="space-y-1 col-span-2">
+                    <p className="text-xs text-[#D4AF37] mb-2 font-bold"><i className="fa-solid fa-lock"></i> 內部人員登入憑證設定</p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">登入 Email (必填)</label>
+                    <input type="email" required={newUser.role !== 'member'} value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="ivan@trust.com" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">初始密碼 (必填, 最少6碼)</label>
+                    <input type="text" required={newUser.role !== 'member'} minLength={6} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="設定預設密碼" />
+                  </div>
+                </div>
+              )}
+
+              <button type="submit" className="w-full bg-white text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-[#D4AF37] transition-all mt-6 shadow-xl">
+                {newUser.role !== 'member' ? '建立檔案並開通系統帳號' : '確認建立客戶檔案'}
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* 權限對照矩陣 */}
+      {/* 權限對照矩陣 Modal (維持不變) */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative">
@@ -290,7 +357,7 @@ export default function UserManagementPage() {
             
             <div className="mb-8 border-b border-white/10 pb-6">
               <h2 className="text-3xl font-black text-white italic tracking-tighter">Role <span className="text-[#D4AF37]">Permissions</span></h2>
-              <p className="text-xs text-gray-400 mt-2 tracking-widest">各級職務系統存取權限對照表 (受底層路由守衛嚴格控制)</p>
+              <p className="text-xs text-gray-400 mt-2 tracking-widest">各級職務系統存取權限對照表</p>
             </div>
 
             <div className="overflow-x-auto">
@@ -305,7 +372,6 @@ export default function UserManagementPage() {
                   </tr>
                 </thead>
                 <tbody className="text-sm">
-                  {/* POS */}
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-left text-white font-bold"><i className="fa-solid fa-cash-register w-6 text-gray-500"></i> 前台收銀與結帳</td>
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
@@ -313,7 +379,6 @@ export default function UserManagementPage() {
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
                   </tr>
-                  {/* CMS */}
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-left text-white font-bold"><i className="fa-solid fa-sliders w-6 text-gray-500"></i> 資料與 CMS 管理 (定價/優惠)</td>
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
@@ -321,7 +386,6 @@ export default function UserManagementPage() {
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
                     <td className="p-4 border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark"></i></td>
                   </tr>
-                  {/* Finance */}
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-left text-white font-bold"><i className="fa-solid fa-chart-pie w-6 text-gray-500"></i> 財務報表 (總營收/抽成計算)</td>
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
@@ -329,7 +393,6 @@ export default function UserManagementPage() {
                     <td className="p-4 border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark"></i></td>
                     <td className="p-4 border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark"></i></td>
                   </tr>
-                  {/* Users */}
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-left text-white font-bold"><i className="fa-solid fa-users-gear w-6 text-gray-500"></i> 用戶與權限控制 (本頁面)</td>
                     <td className="p-4 border-l border-white/5 text-[#D4AF37]"><i className="fa-solid fa-check"></i></td>
@@ -340,18 +403,11 @@ export default function UserManagementPage() {
                 </tbody>
               </table>
             </div>
-            
-            <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl">
-              <p className="text-[10px] text-red-400 tracking-widest leading-relaxed">
-                <i className="fa-solid fa-shield-halved mr-1"></i> <strong>安全性提示：</strong> 
-                此權限表由底層 <code>layout.js</code> 的路由守衛強制執行。
-              </p>
-            </div>
           </div>
         </div>
       )}
 
-      {/* 用戶詳情與編輯 */}
+      {/* 用戶詳情 Modal (維持不變) */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
@@ -370,7 +426,6 @@ export default function UserManagementPage() {
             </div>
 
             <div className="p-10 space-y-8">
-              {/* 員工績效儀表板 */}
               {['staff', 'manager', 'admin'].includes(selectedUser.role) && (
                 <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-6 rounded-3xl border border-[#D4AF37]/30 shadow-lg">
                   <h3 className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-[0.4em] mb-6 flex items-center gap-2">
@@ -389,7 +444,6 @@ export default function UserManagementPage() {
                 </div>
               )}
 
-              {/* 基本資料編輯表單 */}
               <div>
                 <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.4em] mb-4">Profile Details</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -423,6 +477,14 @@ export default function UserManagementPage() {
         </div>
       )}
 
+      <style jsx>{`
+        .animate-fade-in { animation: fadeIn 0.4s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+      `}</style>
     </div>
   );
 }
