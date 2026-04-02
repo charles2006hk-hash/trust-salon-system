@@ -11,8 +11,9 @@ export default function UserManagementPage() {
   const [loading, setLoading] = useState(true);
   const [filterRole, setFilterRole] = useState('all');
 
-  // 🟢 儲存當前操作者的權限
+  // 🟢 儲存當前操作者的 權限 與 UID
   const [currentAdminRole, setCurrentAdminRole] = useState('reception'); 
+  const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0 });
@@ -25,9 +26,10 @@ export default function UserManagementPage() {
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
   useEffect(() => {
-    // 取得當前操作者的角色身分
+    // 🟢 取得當前操作者的角色身分與 UID
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        setCurrentUid(user.uid);
         const docSnap = await getDoc(doc(db, 'users', user.uid));
         if (docSnap.exists()) setCurrentAdminRole(docSnap.data().role);
       }
@@ -146,7 +148,6 @@ export default function UserManagementPage() {
         name: selectedUser.name || '',
         phoneNumber: selectedUser.phoneNumber || '',
         email: selectedUser.email || '',
-        // 🟢 嚴格防護：即使前端被破解，送出時也要確保非 admin 不能改 role
         ...(currentAdminRole === 'admin' ? { role: selectedUser.role } : {}),
         notes: selectedUser.notes || ''
       });
@@ -160,13 +161,9 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 雙重防護：修改權限的函數，直接擋掉非 Admin 請求
   const handleRoleChange = async (userId, newRole) => {
-    if (currentAdminRole !== 'admin') {
-      return toast.error("⛔ 權限不足：除了老闆，沒有人能修改系統權限！");
-    }
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：除了老闆，沒有人能修改系統權限！");
     if (!window.confirm(`確定要將此用戶更改為 ${newRole} 權限嗎？`)) return;
-    
     try {
       await updateDoc(doc(db, "users", userId), { role: newRole });
       toast.success("權限已更新！");
@@ -196,22 +193,37 @@ export default function UserManagementPage() {
   };
 
   // ==========================================
-  // 🟢 階級視角邏輯 (Visibility Logic)
-  // 定義每個角色「有資格看到」的名單
+  // 🟢 終極嚴格：階級視角邏輯 (Visibility Logic)
   // ==========================================
-  const getVisibleRoles = (role) => {
-    if (role === 'admin') return ['admin', 'manager', 'staff', 'reception', 'member'];
-    if (role === 'manager') return ['manager', 'staff', 'reception', 'member'];
-    // 櫃台或一般員工，只能看到 member
-    return ['member']; 
-  };
-  
-  const allowedRoles = getVisibleRoles(currentAdminRole);
-  
-  // 1. 先過濾出「有權限看到」的人
-  const hierarchicalUsers = users.filter(u => allowedRoles.includes(u.role));
-  // 2. 再根據上方的「篩選按鈕」過濾
+  const hierarchicalUsers = users.filter(u => {
+    // 1. 老闆 (Admin)：看全部
+    if (currentAdminRole === 'admin') return true;
+
+    // 2. 永遠可以看到「自己」的檔案
+    if (u.id === currentUid) return true;
+
+    // 3. 經理 (Manager)：看所有下屬與客人 (不包含其他 Manager 與 Admin)
+    if (currentAdminRole === 'manager') {
+      return ['staff', 'reception', 'member'].includes(u.role);
+    }
+
+    // 4. 櫃台 / 員工：只能看客人 (不包含同級同事、Manager、Admin)
+    if (['staff', 'reception'].includes(currentAdminRole)) {
+      return ['member'].includes(u.role);
+    }
+
+    return false;
+  });
+
+  // 根據上方的「篩選按鈕」進行二次過濾
   const filteredUsers = filterRole === 'all' ? hierarchicalUsers : hierarchicalUsers.filter(u => u.role === filterRole);
+
+  // 決定畫面上要顯示哪些篩選按鈕 (不能篩選自己沒權限看的角色)
+  const getVisibleRoleButtons = () => {
+    if (currentAdminRole === 'admin') return ['all', 'member', 'reception', 'staff', 'manager', 'admin'];
+    if (currentAdminRole === 'manager') return ['all', 'member', 'reception', 'staff'];
+    return ['all', 'member'];
+  };
 
   if (loading) return <div className="p-10 text-[#D4AF37]">載入用戶資料中...</div>;
 
@@ -234,17 +246,14 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      {/* 🟢 動態篩選按鈕：只顯示該操作者「有權限看到」的按鈕 */}
+      {/* 🟢 動態顯示篩選按鈕 */}
       <div className="flex flex-wrap gap-3 mb-8">
-        {['all', 'member', 'reception', 'staff', 'manager', 'admin'].map(role => {
-          if (role !== 'all' && !allowedRoles.includes(role)) return null;
-          return (
-            <button key={role} onClick={() => setFilterRole(role)}
-              className={`px-5 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all border ${filterRole === role ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-500 border-gray-800 hover:border-gray-500'}`}>
-              {role === 'all' ? '全部' : role}
-            </button>
-          )
-        })}
+        {getVisibleRoleButtons().map(role => (
+          <button key={role} onClick={() => setFilterRole(role)}
+            className={`px-5 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all border ${filterRole === role ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-500 border-gray-800 hover:border-gray-500'}`}>
+            {role === 'all' ? '全部' : role}
+          </button>
+        ))}
       </div>
 
       <div className="bg-[#121212] rounded-[32px] border border-white/5 overflow-hidden shadow-2xl">
@@ -268,6 +277,8 @@ export default function UserManagementPage() {
                       {u.role === 'admin' && <i className="fa-solid fa-crown text-[#D4AF37] text-xs"></i>}
                       {['staff', 'manager'].includes(u.role) && <i className="fa-solid fa-scissors text-[#D4AF37] text-xs"></i>}
                       {u.role === 'reception' && <i className="fa-solid fa-desktop text-blue-400 text-xs"></i>}
+                      {/* 標示「自己」 */}
+                      {u.id === currentUid && <span className="ml-2 text-[8px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full uppercase tracking-widest border border-blue-500/30">You</span>}
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
@@ -287,7 +298,7 @@ export default function UserManagementPage() {
                     </div>
                   </td>
                   <td className="p-6">
-                    {/* 🟢 鎖死：如果不是 Admin，這個下拉選單直接變灰且無法點擊 */}
+                    {/* 鎖死：如果不是 Admin，這個下拉選單直接變灰且無法點擊 */}
                     <select 
                       value={u.role || 'member'} 
                       onChange={(e) => handleRoleChange(u.id, e.target.value)}
@@ -303,7 +314,6 @@ export default function UserManagementPage() {
                       }`}
                     >
                       <option value="member">會員 (Member)</option>
-                      {/* 如果是老闆，才讓他在選單看到其他選項 (或保留選項但鎖死) */}
                       <option value="reception">櫃台 (Reception)</option>
                       <option value="staff">員工 (Staff)</option>
                       <option value="manager">經理 (Manager)</option>
@@ -311,7 +321,7 @@ export default function UserManagementPage() {
                     </select>
                   </td>
                   <td className="p-6 text-right flex justify-end gap-2 items-center">
-                     {/* 🟢 防護：只有老闆可以停用和刪除帳號 */}
+                     {/* 防護：只有老闆可以停用和刪除帳號 */}
                      {currentAdminRole === 'admin' && (
                        <>
                          <button onClick={() => toggleUserStatus(u)} className={`text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition ${u.status === 'suspended' ? 'bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white'}`}>
@@ -342,7 +352,7 @@ export default function UserManagementPage() {
             <form onSubmit={handleCreateUser} className="space-y-4">
               <div className="space-y-1">
                 <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">身分權限</label>
-                {/* 🟢 創建防護：如果不是老闆，下拉選單強迫鎖定在 Member */}
+                {/* 防護：如果不是老闆，下拉選單強迫鎖定在 Member */}
                 <select 
                   value={newUser.role} 
                   onChange={e => setNewUser({...newUser, role: e.target.value})} 
@@ -397,7 +407,7 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 權限對照矩陣 Modal (省略內部無改變的表格內容以節省空間，保持結構完整) */}
+      {/* 權限對照矩陣 Modal */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative">
@@ -408,14 +418,14 @@ export default function UserManagementPage() {
             </div>
             <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl">
               <p className="text-[10px] text-red-400 tracking-widest leading-relaxed">
-                <i className="fa-solid fa-shield-halved mr-1"></i> <strong>安全性提示：</strong> 除了老闆 (Admin)，沒有任何人能修改系統權限。
+                <i className="fa-solid fa-shield-halved mr-1"></i> <strong>安全性提示：</strong> 系統已啟用嚴格階級隔離機制，除了老闆 (Admin)，沒有任何人能修改系統權限，且同級之間無法互相查閱薪資或基本資料。
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* 用戶詳情 Modal (維持不變) */}
+      {/* 用戶詳情 Modal */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
