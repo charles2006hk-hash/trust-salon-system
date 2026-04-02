@@ -8,15 +8,15 @@ import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function AdminManagePage() {
-  const [activeTab, setActiveTab] = useState('services'); // services, staff, promos, categories, rewards, packages
+  const [activeTab, setActiveTab] = useState('services'); // services, staff, promos, categories, rewards, tiers
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]); 
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 表單擴充：加入 tDollar (增值實得金額)
-  const initialForm = { name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', tDollar: '' };
+  // 🟢 表單擴充：適應「會員等級 (tiers)」
+  const initialForm = { name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '' };
   const [formData, setFormData] = useState(initialForm);
 
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
@@ -34,6 +34,12 @@ export default function AdminManagePage() {
     setLoading(true);
     const querySnapshot = await getDocs(collection(db, activeTab));
     const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    // 如果是等級設定，依照門檻由高至低排序
+    if (activeTab === 'tiers') {
+      data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
+    }
+    
     setList(data);
     setLoading(false);
   };
@@ -87,7 +93,7 @@ export default function AdminManagePage() {
     setFormData({ ...formData, title: formData.title + emoji });
   };
 
-  const existingTags = ['rewards', 'packages'].includes(activeTab)
+  const existingTags = ['rewards', 'tiers'].includes(activeTab)
     ? [...new Set(list.filter(item => item.tag).map(item => item.tag))] 
     : [];
 
@@ -111,7 +117,7 @@ export default function AdminManagePage() {
             { id: 'staff', label: '髮型師', icon: '✂️' },
             { id: 'promos', label: '首頁公告', icon: '📢' },
             { id: 'rewards', label: '積分商城', icon: '🎁' },
-            { id: 'packages', label: '增值方案', icon: '💳' } // 🟢 新增的增值方案
+            { id: 'tiers', label: '會員等級', icon: '👑' } // 🟢 改為會員等級
           ].map(tab => (
             <button key={tab.id} onClick={() => { setActiveTab(tab.id); setEditingId(null); setFormData(initialForm); }} 
               className={`flex-1 min-w-[90px] py-3 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === tab.id ? 'bg-[#D4AF37] text-black shadow-xl scale-105' : 'text-gray-400 hover:bg-gray-800'}`}>
@@ -127,7 +133,6 @@ export default function AdminManagePage() {
 
           <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
             
-            {/* 服務、分類、員工、公告、商城的表單邏輯 (略縮不變) */}
             {activeTab === 'services' && (
               <>
                 <div className="space-y-2">
@@ -135,11 +140,11 @@ export default function AdminManagePage() {
                   <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (T-Dollar)</label>
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (HKD)</label>
                   <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required />
                 </div>
                 <div className="space-y-2 col-span-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類 (從分類設定新增)</label>
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
                   <select className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
                     {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                     {categories.length === 0 && <option>請先去分類設定新增類別</option>}
@@ -207,49 +212,32 @@ export default function AdminManagePage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label>
-                  {existingTags.length > 0 && (
-                     <div className="flex flex-wrap gap-2 mb-3">
-                       <span className="text-xs text-gray-500 w-full mb-1">已建立的標籤:</span>
-                       {existingTags.map(tag => (
-                         <button key={tag} type="button" onClick={() => setFormData({...formData, tag})} className="text-xs bg-red-500/10 text-red-400 border border-red-500/30 px-3 py-1.5 rounded-full hover:bg-red-500 hover:text-white transition font-bold tracking-widest">{tag}</button>
-                       ))}
-                     </div>
-                  )}
                   <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="如：VIP" />
                 </div>
               </>
             )}
 
-            {/* 🟢 增值方案專屬表單 */}
-            {activeTab === 'packages' && (
+            {/* 🟢 新增：會員等級 (Tiers) 專屬表單 */}
+            {activeTab === 'tiers' && (
               <>
                 <div className="space-y-2 col-span-2">
-                  <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">方案名稱 (顯示給客人看)</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP 尊榮充值方案" />
+                  <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label>
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：金卡會員 (Gold)" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">向客收取金額 (HKD)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="如：3000" />
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">累積充值門檻 (HKD)</label>
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required placeholder="如：3000" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">實得 T-Dollar (含贈金)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tDollar} onChange={e => setFormData({...formData, tDollar: e.target.value})} required placeholder="如：3500" />
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單專屬折扣 (例如 0.8 = 8折)</label>
+                  <input type="number" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required placeholder="如：0.8" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">額外贈送積分 (Points)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required placeholder="如：3000" />
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">標籤 (Tag - 選填)</label>
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="如：VVIP" />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">推廣標籤 (Tag - 選填)</label>
-                  {existingTags.length > 0 && (
-                     <div className="flex flex-wrap gap-2 mb-3">
-                       <span className="text-xs text-gray-500 w-full mb-1">已建立的標籤:</span>
-                       {existingTags.map(tag => (
-                         <button key={tag} type="button" onClick={() => setFormData({...formData, tag})} className="text-xs bg-red-500/10 text-red-400 border border-red-500/30 px-3 py-1.5 rounded-full hover:bg-red-500 hover:text-white transition font-bold tracking-widest">{tag}</button>
-                       ))}
-                     </div>
-                  )}
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="如：熱賣 / 超值" />
+                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
+                   <p>💡 <strong>折扣說明：</strong> 結帳時，系統會自動比對客人的「總歷史充值金額」，並套用對應的最高等級折扣。1 表示不打折，0.9 表示 9 折。</p>
                 </div>
               </>
             )}
@@ -271,18 +259,19 @@ export default function AdminManagePage() {
             <div key={item.id} className="bg-gray-900/60 p-6 rounded-3xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
               <div className="flex items-center gap-5">
                 <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-2xl shrink-0">
-                    {activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'packages' ? '💳' : (item.icon || '🎁')}
+                    {activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
                 </div>
                 <div>
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-xl text-white">{item.name || item.title}</span>
                     {item.category && activeTab === 'services' && <span className="text-[10px] bg-white/10 text-[#D4AF37] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.category}</span>}
-                    {item.tag && ['rewards', 'packages'].includes(activeTab) && <span className="text-[10px] bg-red-500/20 text-red-500 px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.tag}</span>}
+                    {item.tag && ['rewards', 'tiers'].includes(activeTab) && <span className="text-[10px] bg-red-500/20 text-red-500 px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.tag}</span>}
                   </div>
                   <div className="flex flex-wrap gap-4 mt-1 text-sm items-center">
-                    {item.price && <span className="text-gray-400 font-mono font-bold text-base">{activeTab === 'packages' ? `售價 $${item.price}` : `$${item.price}`}</span>}
-                    {item.tDollar && <span className="text-[#D4AF37] font-mono font-bold text-base">得 {item.tDollar} T-Dollar</span>}
-                    {item.points && <span className="text-white font-mono font-bold text-base">+{item.points} PTS</span>}
+                    {item.price && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
+                    {item.threshold && <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>}
+                    {item.discount && <span className="text-green-400 font-bold text-base">專屬折扣: {Number(item.discount) * 10} 折</span>}
+                    {item.points && <span className="text-white font-mono font-bold text-base">需 {item.points} PTS</span>}
                     {item.expiry && <span className="text-red-400/80 font-medium text-xs">📅 有效期: {item.expiry}</span>}
                   </div>
                 </div>
