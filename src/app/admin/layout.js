@@ -112,7 +112,7 @@ export default function AdminLayout({ children }) {
 
         <div className="p-8 border-b border-white/5 flex items-center justify-center">
           {/* 🟢 這裡已經替換為你的新 Logo */}
-          <img src="/images/logo-royal.svg" alt="TRUST OS Logo" className="h-10 w-auto" />
+          <img src="/images/logo-royal.png" alt="TRUST OS Logo" className="h-10 w-auto" />
         </div>
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
@@ -152,7 +152,7 @@ export default function AdminLayout({ children }) {
               <button onClick={() => setIsSidebarOpen(true)} className="text-gray-400 hover:text-white text-xl">
                 <i className="fa-solid fa-bars"></i>
               </button>
-              <img src="/images/logo-royal.svg" alt="TRUST OS Logo" className="h-6 w-auto" />
+              <img src="/images/logo-royal.png" alt="TRUST OS Logo" className="h-6 w-auto" />
             </div>
             <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white font-bold uppercase">
                {userData.role.substring(0, 1)}
