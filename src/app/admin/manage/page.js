@@ -15,11 +15,8 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 表單擴充：加入髮型師薪資與抽成參數
-  const initialForm = { 
-    name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '',
-    baseCommission: '', targetRevenue: '', bonusCommission: '' // 🟢 新增的髮型師參數
-  };
+  // 🟢 移除了抽成參數，回歸單純的展示資料管理
+  const initialForm = { name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '' };
   const [formData, setFormData] = useState(initialForm);
 
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
@@ -54,6 +51,7 @@ export default function AdminManagePage() {
     setLoading(true);
     try {
       if (editingId) {
+        // Firestore updateDoc 會保留未包含在 formData 裡的機密參數(如抽成)
         await updateDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() });
         toast.success("更新成功！");
       } else {
@@ -103,7 +101,7 @@ export default function AdminManagePage() {
           {[
             { id: 'services', label: '服務定價', icon: '💇‍♂️' },
             { id: 'categories', label: '分類設定', icon: '🏷️' },
-            { id: 'staff', label: '髮型師與抽成', icon: '✂️' }, // 🟢 改名
+            { id: 'staff', label: '髮型師名單', icon: '✂️' }, // 🟢 改回髮型師名單
             { id: 'promos', label: '首頁公告', icon: '📢' },
             { id: 'rewards', label: '積分商城', icon: '🎁' },
             { id: 'tiers', label: '會員等級', icon: '👑' } 
@@ -121,7 +119,6 @@ export default function AdminManagePage() {
           </h2>
 
           <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            
             {activeTab === 'services' && (
               <>
                 <div className="space-y-2">
@@ -145,33 +142,17 @@ export default function AdminManagePage() {
             {activeTab === 'categories' && (
               <div className="space-y-2 col-span-2">
                 <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">新分類名稱</label>
-                <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：染燙系列 / 護理產品" />
+                <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
               </div>
             )}
 
-            {/* 🟢 髮型師抽成表單升級 */}
+            {/* 🟢 髮型師：只剩下名字 */}
             {activeTab === 'staff' && (
-              <>
-                <div className="space-y-2 col-span-2">
-                  <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Ivan" />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">基本抽成比 (例: 0.3 = 30%)</label>
-                  <input type="number" step="0.01" min="0" max="1" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.baseCommission} onChange={e => setFormData({...formData, baseCommission: e.target.value})} required placeholder="0.3" />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">業績達標門檻 (HKD)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.targetRevenue} onChange={e => setFormData({...formData, targetRevenue: e.target.value})} placeholder="如不設限請填 0 或留空" />
-                </div>
-                <div className="space-y-2 col-span-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">達標後升級抽成 (例: 0.4 = 40%)</label>
-                  <input type="number" step="0.01" min="0" max="1" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.bonusCommission} onChange={e => setFormData({...formData, bonusCommission: e.target.value})} placeholder="0.4" />
-                </div>
-                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
-                   <p>💡 <strong>系統結算邏輯：</strong> 財務報表結算時，若該員工當月創造的「服務總業績」達到門檻，全額獎金將自動套用「達標後升級抽成」計算；未達標則採用「基本抽成比」。</p>
-                </div>
-              </>
+              <div className="space-y-2 col-span-2">
+                <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
+                <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Ivan" />
+                <p className="text-[10px] text-gray-500 mt-2">💡 欲設定髮型師的抽成與薪資參數，請至「財務報表」模組中設定。</p>
+              </div>
             )}
 
             {activeTab === 'promos' && (
@@ -268,16 +249,6 @@ export default function AdminManagePage() {
                   </div>
                   <div className="flex flex-wrap gap-4 mt-1 text-sm items-center">
                     {item.price && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
-                    
-                    {/* 🟢 顯示髮型師參數 */}
-                    {activeTab === 'staff' && (
-                      <>
-                        <span className="text-white font-mono font-bold">底抽: {(Number(item.baseCommission || 0) * 100).toFixed(0)}%</span>
-                        {item.targetRevenue && <span className="text-red-400 font-mono font-bold">門檻: ${item.targetRevenue}</span>}
-                        {item.bonusCommission && <span className="text-[#D4AF37] font-mono font-bold">達標: {(Number(item.bonusCommission || 0) * 100).toFixed(0)}%</span>}
-                      </>
-                    )}
-
                     {item.threshold && <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>}
                     {item.discount && <span className="text-green-400 font-bold text-base">專屬折扣: {Number(item.discount) * 10} 折</span>}
                   </div>
