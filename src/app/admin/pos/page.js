@@ -14,24 +14,23 @@ export default function SmartPOS() {
   const [appointments, setAppointments] = useState([]); 
   const [staff, setStaff] = useState([]); 
   const [services, setServices] = useState([]); 
-  const [packages, setPackages] = useState([]); // 🟢 儲存後台抓來的增值方案
+  const [tiers, setTiers] = useState([]); // 🟢 儲存後台抓來的會員等級規則
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
   const [walkInService, setWalkInService] = useState('');
 
   const [checkoutSession, setCheckoutSession] = useState(null);
-  const [checkoutAmount, setCheckoutAmount] = useState('');
+  const [checkoutAmount, setCheckoutAmount] = useState(''); // 最終手動可調的扣款金額
   const [isProcessing, setIsProcessing] = useState(false);
 
   const [showRegModal, setShowRegModal] = useState(false);
   const [unregisteredPhone, setUnregisteredPhone] = useState('');
 
-  // 🟢 POS 增值模組狀態
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('');
   const [topUpUser, setTopUpUser] = useState(null);
-  const [topUpForm, setTopUpForm] = useState({ packageId: '', paymentMethod: 'Cash', customAmount: '' });
+  const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash' });
 
   useEffect(() => {
     onAuthStateChanged(auth, (user) => { if (!user) router.push('/login'); });
@@ -51,45 +50,29 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    const [sSnap, svSnap, pSnap] = await Promise.all([
+    const [sSnap, svSnap, tSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
-      getDocs(collection(db, 'packages')) // 🟢 抓取增值方案
+      getDocs(collection(db, 'tiers')) // 🟢 抓取會員等級規則
     ]);
     setStaff(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     
-    const pkgs = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    pkgs.sort((a, b) => Number(b.price) - Number(a.price));
-    setPackages(pkgs);
+    const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    tData.sort((a, b) => Number(b.threshold) - Number(a.threshold)); // 由高門檻排到低
+    setTiers(tData);
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleCheckIn(phone);
-    }
+    if (e.key === 'Enter') { e.preventDefault(); handleCheckIn(phone); }
   };
 
-  const handleCheckIn = async (phoneNum, bookingData = null, skipCheck = false) => {
+  // 路過客報到 (允許非會員直接入店，但結帳時必須付原價)
+  const handleCheckIn = async (phoneNum, bookingData = null) => {
     if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話");
-    
-    if (!bookingData && (!walkInStylist || !walkInService)) {
-       return toast.error("路過客請選擇髮型師與服務項目");
-    }
+    if (!bookingData && (!walkInStylist || !walkInService)) return toast.error("請選擇髮型師與服務項目");
 
     const formattedPhone = phoneNum.startsWith('+') ? phoneNum : `+852${phoneNum}`;
-    
-    if (!skipCheck) {
-      const userQ = query(collection(db, "users"), where("phoneNumber", "==", formattedPhone));
-      const userSnap = await getDocs(userQ);
-
-      if (userSnap.empty) {
-        setUnregisteredPhone(formattedPhone);
-        setShowRegModal(true); 
-        return; 
-      }
-    }
 
     try {
       await addDoc(collection(db, "active_sessions"), {
@@ -110,64 +93,82 @@ export default function SmartPOS() {
     } catch (e) { toast.error("報到失敗"); }
   };
 
-  const handleRegisterNewMember = async () => {
-    const toastId = toast.loading('建立會員檔案中...');
+  // 🟢 結帳準備：抓取客人等級與自動計算折扣
+  const openCheckout = async (session) => {
+    const toastId = toast.loading("正在結算帳單與會員折扣...");
     try {
-      await addDoc(collection(db, "users"), {
-        phoneNumber: unregisteredPhone,
-        tDollarBalance: 0,
-        createdAt: new Date().toISOString(),
-        role: 'member'
-      });
+      const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
+      const userSnap = await getDocs(userQ);
       
-      toast.success('註冊成功！自動入店...', { id: toastId });
-      setShowRegModal(false);
-      handleCheckIn(unregisteredPhone, null, true);
+      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0 } : userSnap.docs[0].data();
+      const serviceItem = services.find(s => s.name === session.service);
+      const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
+      
+      const discountRate = Number(uData.discount) || 1;
+      const finalPrice = Math.round(originalPrice * discountRate);
+
+      setCheckoutSession({
+        ...session,
+        originalPrice,
+        discountRate,
+        finalPrice,
+        tier: uData.tier || '基本會員 (Basic)',
+        balance: uData.tDollarBalance || 0,
+        userId: userSnap.empty ? null : userSnap.docs[0].id
+      });
+      setCheckoutAmount(finalPrice); // 預設帶入打折後的金額，允許店員手動微調
+      toast.dismiss(toastId);
     } catch (error) {
-      toast.error('註冊失敗，請重試', { id: toastId });
+      toast.error("讀取帳單失敗", { id: toastId });
     }
   };
 
-  const openCheckout = (session) => {
-    setCheckoutSession(session);
-    const serviceItem = services.find(s => s.name === session.service);
-    if (serviceItem) {
-      setCheckoutAmount(serviceItem.price);
-    } else {
-      setCheckoutAmount(''); 
-    }
-  };
-
+  // 🟢 執行結帳扣款
   const processSettlement = async (e) => {
     e.preventDefault();
     if (!checkoutAmount || isNaN(checkoutAmount)) return toast.error("請輸入有效金額");
 
     setIsProcessing(true);
     const toastId = toast.loading('結帳扣款中...');
+    const finalAmountNum = Number(checkoutAmount);
     
     try {
-      const q = query(collection(db, "users"), where("phoneNumber", "==", checkoutSession.phoneNumber));
-      const userSnap = await getDocs(q);
-      if (userSnap.empty) throw new Error("找不到該會員的 T-Dollar 帳戶");
-      const userRef = doc(db, "users", userSnap.docs[0].id);
+      if (checkoutSession.userId) {
+        // 會員結帳：扣除 T-Dollar
+        const userRef = doc(db, "users", checkoutSession.userId);
+        await runTransaction(db, async (tx) => {
+          const uDoc = await tx.get(userRef);
+          const newBal = (uDoc.data().tDollarBalance || 0) - finalAmountNum;
+          if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${uDoc.data().tDollarBalance}`);
 
-      await runTransaction(db, async (tx) => {
-        const uDoc = await tx.get(userRef);
-        const newBal = (uDoc.data().tDollarBalance || 0) - Number(checkoutAmount);
-        if (newBal < 0) throw new Error(`會員餘額不足！當前僅剩 $${uDoc.data().tDollarBalance} T-Dollar`);
-
-        tx.update(userRef, { tDollarBalance: newBal });
-        tx.set(doc(collection(db, "transactions")), {
-          userId: userRef.id, 
-          phoneNumber: checkoutSession.phoneNumber, 
-          amount: Number(checkoutAmount),
-          service: checkoutSession.service, 
-          stylist: checkoutSession.stylist, 
-          type: "deduct", 
-          timestamp: new Date().toISOString()
+          tx.update(userRef, { tDollarBalance: newBal });
+          tx.set(doc(collection(db, "transactions")), {
+            userId: userRef.id, 
+            phoneNumber: checkoutSession.phoneNumber, 
+            amount: finalAmountNum,
+            originalAmount: checkoutSession.originalPrice,
+            discountRate: checkoutSession.discountRate,
+            service: checkoutSession.service, 
+            stylist: checkoutSession.stylist, 
+            type: "deduct", 
+            timestamp: new Date().toISOString()
+          });
+          tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
-        tx.delete(doc(db, "active_sessions", checkoutSession.id));
-      });
+      } else {
+        // 非會員 (Walk-in) 結帳：純紀錄營收，不扣餘額
+        await runTransaction(db, async (tx) => {
+          tx.set(doc(collection(db, "transactions")), {
+            phoneNumber: checkoutSession.phoneNumber, 
+            amount: finalAmountNum,
+            service: checkoutSession.service, 
+            stylist: checkoutSession.stylist, 
+            type: "walkin_cash", // 非會員現金客
+            timestamp: new Date().toISOString()
+          });
+          tx.delete(doc(db, "active_sessions", checkoutSession.id));
+        });
+      }
 
       toast.success("結帳完成，資源已釋放！", { id: toastId });
       setCheckoutSession(null);
@@ -182,7 +183,7 @@ export default function SmartPOS() {
     if (!window.confirm("確定要取消此服務嗎？\n這將會直接釋放髮型師，且不會扣除客人任何款項。")) return;
     try {
       await deleteDoc(doc(db, "active_sessions", sessionId));
-      toast.success("服務已取消，髮型師已釋放！");
+      toast.success("服務已取消");
     } catch (e) { toast.error("取消失敗"); }
   };
 
@@ -198,30 +199,27 @@ export default function SmartPOS() {
     }
   };
 
-  // 🟢 升級：動態讀取增值方案並計算
+  // 🟢 門市增值：1:1 兌換並重新判定等級
   const handleStoreTopUp = async (e) => {
     e.preventDefault();
     if (!topUpUser) return;
-    if (!topUpForm.packageId) return toast.error("請選擇增值方案");
+    if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
     
-    let tDollarReward = 0;
-    let pointsReward = 0;
-    let paidHKD = 0;
-
-    if (topUpForm.packageId === 'custom') {
-      if (!topUpForm.customAmount || isNaN(topUpForm.customAmount) || topUpForm.customAmount <= 0) return toast.error("請輸入有效的自訂金額");
-      paidHKD = Number(topUpForm.customAmount);
-      tDollarReward = paidHKD; // 自訂金額 1:1 兌換，無額外贈金
-      pointsReward = paidHKD;
-    } else {
-      const selectedPkg = packages.find(p => p.id === topUpForm.packageId);
-      if (!selectedPkg) return toast.error("方案錯誤");
-      paidHKD = Number(selectedPkg.price);
-      tDollarReward = Number(selectedPkg.tDollar);
-      pointsReward = Number(selectedPkg.points);
+    const paidHKD = Number(topUpForm.amount);
+    
+    // 預覽計算新等級
+    const currentTotalTopUp = topUpUser.totalTopUp || 0;
+    const newTotalTopUp = currentTotalTopUp + paidHKD;
+    
+    let newTier = { name: '基本會員 (Basic)', discount: 1 };
+    for (const t of tiers) { // tiers 已由高至低排序
+       if (newTotalTopUp >= Number(t.threshold)) {
+           newTier = t;
+           break;
+       }
     }
 
-    const isConfirmed = window.confirm(`確認收取客人 ${topUpForm.paymentMethod} $${paidHKD}？\n將存入 ${tDollarReward} T-Dollar 與 ${pointsReward} 積分`);
+    const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n客人將獲得：\n💰 ${paidHKD} T-Dollar\n🌟 ${paidHKD} 積分\n👑 結算後等級：${newTier.name} (${newTier.discount * 10} 折)`);
     if (!isConfirmed) return;
 
     try {
@@ -230,12 +228,15 @@ export default function SmartPOS() {
 
       await runTransaction(db, async (transaction) => {
         const userDoc = await transaction.get(userRef);
-        const newBalance = (userDoc.data().tDollarBalance || 0) + tDollarReward;
-        const newPoints = (userDoc.data().points || 0) + pointsReward;
+        const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
+        const newPoints = (userDoc.data().points || 0) + paidHKD;
 
         transaction.update(userRef, { 
           tDollarBalance: newBalance, 
           points: newPoints,
+          totalTopUp: newTotalTopUp, // 🟢 記錄終身累積充值金額
+          tier: newTier.name,        // 🟢 更新等級
+          discount: newTier.discount,// 🟢 更新折扣
           tDollarExpiry: newExpiry, 
           status: 'active' 
         });
@@ -244,19 +245,19 @@ export default function SmartPOS() {
           userId: topUpUser.id, 
           phoneNumber: topUpUser.phoneNumber, 
           type: "topup",
-          tDollarAdded: tDollarReward, 
-          pointsAdded: pointsReward, 
+          tDollarAdded: paidHKD, 
+          pointsAdded: paidHKD, 
           amountPaidHKD: paidHKD,
           paymentMethod: topUpForm.paymentMethod, 
           timestamp: new Date().toISOString()
         });
       });
 
-      toast.success("增值成功！已展延有效期 365 天。");
+      toast.success(`增值成功！\n已將客人升級至 ${newTier.name}`);
       setShowTopUpModal(false);
       setTopUpUser(null);
       setTopUpPhone('');
-      setTopUpForm({ packageId: '', paymentMethod: 'Cash', customAmount: '' });
+      setTopUpForm({ amount: '', paymentMethod: 'Cash' });
     } catch (error) { toast.error("增值失敗"); }
   };
 
@@ -346,7 +347,7 @@ export default function SmartPOS() {
                   <button 
                     onClick={() => cancelSession(session.id)}
                     className="w-10 h-10 rounded-full bg-red-900/30 text-red-500 border border-red-500/30 hover:bg-red-500 hover:text-white transition-all flex items-center justify-center opacity-0 group-hover:opacity-100 shadow-lg"
-                    title="強制取消並釋放資源 (不扣款)"
+                    title="強制取消並釋放資源"
                   >
                     <i className="fa-solid fa-xmark text-lg"></i>
                   </button>
@@ -403,7 +404,7 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 動態下拉選單的門市增值 Modal */}
+      {/* 🟢 門市增值 Modal (1:1 兌換並升級) */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -420,31 +421,26 @@ export default function SmartPOS() {
                 <div className="bg-white/5 p-4 rounded-2xl flex justify-between items-center">
                    <div>
                      <p className="text-white font-bold">{topUpUser.name || topUpUser.phoneNumber}</p>
-                     <p className="text-[10px] text-gray-400 mt-1">目前餘額: <span className="text-[#D4AF37] font-bold">${topUpUser.tDollarBalance}</span></p>
+                     <p className="text-[10px] text-gray-400 mt-1">目前等級: <span className="text-[#D4AF37] font-bold">{topUpUser.tier || '基本會員 (Basic)'}</span></p>
                    </div>
-                   <div className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-3 py-1 rounded-full font-bold">已核對身分</div>
+                   <div className="text-right">
+                     <p className="text-[10px] text-gray-500 font-bold uppercase">累積儲值</p>
+                     <p className="text-white font-bold">${topUpUser.totalTopUp || 0}</p>
+                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">選擇方案 (與後台同步)</label>
-                  <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
-                    <option value="" disabled>-- 請選擇方案 --</option>
-                    {packages.map(p => (
-                       <option key={p.id} value={p.id}>【{p.name}】收 ${p.price} (得 ${p.tDollar} T-Dollar + {p.points} PTS)</option>
+                <div className="space-y-2 animate-fade-in">
+                  <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">充值金額 (HKD) - 1:1 兌換 T-Dollar</label>
+                  <div className="flex gap-2 mb-2">
+                    {[1000, 3000, 5000].map(amt => (
+                      <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
                     ))}
-                    <option value="custom">自訂金額 (1:1 兌換，無額外贈金與積分)</option>
-                  </select>
+                  </div>
+                  <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
                 </div>
 
-                {topUpForm.packageId === 'custom' && (
-                   <div className="space-y-2 animate-fade-in">
-                     <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">輸入自訂收取金額 (HKD)</label>
-                     <input type="number" required value={topUpForm.customAmount} onChange={e => setTopUpForm({...topUpForm, customAmount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="例如: 500" />
-                   </div>
-                )}
-
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式 (Payment Method)</label>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式</label>
                   <select value={topUpForm.paymentMethod} onChange={e => setTopUpForm({...topUpForm, paymentMethod: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
                     <option value="Cash">現金 (Cash)</option>
                     <option value="Credit Card">信用卡 (Visa/Master)</option>
@@ -463,85 +459,85 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 結帳與攔截彈窗 (略縮不變) */}
-      {showRegModal && (
-        <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
-          <div className="bg-[#1a1a1a] w-full max-w-sm rounded-[40px] p-10 border border-red-500/30 shadow-[0_0_50px_rgba(239,68,68,0.15)] relative">
-            <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center text-2xl mb-6">
-              <i className="fa-solid fa-user-shield"></i>
-            </div>
-            <h3 className="text-2xl font-black text-white mb-2">非會員攔截</h3>
-            <p className="text-sm text-gray-400 mb-8 leading-relaxed">
-              系統查無號碼 <span className="text-white font-bold">{unregisteredPhone}</span>。為了確保消費紀錄與餘額扣除正確，所有客人都必須成為會員。
-            </p>
-            
-            <div className="space-y-3">
-              <button 
-                onClick={handleRegisterNewMember} 
-                className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-2xl text-sm uppercase tracking-widest hover:scale-[1.02] transition shadow-xl"
-              >
-                立即為客註冊並入店
-              </button>
-              <button 
-                onClick={() => setShowRegModal(false)} 
-                className="w-full bg-white/5 border border-white/10 text-gray-400 font-bold py-4 rounded-2xl text-xs uppercase tracking-widest hover:text-white transition"
-              >
-                取消操作
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* 🟢 結帳彈窗 (包含自動算折扣功能) */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
-          <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
+          <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
             <button onClick={() => setCheckoutSession(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
             
-            <h3 className="text-2xl font-black text-white italic mb-8">Checkout</h3>
+            <h3 className="text-2xl font-black text-white italic mb-6">Checkout</h3>
             
-            <form onSubmit={processSettlement} className="space-y-6">
-              <div className="bg-black p-4 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
-                <p className="text-xl font-bold text-white">{checkoutSession.phoneNumber}</p>
+            <form onSubmit={processSettlement} className="space-y-4">
+              <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
+                  <p className="text-lg font-bold text-white">{checkoutSession.phoneNumber}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
+                    {checkoutSession.tier}
+                  </span>
+                  {checkoutSession.discountRate < 1 && (
+                     <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
+                  )}
+                </div>
               </div>
               
               <div className="grid grid-cols-2 gap-4">
-                 <div className="bg-black p-4 rounded-2xl border border-white/5">
-                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Stylist</p>
-                  <p className="text-sm font-bold text-gray-300">{checkoutSession.stylist}</p>
+                 <div className="bg-black p-3 rounded-2xl border border-white/5">
+                  <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Stylist</p>
+                  <p className="text-xs font-bold text-gray-300 truncate">{checkoutSession.stylist}</p>
                 </div>
-                <div className="bg-black p-4 rounded-2xl border border-white/5">
-                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Service</p>
-                  <p className="text-sm font-bold text-gray-300">{checkoutSession.service}</p>
+                <div className="bg-black p-3 rounded-2xl border border-white/5">
+                  <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Service</p>
+                  <p className="text-xs font-bold text-gray-300 truncate">{checkoutSession.service}</p>
                 </div>
               </div>
 
-              <div className="pt-4">
-                <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest block mb-2">確認扣款金額 (T-Dollar)</label>
+              <div className="bg-white/5 rounded-2xl p-4 space-y-2 mt-4">
+                 <div className="flex justify-between text-sm text-gray-400">
+                    <span>服務定價</span>
+                    <span>${checkoutSession.originalPrice}</span>
+                 </div>
+                 {checkoutSession.discountRate < 1 && (
+                   <div className="flex justify-between text-sm text-green-400 font-bold">
+                      <span>會員專屬折扣</span>
+                      <span>-${checkoutSession.originalPrice - checkoutSession.finalPrice}</span>
+                   </div>
+                 )}
+                 <div className="border-t border-white/10 pt-2 flex justify-between items-center mt-2">
+                    <span className="text-xs text-[#D4AF37] font-bold uppercase tracking-widest">實收金額</span>
+                    <span className="text-2xl font-black text-white">${checkoutSession.finalPrice}</span>
+                 </div>
+              </div>
+
+              {!checkoutSession.userId && (
+                 <p className="text-[10px] text-red-400 text-center bg-red-500/10 py-2 rounded-lg">此客為非會員(Walk-in)，不扣餘額，請收取現金/刷卡</p>
+              )}
+
+              <div className="pt-2">
+                <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest block mb-2">手動確認扣款 (T-Dollar)</label>
                 <div className="relative">
                   <span className="absolute left-4 top-4 text-[#D4AF37] font-bold text-2xl">$</span>
                   <input 
                     type="number" required
                     value={checkoutAmount} 
                     onChange={e => setCheckoutAmount(e.target.value)} 
-                    className="w-full bg-black border border-[#D4AF37]/50 rounded-2xl p-4 pl-12 text-4xl font-black text-white outline-none focus:border-[#D4AF37]"
+                    className="w-full bg-black border border-[#D4AF37]/50 rounded-2xl p-4 pl-12 text-3xl font-black text-white outline-none focus:border-[#D4AF37]"
                   />
                 </div>
+                {checkoutSession.userId && (
+                  <p className="text-[10px] text-gray-500 mt-2 text-right">客人當前餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>
+                )}
               </div>
 
-              <button type="submit" disabled={isProcessing} className="w-full mt-4 bg-[#D4AF37] text-black font-black py-5 rounded-2xl uppercase tracking-widest text-xs hover:scale-[1.02] transition shadow-xl">
-                {isProcessing ? "Processing..." : "Confirm Payment"}
+              <button type="submit" disabled={isProcessing} className="w-full mt-2 bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-[1.02] transition shadow-xl">
+                {isProcessing ? "Processing..." : (checkoutSession.userId ? "確認扣減 T-Dollar" : "確認紀錄現金營收")}
               </button>
             </form>
           </div>
         </div>
       )}
-
-      <style jsx>{`
-        .animate-fade-in { animation: fadeIn 0.4s ease-in-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      `}</style>
     </div>
   );
 }
