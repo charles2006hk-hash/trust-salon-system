@@ -24,11 +24,12 @@ export default function AdminLayout({ children }) {
     { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' }
   ];
 
+  // 🟢 更新：開放 users 模組給經理與櫃台
   const ROLE_PERMISSIONS = {
     admin: ['pos', 'manage', 'finance', 'users'], // 老闆：全開
-    manager: ['pos', 'manage', 'finance'],        // 經理：看報表、管資料、結帳
+    manager: ['pos', 'manage', 'finance', 'users'], // 經理：全開 (但在 users 頁面會限制刪除權限)
     staff: ['pos', 'manage'],                     // 員工：結帳、修改商品庫
-    reception: ['pos']                            // 櫃台：只能結帳
+    reception: ['pos', 'users']                   // 櫃台：結帳、管理客入檔案
   };
   // ==========================================
 
@@ -46,12 +47,10 @@ export default function AdminLayout({ children }) {
           
           if (docSnap.exists()) {
             const data = docSnap.data();
-            // 阻擋普通客人
             if (!data.role || data.role === 'member') {
               router.push('/dashboard');
               return;
             }
-            // 防護：如果角色不存在，預設降級為只能看 POS
             if (!ROLE_PERMISSIONS[data.role]) {
               data.role = 'reception'; 
             }
@@ -71,33 +70,24 @@ export default function AdminLayout({ children }) {
     router.push('/admin/login');
   };
 
-  // 登入頁直接渲染
   if (pathname === '/admin/login') return children;
   
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">驗證系統權限中...</div>;
   if (!userData) return null;
 
-  // 🟢 1. 取得該帳號允許存取的模組與網址
   const allowedModuleIds = ROLE_PERMISSIONS[userData.role] || [];
   const allowedModules = ALL_MODULES.filter(module => allowedModuleIds.includes(module.id));
   const allowedPaths = allowedModules.map(m => m.path);
 
-  // 🟢 2. 路由守衛 (Route Guard)：智慧攔截！
-  // 狀況 A: 如果使用者直接輸入 /admin (沒指名去哪個模組)，自動帶他去他有權限的第一個模組
   if (pathname === '/admin') {
     router.replace(allowedPaths[0] || '/dashboard');
     return null;
   }
 
-  // 狀況 B: 檢查當前網址是否在他的「允許名單」裡面
   const hasPermission = allowedPaths.some(path => pathname.startsWith(path));
   
-  // 如果他硬闖沒有權限的網址（例如員工硬闖 /admin/finance）
   if (!hasPermission) {
-    // 踢回他有權限的第一個地方
     setTimeout(() => { router.replace(allowedPaths[0] || '/dashboard'); }, 1500);
-    
-    // 顯示嚴厲的攔截畫面
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#080808] text-red-500 flex-col space-y-4">
         <i className="fa-solid fa-shield-halved text-6xl mb-2 opacity-80"></i>
@@ -111,23 +101,18 @@ export default function AdminLayout({ children }) {
     <div className="flex h-screen bg-[#080808] font-sans selection:bg-[#D4AF37] selection:text-black overflow-hidden relative">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
       
-      {/* 手機版遮罩 */}
       {isSidebarOpen && (
         <div className="fixed inset-0 bg-black/80 z-40 md:hidden backdrop-blur-sm transition-opacity" onClick={() => setIsSidebarOpen(false)}></div>
       )}
 
-      {/* 側邊導航欄 */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#121212] border-r border-white/5 flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none`}>
-        
         <button onClick={() => setIsSidebarOpen(false)} className="md:hidden absolute top-6 right-6 text-gray-400 hover:text-white">
            <i className="fa-solid fa-xmark text-xl"></i>
         </button>
 
-        <div className="p-8 border-b border-white/5">
-          <h1 className="text-2xl font-black text-white italic tracking-tighter">TRUST <span className="text-[#D4AF37]">OS</span></h1>
-          <p className="text-[9px] text-gray-500 uppercase tracking-[0.3em] font-bold mt-1">
-            <span className={userData.role === 'admin' ? 'text-red-500' : 'text-[#D4AF37]'}>{userData.role}</span> Portal
-          </p>
+        <div className="p-8 border-b border-white/5 flex items-center justify-center">
+          {/* 🟢 這裡已經替換為你的新 Logo */}
+          <img src="/images/logo-royal.svg" alt="TRUST OS Logo" className="h-10 w-auto" />
         </div>
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
@@ -161,22 +146,18 @@ export default function AdminLayout({ children }) {
         </div>
       </aside>
 
-      {/* 右側動態內容區 */}
       <main className="flex-1 h-screen overflow-y-auto relative bg-[#080808]">
-         {/* 手機版 Top Bar */}
          <div className="md:hidden bg-[#121212]/90 backdrop-blur-md p-5 flex justify-between items-center border-b border-white/5 sticky top-0 z-30">
             <div className="flex items-center gap-4">
               <button onClick={() => setIsSidebarOpen(true)} className="text-gray-400 hover:text-white text-xl">
                 <i className="fa-solid fa-bars"></i>
               </button>
-              <h1 className="text-xl font-black text-white italic">TRUST <span className="text-[#D4AF37]">OS</span></h1>
+              <img src="/images/logo-royal.svg" alt="TRUST OS Logo" className="h-6 w-auto" />
             </div>
             <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white font-bold uppercase">
                {userData.role.substring(0, 1)}
             </div>
          </div>
-         
-         {/* 安全的子模組內容 */}
          {children}
       </main>
 
