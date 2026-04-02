@@ -8,15 +8,18 @@ import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function AdminManagePage() {
-  const [activeTab, setActiveTab] = useState('services'); // services, staff, promos, categories, rewards, tiers
+  const [activeTab, setActiveTab] = useState('services'); 
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]); 
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 表單擴充：適應「會員等級 (tiers)」
-  const initialForm = { name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '' };
+  // 🟢 表單擴充：加入髮型師薪資與抽成參數
+  const initialForm = { 
+    name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '',
+    baseCommission: '', targetRevenue: '', bonusCommission: '' // 🟢 新增的髮型師參數
+  };
   const [formData, setFormData] = useState(initialForm);
 
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
@@ -34,12 +37,7 @@ export default function AdminManagePage() {
     setLoading(true);
     const querySnapshot = await getDocs(collection(db, activeTab));
     const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    
-    // 如果是等級設定，依照門檻由高至低排序
-    if (activeTab === 'tiers') {
-      data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
-    }
-    
+    if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
     setList(data);
     setLoading(false);
   };
@@ -48,9 +46,7 @@ export default function AdminManagePage() {
     const querySnapshot = await getDocs(collection(db, 'categories'));
     const cats = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     setCategories(cats);
-    if (cats.length > 0 && !formData.category) {
-        setFormData(prev => ({ ...prev, category: cats[0].name }));
-    }
+    if (cats.length > 0 && !formData.category) setFormData(prev => ({ ...prev, category: cats[0].name }));
   };
 
   const handleSave = async (e) => {
@@ -89,13 +85,7 @@ export default function AdminManagePage() {
     if (activeTab === 'categories') fetchCategories();
   };
 
-  const addPromoEmoji = (emoji) => {
-    setFormData({ ...formData, title: formData.title + emoji });
-  };
-
-  const existingTags = ['rewards', 'tiers'].includes(activeTab)
-    ? [...new Set(list.filter(item => item.tag).map(item => item.tag))] 
-    : [];
+  const addPromoEmoji = (emoji) => setFormData({ ...formData, title: formData.title + emoji });
 
   return (
     <div className="bg-[#121212] min-h-screen text-gray-100 p-6 md:p-10 font-sans pb-24">
@@ -109,15 +99,14 @@ export default function AdminManagePage() {
           </h1>
         </header>
 
-        {/* 六大分頁 */}
         <div className="flex flex-wrap gap-2 mb-8 bg-gray-900/80 p-1.5 rounded-2xl border border-gray-800">
           {[
             { id: 'services', label: '服務定價', icon: '💇‍♂️' },
             { id: 'categories', label: '分類設定', icon: '🏷️' },
-            { id: 'staff', label: '髮型師', icon: '✂️' },
+            { id: 'staff', label: '髮型師與抽成', icon: '✂️' }, // 🟢 改名
             { id: 'promos', label: '首頁公告', icon: '📢' },
             { id: 'rewards', label: '積分商城', icon: '🎁' },
-            { id: 'tiers', label: '會員等級', icon: '👑' } // 🟢 改為會員等級
+            { id: 'tiers', label: '會員等級', icon: '👑' } 
           ].map(tab => (
             <button key={tab.id} onClick={() => { setActiveTab(tab.id); setEditingId(null); setFormData(initialForm); }} 
               className={`flex-1 min-w-[90px] py-3 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-2 ${activeTab === tab.id ? 'bg-[#D4AF37] text-black shadow-xl scale-105' : 'text-gray-400 hover:bg-gray-800'}`}>
@@ -160,11 +149,29 @@ export default function AdminManagePage() {
               </div>
             )}
 
+            {/* 🟢 髮型師抽成表單升級 */}
             {activeTab === 'staff' && (
-              <div className="space-y-2 col-span-2">
-                <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">髮型師姓名</label>
-                <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Ivan" />
-              </div>
+              <>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Ivan" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">基本抽成比 (例: 0.3 = 30%)</label>
+                  <input type="number" step="0.01" min="0" max="1" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.baseCommission} onChange={e => setFormData({...formData, baseCommission: e.target.value})} required placeholder="0.3" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">業績達標門檻 (HKD)</label>
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.targetRevenue} onChange={e => setFormData({...formData, targetRevenue: e.target.value})} placeholder="如不設限請填 0 或留空" />
+                </div>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">達標後升級抽成 (例: 0.4 = 40%)</label>
+                  <input type="number" step="0.01" min="0" max="1" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.bonusCommission} onChange={e => setFormData({...formData, bonusCommission: e.target.value})} placeholder="0.4" />
+                </div>
+                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
+                   <p>💡 <strong>系統結算邏輯：</strong> 財務報表結算時，若該員工當月創造的「服務總業績」達到門檻，全額獎金將自動套用「達標後升級抽成」計算；未達標則採用「基本抽成比」。</p>
+                </div>
+              </>
             )}
 
             {activeTab === 'promos' && (
@@ -194,50 +201,43 @@ export default function AdminManagePage() {
               <>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">禮品名稱</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：資生堂鎖色洗髮水" />
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">所需積分 (Points)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required placeholder="如：3000" />
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">圖標 (Emoji)</label>
                   <div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">
-                    <span className="text-xs text-gray-500 w-full mb-1">點擊快速選擇:</span>
-                    {salonEmojiList.map(e => (
-                      <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>
-                    ))}
+                    {salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}
                   </div>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required placeholder="或自行輸入 (如：🧴)" />
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="如：VIP" />
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} />
                 </div>
               </>
             )}
 
-            {/* 🟢 新增：會員等級 (Tiers) 專屬表單 */}
             {activeTab === 'tiers' && (
               <>
                 <div className="space-y-2 col-span-2">
                   <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：金卡會員 (Gold)" />
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">累積充值門檻 (HKD)</label>
-                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required placeholder="如：3000" />
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單專屬折扣 (例如 0.8 = 8折)</label>
-                  <input type="number" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required placeholder="如：0.8" />
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單折扣 (例: 0.8 = 8折)</label>
+                  <input type="number" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">標籤 (Tag - 選填)</label>
-                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="如：VVIP" />
-                </div>
-                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
-                   <p>💡 <strong>折扣說明：</strong> 結帳時，系統會自動比對客人的「總歷史充值金額」，並套用對應的最高等級折扣。1 表示不打折，0.9 表示 9 折。</p>
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} />
                 </div>
               </>
             )}
@@ -265,14 +265,21 @@ export default function AdminManagePage() {
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-xl text-white">{item.name || item.title}</span>
                     {item.category && activeTab === 'services' && <span className="text-[10px] bg-white/10 text-[#D4AF37] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.category}</span>}
-                    {item.tag && ['rewards', 'tiers'].includes(activeTab) && <span className="text-[10px] bg-red-500/20 text-red-500 px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.tag}</span>}
                   </div>
                   <div className="flex flex-wrap gap-4 mt-1 text-sm items-center">
                     {item.price && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
+                    
+                    {/* 🟢 顯示髮型師參數 */}
+                    {activeTab === 'staff' && (
+                      <>
+                        <span className="text-white font-mono font-bold">底抽: {(Number(item.baseCommission || 0) * 100).toFixed(0)}%</span>
+                        {item.targetRevenue && <span className="text-red-400 font-mono font-bold">門檻: ${item.targetRevenue}</span>}
+                        {item.bonusCommission && <span className="text-[#D4AF37] font-mono font-bold">達標: {(Number(item.bonusCommission || 0) * 100).toFixed(0)}%</span>}
+                      </>
+                    )}
+
                     {item.threshold && <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>}
                     {item.discount && <span className="text-green-400 font-bold text-base">專屬折扣: {Number(item.discount) * 10} 折</span>}
-                    {item.points && <span className="text-white font-mono font-bold text-base">需 {item.points} PTS</span>}
-                    {item.expiry && <span className="text-red-400/80 font-medium text-xs">📅 有效期: {item.expiry}</span>}
                   </div>
                 </div>
               </div>
