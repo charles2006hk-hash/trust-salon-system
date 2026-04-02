@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, query, orderBy, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -11,28 +11,26 @@ export default function FinancePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   
-  // 視圖切換：dashboard (營運概況) | payroll (薪資結算)
+  // 🟢 視圖切換：dashboard | payroll | settings (新增)
   const [viewMode, setViewMode] = useState('dashboard');
   
-  // 當前操作者權限
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
-
-  // 月份篩選 (預設當前月份)
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
 
-  // 原始數據
   const [transactions, setTransactions] = useState([]);
   const [staffConfig, setStaffConfig] = useState([]);
   const [usersRef, setUsersRef] = useState([]);
   
-  // ==========================================
-  // 計算後的指標狀態
-  // ==========================================
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0 });
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
   const [payrollReport, setPayrollReport] = useState([]);
+
+  // 🟢 用於編輯薪資參數的狀態
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState(null);
+  const [configForm, setConfigForm] = useState({ baseCommission: 0.3, targetRevenue: 0, bonusCommission: 0.3 });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -51,16 +49,13 @@ export default function FinancePage() {
   const fetchFinancialData = async () => {
     setLoading(true);
     try {
-      // 1. 抓取交易紀錄
       const q = query(collection(db, "transactions"), orderBy("timestamp", "desc"));
       const txSnap = await getDocs(q);
       setTransactions(txSnap.docs.map(d => ({ id: d.id, ...d.data() })));
       
-      // 2. 抓取所有用戶 (算負債)
       const uSnap = await getDocs(collection(db, "users"));
       setUsersRef(uSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-      // 3. 抓取髮型師抽成設定
       const staffSnap = await getDocs(collection(db, 'staff'));
       setStaffConfig(staffSnap.docs.map(d => ({ id: d.id, ...d.data() })));
       
@@ -68,20 +63,12 @@ export default function FinancePage() {
     finally { setLoading(false); }
   };
 
-  // 🟢 核心運算引擎 (同時計算營運儀表板與薪資)
   const calculateData = () => {
     const monthlyTx = transactions.filter(tx => tx.timestamp && tx.timestamp.startsWith(selectedMonth));
     
-    let cashIn = 0;
-    let serviceValue = 0;
-    let givenPoints = 0;
-    let totalOutstanding = 0;
-    
-    let stylists = {};
-    let services = {};
-    let stylistAggregator = {};
+    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let totalOutstanding = 0;
+    let stylists = {}; let services = {}; let stylistAggregator = {};
 
-    // 算系統總負債 (不受月份影響，是當下狀態)
     usersRef.forEach(u => { totalOutstanding += (u.tDollarBalance || 0); });
 
     monthlyTx.forEach(tx => {
@@ -92,15 +79,12 @@ export default function FinancePage() {
       else if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
         const amount = Number(tx.amount || 0);
         serviceValue += amount;
-        
         const stylistName = tx.stylist || '未指定';
         const serviceName = tx.service || '一般服務';
         
-        // 排行榜用
         stylists[stylistName] = (stylists[stylistName] || 0) + amount;
         services[serviceName] = (services[serviceName] || 0) + amount;
 
-        // 薪資結算用
         if (!stylistAggregator[stylistName]) stylistAggregator[stylistName] = { totalRevenue: 0, clientCount: 0 };
         stylistAggregator[stylistName].totalRevenue += amount;
         stylistAggregator[stylistName].clientCount += 1;
@@ -111,7 +95,6 @@ export default function FinancePage() {
     setStylistRanking(Object.entries(stylists).sort((a, b) => b[1] - a[1]));
     setServiceRanking(Object.entries(services).sort((a, b) => b[1] - a[1]));
 
-    // 🟢 薪資與階梯抽成計算
     const report = Object.keys(stylistAggregator).map(stylistName => {
       const stats = stylistAggregator[stylistName];
       const rev = stats.totalRevenue;
@@ -123,52 +106,64 @@ export default function FinancePage() {
 
       const isTargetHit = rev >= target && target > 0;
       const finalRate = isTargetHit ? bonusRate : baseRate;
-      const commissionPayout = rev * finalRate;
 
       return {
         name: stylistName, clientCount: stats.clientCount, revenue: rev,
         target: target === Infinity ? '無設定' : `$${target}`,
-        isTargetHit, appliedRate: finalRate, commission: commissionPayout
+        isTargetHit, appliedRate: finalRate, commission: rev * finalRate
       };
     }).sort((a, b) => b.revenue - a.revenue);
     
     setPayrollReport(report);
   };
 
-  // 🟢 老闆專屬：手動打包全系統資料庫
   const handleManualBackup = async () => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
-    
-    const toastId = toast.loading("正在打包全系統資料 (請勿關閉網頁)...");
+    const toastId = toast.loading("正在打包全系統資料...");
     try {
-      // 欲備份的模組清單
       const collectionsToBackup = ['users', 'transactions', 'staff', 'services', 'categories', 'tiers', 'appointments', 'active_sessions'];
-      let backupData = { 
-        metadata: { exportedAt: new Date().toISOString(), version: 'TRUST_OS_1.0' } 
-      };
-
-      // 遍歷並拉取所有資料
+      let backupData = { metadata: { exportedAt: new Date().toISOString(), version: 'TRUST_OS_1.0' } };
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
         backupData[colName] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       }
-
-      // 轉換成 JSON Blob 並觸發下載
       const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `TRUST_OS_Backup_${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
+      a.href = url; a.download = `TRUST_OS_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       toast.success("✅ 系統資料備份已成功下載！", { id: toastId });
+    } catch (error) { toast.error("備份失敗", { id: toastId }); }
+  };
+
+  // 🟢 儲存髮型師薪資參數
+  const handleSaveConfig = async (e) => {
+    e.preventDefault();
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆修改薪資參數");
+    
+    const toastId = toast.loading("更新薪資參數中...");
+    try {
+      await updateDoc(doc(db, "staff", editingStaff.id), {
+        baseCommission: Number(configForm.baseCommission),
+        targetRevenue: Number(configForm.targetRevenue),
+        bonusCommission: Number(configForm.bonusCommission)
+      });
+      toast.success("參數更新成功！", { id: toastId });
+      setIsConfigModalOpen(false);
+      fetchFinancialData(); // 重新拉取最新的 staffConfig 以觸發重新計算
     } catch (error) {
-      console.error(error);
-      toast.error("備份失敗，請檢查網路連線", { id: toastId });
+      toast.error("更新失敗", { id: toastId });
     }
+  };
+
+  const openConfigModal = (staff) => {
+    setEditingStaff(staff);
+    setConfigForm({
+      baseCommission: staff.baseCommission || 0.3,
+      targetRevenue: staff.targetRevenue || 0,
+      bonusCommission: staff.bonusCommission || 0.3
+    });
+    setIsConfigModalOpen(true);
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">報表生成中...</div>;
@@ -188,32 +183,32 @@ export default function FinancePage() {
           </div>
           
           <div className="flex flex-wrap items-center gap-4">
-             {/* 🟢 老闆專屬備份按鈕 */}
              {currentAdminRole === 'admin' && (
                 <button onClick={handleManualBackup} className="bg-blue-900/30 text-blue-400 border border-blue-800/50 hover:bg-blue-600 hover:text-white px-5 py-3 rounded-xl text-xs font-bold transition flex items-center gap-2">
                   <i className="fa-solid fa-cloud-arrow-down"></i> 輸出備份
                 </button>
              )}
-             
-             {/* 月份選擇器 */}
              <div className="bg-[#121212] border border-white/10 p-2 rounded-xl flex items-center gap-3 shadow-inner">
                <i className="fa-regular fa-calendar ml-3 text-[#D4AF37]"></i>
-               <input 
-                 type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}
-                 className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm"
-               />
+               <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm" />
              </div>
           </div>
         </header>
 
-        {/* 🟢 頂部視圖切換器 */}
-        <div className="flex gap-2 mb-8 bg-[#121212] p-1.5 rounded-2xl border border-white/5 inline-flex">
-          <button onClick={() => setViewMode('dashboard')} className={`px-8 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'dashboard' ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-gray-400 hover:text-white'}`}>
+        {/* 頂部視圖切換器 */}
+        <div className="flex flex-wrap gap-2 mb-8 bg-[#121212] p-1.5 rounded-2xl border border-white/5 inline-flex">
+          <button onClick={() => setViewMode('dashboard')} className={`px-6 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'dashboard' ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-gray-400 hover:text-white'}`}>
             <i className="fa-solid fa-chart-line"></i> 營運儀表板
           </button>
-          <button onClick={() => setViewMode('payroll')} className={`px-8 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'payroll' ? 'bg-white text-black shadow-lg' : 'text-gray-400 hover:text-white'}`}>
+          <button onClick={() => setViewMode('payroll')} className={`px-6 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'payroll' ? 'bg-white text-black shadow-lg' : 'text-gray-400 hover:text-white'}`}>
             <i className="fa-solid fa-file-invoice-dollar"></i> 薪資與抽成
           </button>
+          {/* 🟢 老闆專屬設定頁籤 */}
+          {currentAdminRole === 'admin' && (
+            <button onClick={() => setViewMode('settings')} className={`px-6 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'settings' ? 'bg-red-500/20 text-red-400 border border-red-500/50 shadow-lg' : 'text-gray-400 hover:text-red-400 border border-transparent'}`}>
+              <i className="fa-solid fa-gear"></i> 抽成參數設定
+            </button>
+          )}
         </div>
 
         {/* =========================================
@@ -221,7 +216,6 @@ export default function FinancePage() {
         ========================================= */}
         {viewMode === 'dashboard' && (
           <div className="animate-fade-in">
-            {/* 四大核心指標 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
@@ -256,7 +250,6 @@ export default function FinancePage() {
               </div>
             </div>
 
-            {/* 業績排行榜 */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
               <div className="bg-[#121212] p-10 rounded-[40px] border border-white/5 shadow-2xl">
                 <div className="flex justify-between items-end mb-8 border-b border-white/5 pb-4">
@@ -312,7 +305,6 @@ export default function FinancePage() {
               </div>
             </div>
             
-            {/* 近期交易紀錄 */}
             <div className="bg-[#121212] rounded-[40px] p-10 border border-white/5 shadow-2xl overflow-hidden">
               <h3 className="text-xl font-bold text-white mb-8 italic">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(本月前20筆)</span></h3>
               <div className="overflow-x-auto">
@@ -367,9 +359,8 @@ export default function FinancePage() {
           <div className="bg-[#121212] rounded-[40px] border border-white/5 overflow-hidden shadow-2xl animate-fade-in">
             <div className="p-8 border-b border-white/5 bg-gradient-to-r from-[#1a1a1a] to-[#121212]">
                <h3 className="text-xl font-bold text-white mb-2">階梯式薪資結算表</h3>
-               <p className="text-[10px] text-gray-500 uppercase tracking-widest">Systematic Commission Calculation based on CMS Rules</p>
+               <p className="text-[10px] text-gray-500 uppercase tracking-widest">Systematic Commission Calculation based on Settings</p>
             </div>
-
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
@@ -432,7 +423,78 @@ export default function FinancePage() {
             </div>
           </div>
         )}
+
+        {/* =========================================
+            🟢 視圖 3：薪資與參數設定 (Settings) - 僅限老闆
+        ========================================= */}
+        {viewMode === 'settings' && currentAdminRole === 'admin' && (
+          <div className="bg-[#121212] rounded-[40px] border border-red-500/30 overflow-hidden shadow-[0_0_50px_rgba(239,68,68,0.05)] animate-fade-in">
+            <div className="p-8 border-b border-red-500/20 bg-gradient-to-r from-red-900/20 to-[#121212]">
+               <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                 <i className="fa-solid fa-lock text-red-400"></i> 機密：髮型師抽成參數設定
+               </h3>
+               <p className="text-[10px] text-red-400 uppercase tracking-widest">Confidential Payroll Settings (Admin Only)</p>
+            </div>
+            
+            <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {staffConfig.map(staff => (
+                 <div key={staff.id} className="bg-black border border-white/10 rounded-[24px] p-6 hover:border-[#D4AF37]/50 transition-colors relative group">
+                    <h4 className="text-xl font-bold text-white mb-4">{staff.name}</h4>
+                    <div className="space-y-3 mb-6">
+                      <div className="flex justify-between items-center text-sm border-b border-white/5 pb-2">
+                        <span className="text-gray-500">基本底抽</span>
+                        <span className="font-mono text-white font-bold">{(Number(staff.baseCommission || 0.3) * 100).toFixed(0)}%</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm border-b border-white/5 pb-2">
+                        <span className="text-gray-500">達標門檻</span>
+                        <span className="font-mono text-white font-bold">{Number(staff.targetRevenue) > 0 ? `$${staff.targetRevenue}` : '無設定'}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-[#D4AF37]">達標分紅</span>
+                        <span className="font-mono text-[#D4AF37] font-bold">{(Number(staff.bonusCommission || 0.3) * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                    <button onClick={() => openConfigModal(staff)} className="w-full py-3 rounded-xl bg-white/5 text-gray-300 text-xs font-bold uppercase tracking-widest hover:bg-[#D4AF37] hover:text-black transition-colors">
+                       <i className="fa-solid fa-pen-to-square mr-2"></i> 修改參數
+                    </button>
+                 </div>
+              ))}
+              {staffConfig.length === 0 && (
+                <div className="col-span-full text-center py-10 text-gray-600 font-bold border border-dashed border-gray-800 rounded-3xl">請先至 CMS 建立髮型師名單</div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* 🟢 修改參數 Modal */}
+      {isConfigModalOpen && editingStaff && (
+        <div className="fixed inset-0 bg-black/95 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
+          <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-red-500/50 shadow-[0_0_50px_rgba(239,68,68,0.2)] relative animate-fade-in">
+            <button onClick={() => setIsConfigModalOpen(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+            <h3 className="text-2xl font-black text-white mb-2">修改抽成</h3>
+            <p className="text-sm text-[#D4AF37] font-bold mb-8">設定對象：{editingStaff.name}</p>
+            
+            <form onSubmit={handleSaveConfig} className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">基本底抽 (例: 0.3 = 30%)</label>
+                <input type="number" step="0.01" min="0" max="1" required className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" value={configForm.baseCommission} onChange={e => setConfigForm({...configForm, baseCommission: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">業績達標門檻 (HKD)</label>
+                <input type="number" required className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" value={configForm.targetRevenue} onChange={e => setConfigForm({...configForm, targetRevenue: e.target.value})} placeholder="無門檻請設 0" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest">達標分紅比率 (例: 0.4 = 40%)</label>
+                <input type="number" step="0.01" min="0" max="1" required className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-[#D4AF37] font-bold outline-none focus:border-[#D4AF37]" value={configForm.bonusCommission} onChange={e => setConfigForm({...configForm, bonusCommission: e.target.value})} />
+              </div>
+              <button type="submit" className="w-full bg-red-600 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:bg-red-500 transition-all shadow-xl mt-4">
+                💾 儲存機密參數
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.4s ease-in-out; }
