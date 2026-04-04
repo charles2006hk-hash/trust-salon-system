@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; // 🟢 補上 runTransaction
 import { onAuthStateChanged } from 'firebase/auth';
 import { Toaster, toast } from 'react-hot-toast';
 
@@ -22,6 +22,9 @@ export default function UserManagementPage() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [staffStats, setStaffStats] = useState({ clientCount: 0, revenue: 0 });
   const [isSaving, setIsSaving] = useState(false);
+
+  // 🟢 新增：手動調整資產的表單狀態
+  const [adjustForm, setAdjustForm] = useState({ points: '', tDollar: '', note: '' });
 
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
@@ -90,6 +93,7 @@ export default function UserManagementPage() {
         role: newUser.role,
         tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
+        packageBalances: {}, // 🟢 確保新註冊的客人也能無縫支援套票系統
         createdAt: new Date().toISOString(),
         status: 'active',
         notes: ''
@@ -100,7 +104,7 @@ export default function UserManagementPage() {
         toast.success(`員工帳號建立成功！\n登入密碼：${newUser.password}`, { id: toastId, duration: 5000 });
       } else {
         await addDoc(collection(db, "users"), userData);
-        toast.success("客戶檔案建立成功！", { id: toastId });
+        toast.success("客戶檔案建立成功！可進入 Details 派發註冊禮積分。", { id: toastId });
       }
 
       setIsCreateOpen(false);
@@ -117,6 +121,7 @@ export default function UserManagementPage() {
 
   const openDetails = async (user) => {
     setSelectedUser(user);
+    setAdjustForm({ points: '', tDollar: '', note: '' }); // 🟢 打開詳細視窗時，重置調整表單
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -159,6 +164,46 @@ export default function UserManagementPage() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // 🟢 核心功能：手動派發/扣除資產 (僅限老闆)
+  const handleAssetAdjustment = async (e) => {
+    e.preventDefault();
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作此功能");
+    
+    const pts = Number(adjustForm.points) || 0;
+    const td = Number(adjustForm.tDollar) || 0;
+    if (pts === 0 && td === 0) return toast.error("請輸入要調整的數值");
+
+    const isConfirm = window.confirm(`確認要進行以下調整嗎？\n\n積分變動: ${pts > 0 ? '+'+pts : pts} PTS\nT-Dollar變動: ${td > 0 ? '+$'+td : td < 0 ? '-$'+Math.abs(td) : '$0'}\n備註: ${adjustForm.note || '無'}`);
+    if (!isConfirm) return;
+
+    const toastId = toast.loading("資產更新中...");
+    try {
+      await runTransaction(db, async (tx) => {
+        const userRef = doc(db, "users", selectedUser.id);
+        const uDoc = await tx.get(userRef);
+        const data = uDoc.data();
+
+        const newPoints = (data.points || 0) + pts;
+        const newTDollar = (data.tDollarBalance || 0) + td;
+
+        if (newPoints < 0 || newTDollar < 0) throw new Error("扣除失敗：資產不能小於 0");
+
+        tx.update(userRef, { points: newPoints, tDollarBalance: newTDollar });
+        
+        // 寫入交易流水帳，確保財務與發放紀錄有跡可循
+        tx.set(doc(collection(db, "transactions")), {
+          userId: selectedUser.id, phoneNumber: selectedUser.phoneNumber, type: "admin_adjustment",
+          pointsAdded: pts, tDollarAdded: td, adminId: currentUid, note: adjustForm.note || '老闆手動調整', timestamp: new Date().toISOString()
+        });
+      });
+
+      toast.success("資產發放/扣減完成！", { id: toastId });
+      setAdjustForm({ points: '', tDollar: '', note: '' });
+      setIsDetailOpen(false);
+      fetchUsers();
+    } catch (error) { toast.error(error.message, { id: toastId }); }
   };
 
   const handleRoleChange = async (userId, newRole) => {
@@ -246,7 +291,7 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      {/* 🟢 動態顯示篩選按鈕 */}
+      {/* 動態顯示篩選按鈕 */}
       <div className="flex flex-wrap gap-3 mb-8">
         {getVisibleRoleButtons().map(role => (
           <button key={role} onClick={() => setFilterRole(role)}
@@ -444,6 +489,35 @@ export default function UserManagementPage() {
             </div>
 
             <div className="p-10 space-y-8">
+              
+              {/* 🟢 系統資產手動調整區塊 (僅限老闆) */}
+              {currentAdminRole === 'admin' && (
+                <div className="bg-gradient-to-r from-red-900/20 to-black p-6 rounded-3xl border border-red-500/30 shadow-lg">
+                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
+                    <i className="fa-solid fa-wand-magic-sparkles"></i> 系統資產手動調整 (Admin Only)
+                  </h3>
+                  <form onSubmit={handleAssetAdjustment} className="space-y-4">
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 積分 (正/負數)</label>
+                          <input type="number" value={adjustForm.points} onChange={e => setAdjustForm({...adjustForm, points: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+500 或 -100" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 T-Dollar (正/負數)</label>
+                          <input type="number" value={adjustForm.tDollar} onChange={e => setAdjustForm({...adjustForm, tDollar: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+1000 或 -500" />
+                        </div>
+                     </div>
+                     <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">調整備註 (必填，將顯示於報表)</label>
+                        <input type="text" required value={adjustForm.note} onChange={e => setAdjustForm({...adjustForm, note: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm" placeholder="如：註冊大禮包發放、客訴補償餘額..." />
+                     </div>
+                     <button type="submit" className="w-full bg-red-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest hover:bg-red-600 transition-colors shadow-lg">
+                        執行調整並寫入交易紀錄
+                     </button>
+                  </form>
+                </div>
+              )}
+
               {['staff', 'manager', 'admin'].includes(selectedUser.role) && (
                 <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-6 rounded-3xl border border-[#D4AF37]/30 shadow-lg">
                   <h3 className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-[0.4em] mb-6 flex items-center gap-2">
