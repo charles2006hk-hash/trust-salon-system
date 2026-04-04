@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const [expiryDate, setExpiryDate] = useState(null); 
   const [tier, setTier] = useState('基本會員 (Basic)');
   const [discount, setDiscount] = useState(1);
+  const [packageBalances, setPackageBalances] = useState({}); // 🟢 儲存客人套票餘額
   const [loading, setLoading] = useState(true);
 
   const [myAppointments, setMyAppointments] = useState([]); 
@@ -33,7 +34,7 @@ export default function DashboardPage() {
   const allTimeSlots = ['11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
 
   const [rewardsList, setRewardsList] = useState([]);
-  const [tiersList, setTiersList] = useState([]); // 🟢 儲存後台的等級規則表
+  const [tiersList, setTiersList] = useState([]); 
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -56,19 +57,21 @@ export default function DashboardPage() {
             setExpiryDate(userData.tDollarExpiry || null);
             setTier(userData.tier || '基本會員 (Basic)');
             setDiscount(userData.discount || 1);
+            setPackageBalances(userData.packageBalances || {}); // 🟢 載入套票資料
           } else {
             const defaultExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
             await setDoc(userDocRef, {
               phoneNumber: currentUser.phoneNumber,
-              tDollarBalance: 0, // 新制不送現金
+              tDollarBalance: 0, 
               points: 0,
-              totalTopUp: 0,     // 累積充值
+              totalTopUp: 0,     
               tier: '基本會員 (Basic)',
               discount: 1,
               tDollarExpiry: defaultExpiry,
               status: 'active',
               createdAt: new Date().toISOString(),
-              role: 'member'
+              role: 'member',
+              packageBalances: {} // 預設為空
             });
             setBalance(0);
             setPoints(0);
@@ -90,13 +93,12 @@ export default function DashboardPage() {
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'rewards')),
-      getDocs(collection(db, 'tiers')) // 🟢 抓取等級規則
+      getDocs(collection(db, 'tiers')) 
     ]);
     setStylists(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => d.data().name));
     setRewardsList(rSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     
-    // 依照門檻由低至高排列展示給客人看
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     tData.sort((a, b) => Number(a.threshold) - Number(b.threshold));
     setTiersList(tData);
@@ -169,6 +171,9 @@ export default function DashboardPage() {
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">資料同步中...</div>;
 
+  // 🟢 抓取剩餘格數大於 0 的套票
+  const activePackages = Object.entries(packageBalances).filter(([_, grids]) => grids > 0);
+
   return (
     <div className="bg-[#080808] min-h-screen pb-32 font-sans text-gray-200 selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -183,7 +188,7 @@ export default function DashboardPage() {
 
       <main className="max-w-md mx-auto px-6 mt-8 space-y-12">
         
-        {/* 1. 虛擬會員卡 (升級版：顯示等級與折扣) */}
+        {/* 1. 虛擬會員卡 */}
         <div className="bg-gradient-to-br from-[#1a1a1a] to-[#080808] rounded-[40px] p-8 relative overflow-hidden border border-[#D4AF37]/30 shadow-[0_15px_40px_rgba(212,175,55,0.1)]">
           <div className="absolute -top-10 -right-10 w-48 h-48 bg-[#D4AF37] opacity-10 rounded-full blur-3xl"></div>
           
@@ -253,7 +258,30 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {/* 🟢 門市儲值與會員權益 (取代舊版方案卡片) */}
+        {/* 🟢 我的專屬套票區塊 (動態顯示) */}
+        {activePackages.length > 0 && (
+          <div className="pt-4 border-t border-white/5">
+            <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 mb-4">
+               <i className="fa-solid fa-ticket text-purple-400"></i> 我的專屬套票 / 次數券
+            </h3>
+            <div className="space-y-3">
+              {activePackages.map(([pkgName, grids]) => (
+                 <div key={pkgName} className="bg-gradient-to-r from-purple-900/20 to-black border border-purple-500/30 p-5 rounded-2xl flex justify-between items-center shadow-lg">
+                    <div>
+                      <p className="text-white font-bold">{pkgName}</p>
+                      <p className="text-[10px] text-gray-500 mt-1">結帳時可直接出示條碼扣除格數</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-purple-400 uppercase tracking-widest mb-1">剩餘次數</p>
+                      <p className="text-2xl font-black text-white font-mono">{grids} <span className="text-xs font-normal text-gray-500">格</span></p>
+                    </div>
+                 </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 門市儲值與會員權益 */}
         <div className="pt-4 border-t border-white/5">
           <div className="flex justify-between items-end mb-6">
             <div>
@@ -337,7 +365,7 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* Modal 組件省略 (保持與原先一致，確保運行) */}
+      {/* Modal 組件 */}
       {showBooking && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-xl">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-white/10 relative shadow-2xl">
@@ -400,6 +428,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* 🟢 History Modal 升級：完美支援套票顯示 */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col justify-end backdrop-blur-sm">
           <div className="bg-[#121212] w-full h-[85vh] rounded-t-[40px] p-8 overflow-hidden flex flex-col border-t border-white/10 shadow-[0_-10px_50px_rgba(0,0,0,0.5)]">
@@ -411,13 +440,23 @@ export default function DashboardPage() {
               {transactions.map((tx) => (
                 <div key={tx.id} className="bg-black/50 p-6 rounded-3xl border border-white/5 flex justify-between items-center hover:border-white/20 transition-colors">
                   <div>
-                    <p className="text-white font-bold">{tx.type === 'topup' ? '門市增值 (Top-up)' : tx.service}</p>
+                    {/* 🟢 動態顯示標題 */}
+                    <p className="text-white font-bold">
+                      {tx.type === 'topup' ? '門市增值 (Top-up)' : 
+                       tx.type === 'buy_package' ? `購買套票: ${tx.packageName}` : 
+                       tx.type === 'deduct_package' ? `扣抵套票: ${tx.packageName}` : 
+                       tx.service}
+                    </p>
                     <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest">{new Date(tx.timestamp).toLocaleString()}</p>
                     {tx.pointsAdded && <p className="text-[10px] text-[#D4AF37] font-bold mt-1">獲得 {tx.pointsAdded} 積分</p>}
                   </div>
                   <div className="text-right">
-                    <p className={`text-xl font-black ${tx.type === 'topup' ? 'text-green-400' : 'text-white'}`}>
-                      {tx.type === 'topup' ? '+' : '-'}{tx.type === 'topup' ? tx.tDollarAdded : tx.amount}
+                    {/* 🟢 動態顯示變動額度 */}
+                    <p className={`text-xl font-black ${tx.type === 'topup' ? 'text-green-400' : tx.type === 'buy_package' || tx.type === 'deduct_package' ? 'text-purple-400' : 'text-white'}`}>
+                      {tx.type === 'topup' ? `+$${tx.tDollarAdded}` : 
+                       tx.type === 'buy_package' ? `+${tx.gridsAdded} 格` :
+                       tx.type === 'deduct_package' ? `-${tx.deductedGrids} 格` :
+                       `-$${tx.amount}`}
                     </p>
                     {tx.type === 'deduct' && tx.discountRate < 1 && (
                       <p className="text-[10px] text-green-400 mt-1">{tx.discountRate * 10} 折優惠</p>
@@ -425,6 +464,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ))}
+              {transactions.length === 0 && <p className="text-center text-gray-500 text-sm mt-10">尚無消費紀錄</p>}
             </div>
           </div>
         </div>
