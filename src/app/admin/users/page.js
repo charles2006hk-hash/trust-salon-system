@@ -455,15 +455,100 @@ export default function UserManagementPage() {
       {/* 權限對照矩陣 Modal */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
-          <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative">
-            <button onClick={() => setIsRoleMatrixOpen(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+          <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <button onClick={() => setIsRoleMatrixOpen(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition-colors">
+              <i className="fa-solid fa-xmark text-2xl"></i>
+            </button>
+            
             <div className="mb-8 border-b border-white/10 pb-6">
               <h2 className="text-3xl font-black text-white italic tracking-tighter">Role <span className="text-[#D4AF37]">Permissions</span></h2>
-              <p className="text-xs text-gray-400 mt-2 tracking-widest">各級職務系統存取權限對照表</p>
+              <p className="text-xs text-gray-400 mt-2 tracking-widest">各級職務系統存取權限對照表 (嚴格階級隔離)</p>
             </div>
-            <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl">
-              <p className="text-[10px] text-red-400 tracking-widest leading-relaxed">
-                <i className="fa-solid fa-shield-halved mr-1"></i> <strong>安全性提示：</strong> 系統已啟用嚴格階級隔離機制，除了老闆 (Admin)，沒有任何人能修改系統權限，且同級之間無法互相查閱薪資或基本資料。
+            
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/10 bg-white/5">
+                    <th className="p-4 font-bold w-1/4">系統功能 / 模組</th>
+                    <th className="p-4 font-bold text-center border-l border-white/5 text-[#D4AF37]">老闆 (Admin)</th>
+                    <th className="p-4 font-bold text-center border-l border-white/5 text-purple-400">經理 (Manager)</th>
+                    <th className="p-4 font-bold text-center border-l border-white/5 text-green-400">櫃台 (Reception)</th>
+                    <th className="p-4 font-bold text-center border-l border-white/5 text-blue-400">髮型師 (Staff)</th>
+                  </tr>
+                </thead>
+                <tbody className="text-sm font-medium">
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="p-4 text-gray-300">前台 POS 收銀 / 報到</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="p-4 text-gray-300">門市客席增值 / 賣套票</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="p-4 text-gray-300">查看個人業績 / 抽成</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500">全店</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500">全店</td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500">僅限自己</td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="p-4 text-gray-300">新增客戶檔案 (Member)</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="p-4 text-gray-300">修改 CMS 價目表 / 促銷</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02] bg-red-900/10">
+                    <td className="p-4 text-red-300 font-bold">手動派發積分 / T-Dollar</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02] bg-red-900/10">
+                    <td className="p-4 text-red-300 font-bold">設定員工底薪與抽成參數</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02] bg-red-900/10">
+                    <td className="p-4 text-red-300 font-bold">更改他人系統權限</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                  </tr>
+                  <tr className="border-b border-white/5 hover:bg-white/[0.02] bg-red-900/10">
+                    <td className="p-4 text-red-300 font-bold">輸出全系統資料庫備份</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-xmark text-red-500"></i></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3">
+              <i className="fa-solid fa-shield-halved text-red-400 mt-0.5"></i> 
+              <p className="text-xs text-red-400 tracking-widest leading-relaxed">
+                <strong>安全性隔離機制：</strong> <br/>
+                系統已自動阻擋越權行為。同級別員工無法互相查閱薪資；櫃台人員無法修改設定；唯有使用老闆 (Admin) 帳號登入，方可解鎖紅色底色的所有機密級操作。
               </p>
             </div>
           </div>
