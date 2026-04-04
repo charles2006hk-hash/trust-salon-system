@@ -15,8 +15,12 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 移除了抽成參數，回歸單純的展示資料管理
-  const initialForm = { name: '', price: '', category: '', title: '', content: '', expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '' };
+  // 🟢 擴充表單：完美整合套票需要的欄位 (quantity)
+  const initialForm = { 
+    name: '', price: '', category: '', title: '', content: '', 
+    expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
+    quantity: '' // 🟢 新增套票格數
+  };
   const [formData, setFormData] = useState(initialForm);
 
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
@@ -51,7 +55,6 @@ export default function AdminManagePage() {
     setLoading(true);
     try {
       if (editingId) {
-        // Firestore updateDoc 會保留未包含在 formData 裡的機密參數(如抽成)
         await updateDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() });
         toast.success("更新成功！");
       } else {
@@ -101,7 +104,8 @@ export default function AdminManagePage() {
           {[
             { id: 'services', label: '服務定價', icon: '💇‍♂️' },
             { id: 'categories', label: '分類設定', icon: '🏷️' },
-            { id: 'staff', label: '髮型師名單', icon: '✂️' }, // 🟢 改回髮型師名單
+            { id: 'packages', label: '套票與次數券', icon: '🎫' }, // 🟢 新增套票分頁
+            { id: 'staff', label: '髮型師名單', icon: '✂️' }, 
             { id: 'promos', label: '首頁公告', icon: '📢' },
             { id: 'rewards', label: '積分商城', icon: '🎁' },
             { id: 'tiers', label: '會員等級', icon: '👑' } 
@@ -146,7 +150,27 @@ export default function AdminManagePage() {
               </div>
             )}
 
-            {/* 🟢 髮型師：只剩下名字 */}
+            {/* 🟢 套票與次數券專屬表單 */}
+            {activeTab === 'packages' && (
+              <>
+                <div className="space-y-2 col-span-2">
+                  <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label>
+                  <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label>
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="如：3000" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label>
+                  <input type="number" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" />
+                </div>
+                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
+                   <p>💡 <strong>說明：</strong> 客人購買此套票後，手機端將自動增加對應的「格數」。後續結帳時，店員可選擇直接「扣除格數」來完成服務結帳。</p>
+                </div>
+              </>
+            )}
+
             {activeTab === 'staff' && (
               <div className="space-y-2 col-span-2">
                 <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
@@ -240,7 +264,7 @@ export default function AdminManagePage() {
             <div key={item.id} className="bg-gray-900/60 p-6 rounded-3xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
               <div className="flex items-center gap-5">
                 <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-2xl shrink-0">
-                    {activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
+                    {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
                 </div>
                 <div>
                   <div className="flex items-center gap-3">
@@ -248,7 +272,15 @@ export default function AdminManagePage() {
                     {item.category && activeTab === 'services' && <span className="text-[10px] bg-white/10 text-[#D4AF37] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.category}</span>}
                   </div>
                   <div className="flex flex-wrap gap-4 mt-1 text-sm items-center">
-                    {item.price && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
+                    {/* 🟢 套票專屬顯示邏輯 */}
+                    {activeTab === 'packages' && (
+                      <>
+                        <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>
+                        <span className="text-[#D4AF37] font-bold text-base bg-[#D4AF37]/10 px-2 py-0.5 rounded-md border border-[#D4AF37]/30">內含 {item.quantity} 格</span>
+                      </>
+                    )}
+                    
+                    {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
                     {item.threshold && <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>}
                     {item.discount && <span className="text-green-400 font-bold text-base">專屬折扣: {Number(item.discount) * 10} 折</span>}
                   </div>
