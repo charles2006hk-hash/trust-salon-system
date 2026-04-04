@@ -15,7 +15,7 @@ export default function SmartPOS() {
   const [staff, setStaff] = useState([]); 
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
-  const [packages, setPackages] = useState([]); // 🟢 抓取系統建立的套票清單
+  const [packages, setPackages] = useState([]);
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
@@ -25,8 +25,7 @@ export default function SmartPOS() {
   const [checkoutAmount, setCheckoutAmount] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // 🟢 結帳擴充狀態
-  const [checkoutMethod, setCheckoutMethod] = useState('tdollar'); // 'tdollar' 或 'package'
+  const [checkoutMethod, setCheckoutMethod] = useState('tdollar'); 
   const [selectedUserPackage, setSelectedUserPackage] = useState(''); 
   const [deductGrids, setDeductGrids] = useState(1);
 
@@ -37,8 +36,7 @@ export default function SmartPOS() {
   const [topUpPhone, setTopUpPhone] = useState('');
   const [topUpUser, setTopUpUser] = useState(null);
   
-  // 🟢 門市收款擴充狀態
-  const [topUpTab, setTopUpTab] = useState('tdollar'); // 'tdollar' 或 'package'
+  const [topUpTab, setTopUpTab] = useState('tdollar'); 
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
   useEffect(() => {
@@ -63,7 +61,7 @@ export default function SmartPOS() {
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'tiers')),
-      getDocs(collection(db, 'packages')) // 🟢 抓取套票資料
+      getDocs(collection(db, 'packages'))
     ]);
     setStaff(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -110,7 +108,6 @@ export default function SmartPOS() {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      // 🟢 載入客人擁有的套票 (packageBalances)
       const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {} } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
@@ -126,10 +123,10 @@ export default function SmartPOS() {
         tier: uData.tier || '基本會員 (Basic)',
         balance: uData.tDollarBalance || 0,
         userId: userSnap.empty ? null : userSnap.docs[0].id,
-        packageBalances: uData.packageBalances || {} // 🟢 載入套票
+        packageBalances: uData.packageBalances || {}
       });
       setCheckoutAmount(finalPrice); 
-      setCheckoutMethod('tdollar'); // 預設扣款方式
+      setCheckoutMethod('tdollar'); 
       setSelectedUserPackage('');
       setDeductGrids(1);
       toast.dismiss(toastId);
@@ -138,7 +135,6 @@ export default function SmartPOS() {
     }
   };
 
-  // 🟢 執行結帳 (支援 T-Dollar 與 扣格)
   const processSettlement = async (e) => {
     e.preventDefault();
     if (checkoutMethod === 'tdollar' && (!checkoutAmount || isNaN(checkoutAmount))) return toast.error("請輸入有效金額");
@@ -155,7 +151,6 @@ export default function SmartPOS() {
           const currentData = uDoc.data();
 
           if (checkoutMethod === 'tdollar') {
-            // 📍 1. 扣除 T-Dollar 邏輯
             const finalAmountNum = Number(checkoutAmount);
             const newBal = (currentData.tDollarBalance || 0) - finalAmountNum;
             if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
@@ -166,7 +161,6 @@ export default function SmartPOS() {
             });
 
           } else if (checkoutMethod === 'package') {
-            // 📍 2. 扣除套票格數邏輯
             if (!selectedUserPackage) throw new Error("請選擇要扣除的套票");
             const currentPkgs = currentData.packageBalances || {};
             const currentGrids = currentPkgs[selectedUserPackage] || 0;
@@ -175,7 +169,6 @@ export default function SmartPOS() {
             const newPkgs = { ...currentPkgs, [selectedUserPackage]: currentGrids - deductGrids };
             tx.update(userRef, { packageBalances: newPkgs });
             
-            // 記錄扣格交易 (金額為0，記錄扣了幾格)
             tx.set(doc(collection(db, "transactions")), {
               userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: checkoutSession.service, stylist: checkoutSession.stylist, type: "deduct_package", packageName: selectedUserPackage, deductedGrids: deductGrids, timestamp: new Date().toISOString()
             });
@@ -184,7 +177,6 @@ export default function SmartPOS() {
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
-        // 📍 3. 非會員 (Walk-in) 現金結帳
         await runTransaction(db, async (tx) => {
           tx.set(doc(collection(db, "transactions")), {
             phoneNumber: checkoutSession.phoneNumber, amount: Number(checkoutAmount), service: checkoutSession.service, stylist: checkoutSession.stylist, type: "walkin_cash", timestamp: new Date().toISOString()
@@ -222,7 +214,6 @@ export default function SmartPOS() {
     }
   };
 
-  // 🟢 門市收款：支援 T-Dollar 充值 與 售賣套票
   const handleStoreAction = async (e) => {
     e.preventDefault();
     if (!topUpUser) return;
@@ -231,38 +222,62 @@ export default function SmartPOS() {
       const userRef = doc(db, 'users', topUpUser.id);
 
       if (topUpTab === 'tdollar') {
-        // 📍 1. 充值 T-Dollar 邏輯
         if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
         const paidHKD = Number(topUpForm.amount);
         const newTotalTopUp = (topUpUser.totalTopUp || 0) + paidHKD;
         
-        let newTier = { name: '基本會員 (Basic)', discount: 1 };
+        // 🟢 完美整合：自動等級判定與升級獎勵 (Upgrade Bonus)
+        let newTier = { name: '基本會員 (Basic)', discount: 1, upgradeBonus: 0 };
         for (const t of tiers) {
            if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; }
         }
 
-        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)`);
+        let upgradeBonus = 0;
+        let isUpgraded = false;
+        const currentTier = topUpUser.tier || '基本會員 (Basic)';
+        
+        if (newTier.name !== currentTier && newTier.name !== '基本會員 (Basic)') {
+            isUpgraded = true;
+            upgradeBonus = Number(newTier.upgradeBonus) || 0;
+        }
+
+        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)${isUpgraded && upgradeBonus > 0 ? `\n🎁 觸發升級獎勵：系統將自動派發 ${upgradeBonus} 積分！` : ''}`);
         if (!isConfirmed) return;
 
         const newExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
+          
           const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
-          const newPoints = (userDoc.data().points || 0) + paidHKD;
+          // 🟢 總積分 = 舊的積分 + 這次充值 1:1 送的 + 升級達標送的獎勵
+          const newPoints = (userDoc.data().points || 0) + paidHKD + upgradeBonus;
 
           transaction.update(userRef, { 
-            tDollarBalance: newBalance, points: newPoints, totalTopUp: newTotalTopUp, tier: newTier.name, discount: newTier.discount, tDollarExpiry: newExpiry, status: 'active' 
+            tDollarBalance: newBalance, 
+            points: newPoints, 
+            totalTopUp: newTotalTopUp, 
+            tier: newTier.name, 
+            discount: newTier.discount, 
+            tDollarExpiry: newExpiry, 
+            status: 'active' 
           });
           
           transaction.set(doc(collection(db, "transactions")), {
-            userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "topup", tDollarAdded: paidHKD, pointsAdded: paidHKD, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString()
+            userId: topUpUser.id, 
+            phoneNumber: topUpUser.phoneNumber, 
+            type: "topup", 
+            tDollarAdded: paidHKD, 
+            pointsAdded: paidHKD + upgradeBonus, // 記錄總獲得積分
+            upgradeBonusAdded: upgradeBonus,     // 獨立記錄升級獎勵，供報表區分
+            amountPaidHKD: paidHKD, 
+            paymentMethod: topUpForm.paymentMethod, 
+            timestamp: new Date().toISOString()
           });
         });
-        toast.success(`增值成功！已將客人升級至 ${newTier.name}`);
+        toast.success(`增值成功！已將客人升級至 ${newTier.name}${upgradeBonus > 0 ? `\n🎁 並發送 ${upgradeBonus} 升級獎勵積分！` : ''}`);
 
       } else if (topUpTab === 'package') {
-        // 📍 2. 售賣套票邏輯
         const pkg = packages.find(p => p.id === topUpForm.packageId);
         if (!pkg) return toast.error("請選擇套票");
         const paidHKD = Number(pkg.price);
@@ -502,7 +517,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 結帳彈窗 (包含自動算折扣與套票扣格功能) */}
+      {/* 🟢 結帳彈窗 */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -537,7 +552,7 @@ export default function SmartPOS() {
                 </div>
               </div>
 
-              {/* 🟢 選擇結帳方式 */}
+              {/* 選擇結帳方式 */}
               {checkoutSession.userId && (
                 <div className="flex gap-2 p-1 bg-black rounded-xl border border-white/5 mt-4">
                   <button type="button" onClick={() => setCheckoutMethod('tdollar')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>扣減餘額</button>
