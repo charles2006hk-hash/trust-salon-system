@@ -15,11 +15,11 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 擴充表單：完美整合套票需要的欄位 (quantity)
+  // 🟢 擴充表單：完美整合 套票 (quantity) 與 升級里程碑獎勵 (upgradeBonus)
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
-    quantity: '' // 🟢 新增套票格數
+    quantity: '', upgradeBonus: '' // 🟢 新增升級贈送積分
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -104,7 +104,7 @@ export default function AdminManagePage() {
           {[
             { id: 'services', label: '服務定價', icon: '💇‍♂️' },
             { id: 'categories', label: '分類設定', icon: '🏷️' },
-            { id: 'packages', label: '套票與次數券', icon: '🎫' }, // 🟢 新增套票分頁
+            { id: 'packages', label: '套票與次數券', icon: '🎫' },
             { id: 'staff', label: '髮型師名單', icon: '✂️' }, 
             { id: 'promos', label: '首頁公告', icon: '📢' },
             { id: 'rewards', label: '積分商城', icon: '🎁' },
@@ -150,7 +150,6 @@ export default function AdminManagePage() {
               </div>
             )}
 
-            {/* 🟢 套票與次數券專屬表單 */}
             {activeTab === 'packages' && (
               <>
                 <div className="space-y-2 col-span-2">
@@ -226,6 +225,7 @@ export default function AdminManagePage() {
               </>
             )}
 
+            {/* 🟢 Tiers 加入里程碑獎勵 */}
             {activeTab === 'tiers' && (
               <>
                 <div className="space-y-2 col-span-2">
@@ -241,8 +241,15 @@ export default function AdminManagePage() {
                   <input type="number" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required />
                 </div>
                 <div className="space-y-2">
+                  <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">升級贈送積分 (里程碑獎勵)</label>
+                  <input type="number" className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.upgradeBonus} onChange={e => setFormData({...formData, upgradeBonus: e.target.value})} placeholder="如不贈送請填 0" />
+                </div>
+                <div className="space-y-2">
                   <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">標籤 (Tag - 選填)</label>
                   <input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} />
+                </div>
+                <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800">
+                   <p>💡 <strong>說明：</strong> 當客人充值並首次跨越此門檻時，系統將自動派發「升級贈送積分」至客人的帳戶中作為獎勵。</p>
                 </div>
               </>
             )}
@@ -272,7 +279,7 @@ export default function AdminManagePage() {
                     {item.category && activeTab === 'services' && <span className="text-[10px] bg-white/10 text-[#D4AF37] px-2 py-0.5 rounded-md font-bold uppercase tracking-tighter">{item.category}</span>}
                   </div>
                   <div className="flex flex-wrap gap-4 mt-1 text-sm items-center">
-                    {/* 🟢 套票專屬顯示邏輯 */}
+                    {/* 🟢 套票專屬顯示 */}
                     {activeTab === 'packages' && (
                       <>
                         <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>
@@ -281,8 +288,15 @@ export default function AdminManagePage() {
                     )}
                     
                     {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
-                    {item.threshold && <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>}
-                    {item.discount && <span className="text-green-400 font-bold text-base">專屬折扣: {Number(item.discount) * 10} 折</span>}
+                    
+                    {/* 🟢 等級專屬顯示 (含升級獎勵) */}
+                    {activeTab === 'tiers' && (
+                      <>
+                        <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>
+                        <span className="text-green-400 font-bold text-base">折扣: {Number(item.discount) * 10} 折</span>
+                        {item.upgradeBonus && Number(item.upgradeBonus) > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">🎁 升級送 {item.upgradeBonus} 分</span>}
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
