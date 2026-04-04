@@ -14,15 +14,21 @@ export default function SmartPOS() {
   const [appointments, setAppointments] = useState([]); 
   const [staff, setStaff] = useState([]); 
   const [services, setServices] = useState([]); 
-  const [tiers, setTiers] = useState([]); // 🟢 儲存後台抓來的會員等級規則
+  const [tiers, setTiers] = useState([]); 
+  const [packages, setPackages] = useState([]); // 🟢 抓取系統建立的套票清單
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
   const [walkInService, setWalkInService] = useState('');
 
   const [checkoutSession, setCheckoutSession] = useState(null);
-  const [checkoutAmount, setCheckoutAmount] = useState(''); // 最終手動可調的扣款金額
+  const [checkoutAmount, setCheckoutAmount] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // 🟢 結帳擴充狀態
+  const [checkoutMethod, setCheckoutMethod] = useState('tdollar'); // 'tdollar' 或 'package'
+  const [selectedUserPackage, setSelectedUserPackage] = useState(''); 
+  const [deductGrids, setDeductGrids] = useState(1);
 
   const [showRegModal, setShowRegModal] = useState(false);
   const [unregisteredPhone, setUnregisteredPhone] = useState('');
@@ -30,7 +36,10 @@ export default function SmartPOS() {
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('');
   const [topUpUser, setTopUpUser] = useState(null);
-  const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash' });
+  
+  // 🟢 門市收款擴充狀態
+  const [topUpTab, setTopUpTab] = useState('tdollar'); // 'tdollar' 或 'package'
+  const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
   useEffect(() => {
     onAuthStateChanged(auth, (user) => { if (!user) router.push('/login'); });
@@ -50,24 +59,26 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    const [sSnap, svSnap, tSnap] = await Promise.all([
+    const [sSnap, svSnap, tSnap, pSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
-      getDocs(collection(db, 'tiers')) // 🟢 抓取會員等級規則
+      getDocs(collection(db, 'tiers')),
+      getDocs(collection(db, 'packages')) // 🟢 抓取套票資料
     ]);
     setStaff(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    tData.sort((a, b) => Number(b.threshold) - Number(a.threshold)); // 由高門檻排到低
+    tData.sort((a, b) => Number(b.threshold) - Number(a.threshold)); 
     setTiers(tData);
+    
+    setPackages(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
   };
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); handleCheckIn(phone); }
   };
 
-  // 路過客報到 (允許非會員直接入店，但結帳時必須付原價)
   const handleCheckIn = async (phoneNum, bookingData = null) => {
     if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話");
     if (!bookingData && (!walkInStylist || !walkInService)) return toast.error("請選擇髮型師與服務項目");
@@ -93,14 +104,14 @@ export default function SmartPOS() {
     } catch (e) { toast.error("報到失敗"); }
   };
 
-  // 🟢 結帳準備：抓取客人等級與自動計算折扣
   const openCheckout = async (session) => {
     const toastId = toast.loading("正在結算帳單與會員折扣...");
     try {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0 } : userSnap.docs[0].data();
+      // 🟢 載入客人擁有的套票 (packageBalances)
+      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {} } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
       
@@ -114,57 +125,69 @@ export default function SmartPOS() {
         finalPrice,
         tier: uData.tier || '基本會員 (Basic)',
         balance: uData.tDollarBalance || 0,
-        userId: userSnap.empty ? null : userSnap.docs[0].id
+        userId: userSnap.empty ? null : userSnap.docs[0].id,
+        packageBalances: uData.packageBalances || {} // 🟢 載入套票
       });
-      setCheckoutAmount(finalPrice); // 預設帶入打折後的金額，允許店員手動微調
+      setCheckoutAmount(finalPrice); 
+      setCheckoutMethod('tdollar'); // 預設扣款方式
+      setSelectedUserPackage('');
+      setDeductGrids(1);
       toast.dismiss(toastId);
     } catch (error) {
       toast.error("讀取帳單失敗", { id: toastId });
     }
   };
 
-  // 🟢 執行結帳扣款
+  // 🟢 執行結帳 (支援 T-Dollar 與 扣格)
   const processSettlement = async (e) => {
     e.preventDefault();
-    if (!checkoutAmount || isNaN(checkoutAmount)) return toast.error("請輸入有效金額");
+    if (checkoutMethod === 'tdollar' && (!checkoutAmount || isNaN(checkoutAmount))) return toast.error("請輸入有效金額");
 
     setIsProcessing(true);
-    const toastId = toast.loading('結帳扣款中...');
-    const finalAmountNum = Number(checkoutAmount);
+    const toastId = toast.loading('結帳處理中...');
     
     try {
       if (checkoutSession.userId) {
-        // 會員結帳：扣除 T-Dollar
         const userRef = doc(db, "users", checkoutSession.userId);
+        
         await runTransaction(db, async (tx) => {
           const uDoc = await tx.get(userRef);
-          const newBal = (uDoc.data().tDollarBalance || 0) - finalAmountNum;
-          if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${uDoc.data().tDollarBalance}`);
+          const currentData = uDoc.data();
 
-          tx.update(userRef, { tDollarBalance: newBal });
-          tx.set(doc(collection(db, "transactions")), {
-            userId: userRef.id, 
-            phoneNumber: checkoutSession.phoneNumber, 
-            amount: finalAmountNum,
-            originalAmount: checkoutSession.originalPrice,
-            discountRate: checkoutSession.discountRate,
-            service: checkoutSession.service, 
-            stylist: checkoutSession.stylist, 
-            type: "deduct", 
-            timestamp: new Date().toISOString()
-          });
+          if (checkoutMethod === 'tdollar') {
+            // 📍 1. 扣除 T-Dollar 邏輯
+            const finalAmountNum = Number(checkoutAmount);
+            const newBal = (currentData.tDollarBalance || 0) - finalAmountNum;
+            if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
+
+            tx.update(userRef, { tDollarBalance: newBal });
+            tx.set(doc(collection(db, "transactions")), {
+              userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: finalAmountNum, originalAmount: checkoutSession.originalPrice, discountRate: checkoutSession.discountRate, service: checkoutSession.service, stylist: checkoutSession.stylist, type: "deduct", timestamp: new Date().toISOString()
+            });
+
+          } else if (checkoutMethod === 'package') {
+            // 📍 2. 扣除套票格數邏輯
+            if (!selectedUserPackage) throw new Error("請選擇要扣除的套票");
+            const currentPkgs = currentData.packageBalances || {};
+            const currentGrids = currentPkgs[selectedUserPackage] || 0;
+            if (currentGrids < deductGrids) throw new Error(`套票格數不足！剩餘 ${currentGrids} 格`);
+            
+            const newPkgs = { ...currentPkgs, [selectedUserPackage]: currentGrids - deductGrids };
+            tx.update(userRef, { packageBalances: newPkgs });
+            
+            // 記錄扣格交易 (金額為0，記錄扣了幾格)
+            tx.set(doc(collection(db, "transactions")), {
+              userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: checkoutSession.service, stylist: checkoutSession.stylist, type: "deduct_package", packageName: selectedUserPackage, deductedGrids: deductGrids, timestamp: new Date().toISOString()
+            });
+          }
+
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
-        // 非會員 (Walk-in) 結帳：純紀錄營收，不扣餘額
+        // 📍 3. 非會員 (Walk-in) 現金結帳
         await runTransaction(db, async (tx) => {
           tx.set(doc(collection(db, "transactions")), {
-            phoneNumber: checkoutSession.phoneNumber, 
-            amount: finalAmountNum,
-            service: checkoutSession.service, 
-            stylist: checkoutSession.stylist, 
-            type: "walkin_cash", // 非會員現金客
-            timestamp: new Date().toISOString()
+            phoneNumber: checkoutSession.phoneNumber, amount: Number(checkoutAmount), service: checkoutSession.service, stylist: checkoutSession.stylist, type: "walkin_cash", timestamp: new Date().toISOString()
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
@@ -199,66 +222,69 @@ export default function SmartPOS() {
     }
   };
 
-  // 🟢 門市增值：1:1 兌換並重新判定等級
-  const handleStoreTopUp = async (e) => {
+  // 🟢 門市收款：支援 T-Dollar 充值 與 售賣套票
+  const handleStoreAction = async (e) => {
     e.preventDefault();
     if (!topUpUser) return;
-    if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
     
-    const paidHKD = Number(topUpForm.amount);
-    
-    // 預覽計算新等級
-    const currentTotalTopUp = topUpUser.totalTopUp || 0;
-    const newTotalTopUp = currentTotalTopUp + paidHKD;
-    
-    let newTier = { name: '基本會員 (Basic)', discount: 1 };
-    for (const t of tiers) { // tiers 已由高至低排序
-       if (newTotalTopUp >= Number(t.threshold)) {
-           newTier = t;
-           break;
-       }
-    }
-
-    const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n客人將獲得：\n💰 ${paidHKD} T-Dollar\n🌟 ${paidHKD} 積分\n👑 結算後等級：${newTier.name} (${newTier.discount * 10} 折)`);
-    if (!isConfirmed) return;
-
     try {
       const userRef = doc(db, 'users', topUpUser.id);
-      const newExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
 
-      await runTransaction(db, async (transaction) => {
-        const userDoc = await transaction.get(userRef);
-        const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
-        const newPoints = (userDoc.data().points || 0) + paidHKD;
-
-        transaction.update(userRef, { 
-          tDollarBalance: newBalance, 
-          points: newPoints,
-          totalTopUp: newTotalTopUp, // 🟢 記錄終身累積充值金額
-          tier: newTier.name,        // 🟢 更新等級
-          discount: newTier.discount,// 🟢 更新折扣
-          tDollarExpiry: newExpiry, 
-          status: 'active' 
-        });
+      if (topUpTab === 'tdollar') {
+        // 📍 1. 充值 T-Dollar 邏輯
+        if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
+        const paidHKD = Number(topUpForm.amount);
+        const newTotalTopUp = (topUpUser.totalTopUp || 0) + paidHKD;
         
-        transaction.set(doc(collection(db, "transactions")), {
-          userId: topUpUser.id, 
-          phoneNumber: topUpUser.phoneNumber, 
-          type: "topup",
-          tDollarAdded: paidHKD, 
-          pointsAdded: paidHKD, 
-          amountPaidHKD: paidHKD,
-          paymentMethod: topUpForm.paymentMethod, 
-          timestamp: new Date().toISOString()
-        });
-      });
+        let newTier = { name: '基本會員 (Basic)', discount: 1 };
+        for (const t of tiers) {
+           if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; }
+        }
 
-      toast.success(`增值成功！\n已將客人升級至 ${newTier.name}`);
-      setShowTopUpModal(false);
-      setTopUpUser(null);
-      setTopUpPhone('');
-      setTopUpForm({ amount: '', paymentMethod: 'Cash' });
-    } catch (error) { toast.error("增值失敗"); }
+        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)`);
+        if (!isConfirmed) return;
+
+        const newExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+
+        await runTransaction(db, async (transaction) => {
+          const userDoc = await transaction.get(userRef);
+          const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
+          const newPoints = (userDoc.data().points || 0) + paidHKD;
+
+          transaction.update(userRef, { 
+            tDollarBalance: newBalance, points: newPoints, totalTopUp: newTotalTopUp, tier: newTier.name, discount: newTier.discount, tDollarExpiry: newExpiry, status: 'active' 
+          });
+          
+          transaction.set(doc(collection(db, "transactions")), {
+            userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "topup", tDollarAdded: paidHKD, pointsAdded: paidHKD, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString()
+          });
+        });
+        toast.success(`增值成功！已將客人升級至 ${newTier.name}`);
+
+      } else if (topUpTab === 'package') {
+        // 📍 2. 售賣套票邏輯
+        const pkg = packages.find(p => p.id === topUpForm.packageId);
+        if (!pkg) return toast.error("請選擇套票");
+        const paidHKD = Number(pkg.price);
+
+        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD} 售出【${pkg.name}】？\n客人將獲得 ${pkg.quantity} 格`);
+        if (!isConfirmed) return;
+
+        await runTransaction(db, async (transaction) => {
+          const userDoc = await transaction.get(userRef);
+          const currentPkgs = userDoc.data().packageBalances || {};
+          const newQuantity = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
+          
+          transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newQuantity } });
+          transaction.set(doc(collection(db, "transactions")), { 
+            userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() 
+          });
+        });
+        toast.success(`成功售出套票：${pkg.name}\n客人已獲得 ${pkg.quantity} 格`);
+      }
+
+      setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone(''); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
+    } catch (error) { toast.error("操作失敗"); }
   };
 
   return (
@@ -273,7 +299,7 @@ export default function SmartPOS() {
         </div>
         <div className="flex gap-4">
            <button onClick={() => setShowTopUpModal(true)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-green-900/50">
-             <i className="fa-solid fa-hand-holding-dollar"></i> 門市客席增值
+             <i className="fa-solid fa-hand-holding-dollar"></i> 門市客席增值 / 售票
            </button>
            <div className="bg-white/5 border border-white/10 px-6 py-3 rounded-xl flex items-center gap-3 hidden md:flex">
               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
@@ -404,12 +430,12 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 門市增值 Modal (1:1 兌換並升級) */}
+      {/* 🟢 門市收款 Modal (雙分頁：充值 vs 賣套票) */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
             <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
-            <h2 className="text-2xl font-black text-white italic mb-8">Store <span className="text-[#D4AF37]">Top-up</span></h2>
+            <h2 className="text-2xl font-black text-white italic mb-6">Store Action</h2>
             
             <div className="flex gap-2 mb-6">
               <input type="text" value={topUpPhone} onChange={e => setTopUpPhone(e.target.value)} placeholder="輸入客人電話 (如: +852...)" className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" />
@@ -417,7 +443,14 @@ export default function SmartPOS() {
             </div>
 
             {topUpUser && (
-              <form onSubmit={handleStoreTopUp} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
+              <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
+                
+                {/* 雙分頁按鈕 */}
+                <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
+                  <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值 T-Dollar</button>
+                  <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
+                </div>
+
                 <div className="bg-white/5 p-4 rounded-2xl flex justify-between items-center">
                    <div>
                      <p className="text-white font-bold">{topUpUser.name || topUpUser.phoneNumber}</p>
@@ -429,15 +462,25 @@ export default function SmartPOS() {
                    </div>
                 </div>
 
-                <div className="space-y-2 animate-fade-in">
-                  <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">充值金額 (HKD) - 1:1 兌換 T-Dollar</label>
-                  <div className="flex gap-2 mb-2">
-                    {[1000, 3000, 5000].map(amt => (
-                      <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
-                    ))}
+                {topUpTab === 'tdollar' ? (
+                  <div className="space-y-2 animate-fade-in">
+                    <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">充值金額 (HKD) - 1:1 兌換 T-Dollar</label>
+                    <div className="flex gap-2 mb-2">
+                      {[1000, 3000, 5000].map(amt => (
+                        <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
+                      ))}
+                    </div>
+                    <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
                   </div>
-                  <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
-                </div>
+                ) : (
+                  <div className="space-y-2 animate-fade-in">
+                    <label className="text-[10px] font-bold text-purple-400 uppercase tracking-widest ml-1">選擇套票方案</label>
+                    <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-purple-500/50 p-4 rounded-2xl text-white outline-none focus:border-purple-400">
+                      <option value="">請選擇...</option>
+                      {packages.map(p => <option key={p.id} value={p.id}>{p.name} - ${p.price} ({p.quantity}格)</option>)}
+                    </select>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式</label>
@@ -450,7 +493,7 @@ export default function SmartPOS() {
                   </select>
                 </div>
 
-                <button type="submit" className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-[0_0_20px_rgba(212,175,55,0.2)]">
+                <button type="submit" className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'bg-purple-500 text-white hover:bg-purple-400'}`}>
                   確認收款並存入系統
                 </button>
               </form>
@@ -459,7 +502,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 結帳彈窗 (包含自動算折扣功能) */}
+      {/* 🟢 結帳彈窗 (包含自動算折扣與套票扣格功能) */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -477,7 +520,7 @@ export default function SmartPOS() {
                   <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
                     {checkoutSession.tier}
                   </span>
-                  {checkoutSession.discountRate < 1 && (
+                  {checkoutSession.discountRate < 1 && checkoutMethod === 'tdollar' && (
                      <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
                   )}
                 </div>
@@ -494,50 +537,88 @@ export default function SmartPOS() {
                 </div>
               </div>
 
-              <div className="bg-white/5 rounded-2xl p-4 space-y-2 mt-4">
-                 <div className="flex justify-between text-sm text-gray-400">
-                    <span>服務定價</span>
-                    <span>${checkoutSession.originalPrice}</span>
-                 </div>
-                 {checkoutSession.discountRate < 1 && (
-                   <div className="flex justify-between text-sm text-green-400 font-bold">
-                      <span>會員專屬折扣</span>
-                      <span>-${checkoutSession.originalPrice - checkoutSession.finalPrice}</span>
-                   </div>
-                 )}
-                 <div className="border-t border-white/10 pt-2 flex justify-between items-center mt-2">
-                    <span className="text-xs text-[#D4AF37] font-bold uppercase tracking-widest">實收金額</span>
-                    <span className="text-2xl font-black text-white">${checkoutSession.finalPrice}</span>
-                 </div>
-              </div>
-
-              {!checkoutSession.userId && (
-                 <p className="text-[10px] text-red-400 text-center bg-red-500/10 py-2 rounded-lg">此客為非會員(Walk-in)，不扣餘額，請收取現金/刷卡</p>
+              {/* 🟢 選擇結帳方式 */}
+              {checkoutSession.userId && (
+                <div className="flex gap-2 p-1 bg-black rounded-xl border border-white/5 mt-4">
+                  <button type="button" onClick={() => setCheckoutMethod('tdollar')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>扣減餘額</button>
+                  <button type="button" onClick={() => setCheckoutMethod('package')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 扣抵套票</button>
+                </div>
               )}
 
-              <div className="pt-2">
-                <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest block mb-2">手動確認扣款 (T-Dollar)</label>
-                <div className="relative">
-                  <span className="absolute left-4 top-4 text-[#D4AF37] font-bold text-2xl">$</span>
-                  <input 
-                    type="number" required
-                    value={checkoutAmount} 
-                    onChange={e => setCheckoutAmount(e.target.value)} 
-                    className="w-full bg-black border border-[#D4AF37]/50 rounded-2xl p-4 pl-12 text-3xl font-black text-white outline-none focus:border-[#D4AF37]"
-                  />
-                </div>
-                {checkoutSession.userId && (
-                  <p className="text-[10px] text-gray-500 mt-2 text-right">客人當前餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>
-                )}
-              </div>
+              {checkoutMethod === 'tdollar' ? (
+                <>
+                  <div className="bg-white/5 rounded-2xl p-4 space-y-2 mt-4 animate-fade-in">
+                     <div className="flex justify-between text-sm text-gray-400">
+                        <span>服務定價</span>
+                        <span>${checkoutSession.originalPrice}</span>
+                     </div>
+                     {checkoutSession.discountRate < 1 && (
+                       <div className="flex justify-between text-sm text-green-400 font-bold">
+                          <span>會員專屬折扣</span>
+                          <span>-${checkoutSession.originalPrice - checkoutSession.finalPrice}</span>
+                       </div>
+                     )}
+                     <div className="border-t border-white/10 pt-2 flex justify-between items-center mt-2">
+                        <span className="text-xs text-[#D4AF37] font-bold uppercase tracking-widest">實收金額</span>
+                        <span className="text-2xl font-black text-white">${checkoutSession.finalPrice}</span>
+                     </div>
+                  </div>
 
-              <button type="submit" disabled={isProcessing} className="w-full mt-2 bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-[1.02] transition shadow-xl">
-                {isProcessing ? "Processing..." : (checkoutSession.userId ? "確認扣減 T-Dollar" : "確認紀錄現金營收")}
+                  {!checkoutSession.userId && (
+                     <p className="text-[10px] text-red-400 text-center bg-red-500/10 py-2 rounded-lg">此客為非會員(Walk-in)，不扣餘額，請收取現金/刷卡</p>
+                  )}
+
+                  <div className="pt-2 animate-fade-in">
+                    <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest block mb-2">手動確認扣款 (T-Dollar)</label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-4 text-[#D4AF37] font-bold text-2xl">$</span>
+                      <input 
+                        type="number" required
+                        value={checkoutAmount} 
+                        onChange={e => setCheckoutAmount(e.target.value)} 
+                        className="w-full bg-black border border-[#D4AF37]/50 rounded-2xl p-4 pl-12 text-3xl font-black text-white outline-none focus:border-[#D4AF37]"
+                      />
+                    </div>
+                    {checkoutSession.userId && (
+                      <p className="text-[10px] text-gray-500 mt-2 text-right">客人當前餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="pt-4 space-y-4 animate-fade-in">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">選擇要扣除的套票</label>
+                    <select required value={selectedUserPackage} onChange={e => setSelectedUserPackage(e.target.value)} className="w-full bg-black border border-purple-500/50 rounded-xl p-4 text-white outline-none focus:border-purple-400">
+                      <option value="">請選擇...</option>
+                      {Object.entries(checkoutSession.packageBalances || {})
+                        .filter(([_, grids]) => grids > 0)
+                        .map(([name, grids]) => (
+                          <option key={name} value={name}>{name} (剩餘 {grids} 格)</option>
+                      ))}
+                    </select>
+                    {Object.keys(checkoutSession.packageBalances || {}).length === 0 && (
+                       <p className="text-[10px] text-red-400 mt-1">此客人目前沒有任何可用套票。</p>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">本次扣除格數</label>
+                    <input type="number" min="1" required value={deductGrids} onChange={e => setDeductGrids(Number(e.target.value))} className="w-full bg-black border border-purple-500/50 rounded-xl p-4 text-white outline-none text-xl font-bold" />
+                  </div>
+                </div>
+              )}
+
+              <button type="submit" disabled={isProcessing} className={`w-full mt-4 font-black py-4 rounded-2xl uppercase tracking-widest text-xs transition-all shadow-xl ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black hover:scale-105' : 'bg-purple-600 text-white hover:bg-purple-500 hover:scale-105'}`}>
+                {isProcessing ? "Processing..." : (checkoutMethod === 'package' ? "🎫 確認扣除套票格數" : (checkoutSession.userId ? "💰 確認扣減 T-Dollar" : "確認紀錄現金營收"))}
               </button>
             </form>
           </div>
         </div>
       )}
+
+      <style jsx>{`
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
     </div>
   );
 }
