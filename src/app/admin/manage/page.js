@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore'; // 🟢 確保引入 getDoc
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -14,20 +14,18 @@ export default function AdminManagePage() {
   const [packagesList, setPackagesList] = useState([]); 
   
   const [loading, setLoading] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true); // 🟢 權限驗證 loading
-  const [currentUserRole, setCurrentUserRole] = useState(null); // 🟢 儲存當前操作者權限
+  const [authLoading, setAuthLoading] = useState(true); 
+  const [currentUserRole, setCurrentUserRole] = useState(null); 
 
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 預設的空白拆帳規則
   const defaultCommissions = {
     W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
     R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 },
     P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
-  // 🟢 擴充表單：完美整合 套票 / 升級里程碑 / 全局設定 / 拆帳模板與標籤
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
@@ -39,7 +37,6 @@ export default function AdminManagePage() {
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
   const salonEmojiList = ['🧴', '💆‍♀️', '💆‍♂️', '✂️', '✨', '💧', '🌿', '👑', '🎀', '💅', '🛍️', '🎁'];
 
-  // 🟢 根據老闆手寫筆記建立的「自動化帶入模板」
   const commissionTemplates = {
     A: {
       W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 },
@@ -63,14 +60,12 @@ export default function AdminManagePage() {
     }
   };
 
-  // 🟢 重新整理的 CMS 導覽列分類 (三大區塊)
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
     { title: "⚙️ 系統與全局設定", items: [{ id: 'staff', label: '髮型師與拆帳設定', icon: '✂️' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
   ];
 
-  // 🟢 第一道防線：登入與權限驗證
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) return router.push('/login');
@@ -79,8 +74,6 @@ export default function AdminManagePage() {
         if (docSnap.exists()) {
           const role = docSnap.data().role;
           setCurrentUserRole(role);
-          
-          // 🚫 嚴格阻擋：會員、櫃台、髮型師 踢出 CMS
           if (['member', 'reception', 'staff'].includes(role)) {
             toast.error("⛔ 權限不足：您無法進入 CMS 管理中心");
             router.push(role === 'member' ? '/dashboard' : '/admin/pos');
@@ -92,7 +85,6 @@ export default function AdminManagePage() {
     return () => unsubscribe();
   }, [router]);
 
-  // 🟢 第二道防線：切換 Tab 時載入資料
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
        fetchData(); fetchCategories(); fetchPackages(); 
@@ -128,7 +120,6 @@ export default function AdminManagePage() {
     e.preventDefault();
     setLoading(true);
     try {
-      // 🚫 經理防護：防堵 API 層級修改機密
       if (['staff', 'settings'].includes(activeTab) && currentUserRole !== 'admin') {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
@@ -173,7 +164,6 @@ export default function AdminManagePage() {
     setFormData({ ...formData, commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
   };
 
-  // 🟢 第三道防線：動態過濾經理能看到的選單
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') {
       return { ...group, items: group.items.filter(item => item.id !== 'staff' && item.id !== 'settings') };
@@ -218,7 +208,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 針對惡意竄改 URL 進入禁區的防護 */}
             {['staff', 'settings'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -230,7 +219,6 @@ export default function AdminManagePage() {
                   <div className="space-y-2 col-span-2">
                     <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
                     <input type="number" className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-xl text-white focus:border-[#D4AF37] outline-none text-xl font-black" value={formData.validityDays} onChange={e => setFormData({...formData, validityDays: e.target.value})} required />
-                    <p className="text-[10px] text-gray-500 mt-2">💡 系統預設為 365 天 (一年)。當客人註冊或於門市儲值時，系統會自動將客人的餘額效期延長至「當下日期 + 此天數」。</p>
                   </div>
                 )}
 
@@ -323,7 +311,6 @@ export default function AdminManagePage() {
                   <><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">禮品名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">所需積分 (Points)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">圖標 (Emoji)</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">{salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} /></div></>
                 )}
 
-                {/* 🟢 Tiers 加入里程碑獎勵與贈送套票 */}
                 {activeTab === 'tiers' && (
                   <>
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
@@ -373,8 +360,20 @@ export default function AdminManagePage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-3">
                         <span className="font-bold text-xl text-white">{item.name || item.title}</span>
-                        {item.commissionCode && <span className="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">{item.commissionCode}</span>}
-                        {item.grade && <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-0.5 rounded border border-[#D4AF37]/30 font-bold uppercase tracking-tighter">{item.grade} 級師傅</span>}
+                        
+                        {/* 🟢 修復：只有在服務與套票時顯示「類」 */}
+                        {['services', 'packages'].includes(activeTab) && item.commissionCode && (
+                          <span className="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">
+                            {item.commissionCode} 類
+                          </span>
+                        )}
+                        
+                        {/* 🟢 修復：只有在髮型師時顯示「級師傅」 */}
+                        {activeTab === 'staff' && item.grade && (
+                          <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-0.5 rounded border border-[#D4AF37]/30 font-bold uppercase tracking-tighter">
+                            {item.grade} 級師傅
+                          </span>
+                        )}
                       </div>
                       
                       <div className="flex flex-wrap gap-4 mt-2 text-sm items-center">
@@ -384,8 +383,8 @@ export default function AdminManagePage() {
                           <>
                             <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>
                             <span className="text-green-400 font-bold text-base">折扣: {Number(item.discount) * 10} 折</span>
-                            {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">🎁 送 {item.upgradeBonus} 分</span>}
-                            {item.giftPackageName && <span className="text-pink-400 font-bold text-sm bg-pink-500/20 px-2 py-0.5 rounded border border-pink-500/30">🎫 送套票: {item.giftPackageName}</span>}
+                            {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded">🎁 送 {item.upgradeBonus} 分</span>}
+                            {item.giftPackageName && <span className="text-pink-400 font-bold text-sm bg-pink-500/20 px-2 py-0.5 rounded">🎫 送套票: {item.giftPackageName}</span>}
                           </>
                         )}
                       </div>
@@ -393,12 +392,8 @@ export default function AdminManagePage() {
                   </div>
 
                   <div className="flex items-center gap-3 w-full md:w-auto mt-2 md:mt-0">
-                    <button onClick={() => startEdit(item)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-900/30 text-blue-400 border border-blue-800/50 rounded-xl hover:bg-blue-600 hover:text-white transition">
-                      <i className="fa-solid fa-pen-to-square"></i> <span>修改</span>
-                    </button>
-                    <button onClick={() => handleDelete(item.id)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-red-900/30 text-red-400 border border-red-800/50 rounded-xl hover:bg-red-600 hover:text-white transition">
-                      <i className="fa-solid fa-trash-can"></i> <span>刪除</span>
-                    </button>
+                    <button onClick={() => startEdit(item)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-900/30 text-blue-400 border border-blue-800/50 rounded-xl hover:bg-blue-600 hover:text-white transition">修改</button>
+                    <button onClick={() => handleDelete(item.id)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-red-900/30 text-red-400 border border-red-800/50 rounded-xl hover:bg-red-600 hover:text-white transition">刪除</button>
                   </div>
                 </div>
               ))}
