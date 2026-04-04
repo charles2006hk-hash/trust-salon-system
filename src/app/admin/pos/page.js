@@ -12,11 +12,11 @@ export default function SmartPOS() {
   
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
-  const [staff, setStaff] = useState([]); 
+  const [staff, setStaff] = useState([]); // 🟢 這裡嚴格只放髮型師
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
-  const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); // 🟢 抓取全局有效天數
+  const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
@@ -63,9 +63,12 @@ export default function SmartPOS() {
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'tiers')),
       getDocs(collection(db, 'packages')),
-      getDocs(collection(db, 'settings')) // 🟢 抓取系統全局設定
+      getDocs(collection(db, 'settings')) 
     ]);
-    setStaff(sSnap.docs.map(d => d.data().name));
+    
+    // 🟢 嚴格把關：只讀取 CMS 裡面的「髮型師名單」作為派單與監控的依據
+    setStaff(sSnap.docs.map(d => d.data().name).filter(Boolean));
+
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -74,7 +77,6 @@ export default function SmartPOS() {
     
     setPackages(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-    // 🟢 套用老闆在 CMS 設定的有效天數
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
@@ -226,7 +228,6 @@ export default function SmartPOS() {
     
     try {
       const userRef = doc(db, 'users', topUpUser.id);
-      // 🟢 套用動態有效天數
       const newExpiry = new Date(Date.now() + globalSettings.validityDays * 24 * 60 * 60 * 1000).toISOString();
 
       if (topUpTab === 'tdollar') {
@@ -249,7 +250,6 @@ export default function SmartPOS() {
             isUpgraded = true;
             upgradeBonus = Number(newTier.upgradeBonus) || 0;
             
-            // 🟢 檢查是否有綁定贈送套票
             if (newTier.giftPackageName) {
                 giftPkgName = newTier.giftPackageName;
                 const pkgData = packages.find(p => p.name === giftPkgName);
@@ -269,7 +269,6 @@ export default function SmartPOS() {
           const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
           const newPoints = (userDoc.data().points || 0) + paidHKD + upgradeBonus;
 
-          // 🟢 處理升級送套票寫入錢包
           let newPackageBalances = userDoc.data().packageBalances || {};
           if (giftPkgGrids > 0) {
              newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
@@ -282,7 +281,7 @@ export default function SmartPOS() {
             tier: newTier.name, 
             discount: newTier.discount, 
             tDollarExpiry: newExpiry, 
-            packageBalances: newPackageBalances, // 🟢 更新套票餘額
+            packageBalances: newPackageBalances,
             status: 'active' 
           });
           
@@ -293,7 +292,7 @@ export default function SmartPOS() {
             tDollarAdded: paidHKD, 
             pointsAdded: paidHKD + upgradeBonus,
             upgradeBonusAdded: upgradeBonus,     
-            giftPackageAdded: giftPkgName, // 🟢 記錄送了什麼套票
+            giftPackageAdded: giftPkgName, 
             amountPaidHKD: paidHKD, 
             paymentMethod: topUpForm.paymentMethod, 
             timestamp: new Date().toISOString()
@@ -316,7 +315,7 @@ export default function SmartPOS() {
           
           transaction.update(userRef, { 
             packageBalances: { ...currentPkgs, [pkg.name]: newQuantity },
-            tDollarExpiry: newExpiry // 🟢 買套票也幫客人展延效期
+            tDollarExpiry: newExpiry 
           });
           
           transaction.set(doc(collection(db, "transactions")), { 
@@ -454,10 +453,13 @@ export default function SmartPOS() {
             )}
           </div>
 
-          {/* 髮型師負荷檢查 */}
+          {/* 🟢 髮型師負荷檢查 */}
           <div className="mt-12 pt-8 border-t border-white/5">
             <h3 className="text-[10px] font-bold text-gray-600 uppercase tracking-[0.4em] mb-6">Stylist Load (負荷監控)</h3>
             <div className="flex flex-wrap gap-4">
+               {staff.length === 0 && (
+                 <p className="text-xs text-gray-500">請至 CMS 模組的「髮型師名單」建立人員。</p>
+               )}
                {staff.map(name => {
                  const count = activeSessions.filter(s => s.stylist === name).length;
                  return (
@@ -473,7 +475,7 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 門市收款 Modal (雙分頁：充值 vs 賣套票) */}
+      {/* 門市收款 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -545,7 +547,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 結帳彈窗 */}
+      {/* 結帳彈窗 */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
