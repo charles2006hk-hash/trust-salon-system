@@ -15,7 +15,8 @@ export default function SmartPOS() {
   const [staff, setStaff] = useState([]); 
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
-  const [packages, setPackages] = useState([]);
+  const [packages, setPackages] = useState([]); 
+  const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); // 🟢 抓取全局有效天數
 
   const [phone, setPhone] = useState('');
   const [walkInStylist, setWalkInStylist] = useState('');
@@ -57,11 +58,12 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    const [sSnap, svSnap, tSnap, pSnap] = await Promise.all([
+    const [sSnap, svSnap, tSnap, pSnap, setSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'tiers')),
-      getDocs(collection(db, 'packages'))
+      getDocs(collection(db, 'packages')),
+      getDocs(collection(db, 'settings')) // 🟢 抓取系統全局設定
     ]);
     setStaff(sSnap.docs.map(d => d.data().name));
     setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -71,6 +73,10 @@ export default function SmartPOS() {
     setTiers(tData);
     
     setPackages(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+    // 🟢 套用老闆在 CMS 設定的有效天數
+    const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
+    if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
 
   const handleKeyDown = (e) => {
@@ -220,38 +226,54 @@ export default function SmartPOS() {
     
     try {
       const userRef = doc(db, 'users', topUpUser.id);
+      // 🟢 套用動態有效天數
+      const newExpiry = new Date(Date.now() + globalSettings.validityDays * 24 * 60 * 60 * 1000).toISOString();
 
       if (topUpTab === 'tdollar') {
         if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
         const paidHKD = Number(topUpForm.amount);
         const newTotalTopUp = (topUpUser.totalTopUp || 0) + paidHKD;
         
-        // 🟢 完美整合：自動等級判定與升級獎勵 (Upgrade Bonus)
-        let newTier = { name: '基本會員 (Basic)', discount: 1, upgradeBonus: 0 };
+        let newTier = { name: '基本會員 (Basic)', discount: 1, upgradeBonus: 0, giftPackageName: '' };
         for (const t of tiers) {
            if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; }
         }
 
         let upgradeBonus = 0;
+        let giftPkgName = ''; 
+        let giftPkgGrids = 0; 
         let isUpgraded = false;
-        const currentTier = topUpUser.tier || '基本會員 (Basic)';
         
+        const currentTier = topUpUser.tier || '基本會員 (Basic)';
         if (newTier.name !== currentTier && newTier.name !== '基本會員 (Basic)') {
             isUpgraded = true;
             upgradeBonus = Number(newTier.upgradeBonus) || 0;
+            
+            // 🟢 檢查是否有綁定贈送套票
+            if (newTier.giftPackageName) {
+                giftPkgName = newTier.giftPackageName;
+                const pkgData = packages.find(p => p.name === giftPkgName);
+                if (pkgData) giftPkgGrids = Number(pkgData.quantity);
+            }
         }
 
-        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)${isUpgraded && upgradeBonus > 0 ? `\n🎁 觸發升級獎勵：系統將自動派發 ${upgradeBonus} 積分！` : ''}`);
-        if (!isConfirmed) return;
-
-        const newExpiry = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+        const confirmMsg = `確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)` + 
+                           (isUpgraded && upgradeBonus > 0 ? `\n🎁 觸發升級獎勵：系統將自動派發 ${upgradeBonus} 積分！` : '') +
+                           (isUpgraded && giftPkgGrids > 0 ? `\n🎫 送套票: ${giftPkgName} (${giftPkgGrids}格)` : '');
+        
+        if (!window.confirm(confirmMsg)) return;
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
           
           const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
-          // 🟢 總積分 = 舊的積分 + 這次充值 1:1 送的 + 升級達標送的獎勵
           const newPoints = (userDoc.data().points || 0) + paidHKD + upgradeBonus;
+
+          // 🟢 處理升級送套票寫入錢包
+          let newPackageBalances = userDoc.data().packageBalances || {};
+          if (giftPkgGrids > 0) {
+             newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
+          }
 
           transaction.update(userRef, { 
             tDollarBalance: newBalance, 
@@ -260,6 +282,7 @@ export default function SmartPOS() {
             tier: newTier.name, 
             discount: newTier.discount, 
             tDollarExpiry: newExpiry, 
+            packageBalances: newPackageBalances, // 🟢 更新套票餘額
             status: 'active' 
           });
           
@@ -268,14 +291,15 @@ export default function SmartPOS() {
             phoneNumber: topUpUser.phoneNumber, 
             type: "topup", 
             tDollarAdded: paidHKD, 
-            pointsAdded: paidHKD + upgradeBonus, // 記錄總獲得積分
-            upgradeBonusAdded: upgradeBonus,     // 獨立記錄升級獎勵，供報表區分
+            pointsAdded: paidHKD + upgradeBonus,
+            upgradeBonusAdded: upgradeBonus,     
+            giftPackageAdded: giftPkgName, // 🟢 記錄送了什麼套票
             amountPaidHKD: paidHKD, 
             paymentMethod: topUpForm.paymentMethod, 
             timestamp: new Date().toISOString()
           });
         });
-        toast.success(`增值成功！已將客人升級至 ${newTier.name}${upgradeBonus > 0 ? `\n🎁 並發送 ${upgradeBonus} 升級獎勵積分！` : ''}`);
+        toast.success(`增值成功！已將客人升級至 ${newTier.name}${upgradeBonus > 0 || giftPkgGrids > 0 ? `\n🎁 已發送升級專屬獎勵！` : ''}`);
 
       } else if (topUpTab === 'package') {
         const pkg = packages.find(p => p.id === topUpForm.packageId);
@@ -290,7 +314,11 @@ export default function SmartPOS() {
           const currentPkgs = userDoc.data().packageBalances || {};
           const newQuantity = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
           
-          transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newQuantity } });
+          transaction.update(userRef, { 
+            packageBalances: { ...currentPkgs, [pkg.name]: newQuantity },
+            tDollarExpiry: newExpiry // 🟢 買套票也幫客人展延效期
+          });
+          
           transaction.set(doc(collection(db, "transactions")), { 
             userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() 
           });
