@@ -12,6 +12,7 @@ export default function AdminManagePage() {
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]); 
   const [packagesList, setPackagesList] = useState([]); 
+  const [templatesList, setTemplatesList] = useState([]); // 🟢 儲存資料庫裡的動態模板
   
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true); 
@@ -23,47 +24,24 @@ export default function AdminManagePage() {
   const defaultCommissions = {
     W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
     R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 },
-    P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
+    P1: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', grade: 'A', commissions: defaultCommissions 
+    commissionCode: 'W1', templateId: '', commissions: defaultCommissions 
   };
   const [formData, setFormData] = useState(initialForm);
 
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
   const salonEmojiList = ['🧴', '💆‍♀️', '💆‍♂️', '✂️', '✨', '💧', '🌿', '👑', '🎀', '💅', '🛍️', '🎁'];
 
-  const commissionTemplates = {
-    A: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 },
-      R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    B: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
-      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    C: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 },
-      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    D: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
-      R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 },
-      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 }
-    }
-  };
-
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'staff', label: '髮型師與拆帳設定', icon: '✂️' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
   ];
 
   useEffect(() => {
@@ -87,7 +65,7 @@ export default function AdminManagePage() {
 
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
-       fetchData(); fetchCategories(); fetchPackages(); 
+       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates();
     }
   }, [activeTab, currentUserRole]);
 
@@ -106,9 +84,7 @@ export default function AdminManagePage() {
 
   const fetchCategories = async () => {
     const querySnapshot = await getDocs(collection(db, 'categories'));
-    const cats = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    setCategories(cats);
-    if (cats.length > 0 && !formData.category) setFormData(prev => ({ ...prev, category: cats[0].name }));
+    setCategories(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
   };
 
   const fetchPackages = async () => {
@@ -116,11 +92,17 @@ export default function AdminManagePage() {
     setPackagesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   };
 
+  const fetchTemplates = async () => {
+    const snap = await getDocs(collection(db, 'templates'));
+    setTemplatesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      if (['staff', 'settings'].includes(activeTab) && currentUserRole !== 'admin') {
+      // 🚫 經理防護：防堵 API 層級修改機密
+      if (['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin') {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
 
@@ -138,6 +120,7 @@ export default function AdminManagePage() {
       }
       setFormData(initialForm); setEditingId(null); fetchData();
       if (activeTab === 'categories') fetchCategories();
+      if (activeTab === 'templates') fetchTemplates();
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
@@ -148,25 +131,61 @@ export default function AdminManagePage() {
   };
 
   const handleDelete = async (id) => {
-    if (['staff', 'settings'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
+    if (['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
     if (!window.confirm("確定刪除？")) return;
     await deleteDoc(doc(db, activeTab, id)); toast.success("已刪除"); fetchData();
+    if (activeTab === 'templates') fetchTemplates();
   };
 
-  const applyTemplate = (grade) => {
-    if (commissionTemplates[grade]) {
-      setFormData({ ...formData, grade: grade, commissions: commissionTemplates[grade] });
-      toast.success(`已載入 ${grade} 級師傅拆帳模板`);
-    } else { setFormData({ ...formData, grade: grade }); }
+  // 🟢 從資料庫模板套用數值
+  const applyTemplate = (templateId) => {
+    const selectedTemplate = templatesList.find(t => t.id === templateId);
+    if (selectedTemplate) {
+      setFormData({ ...formData, templateId: templateId, commissions: selectedTemplate.commissions });
+      toast.success(`已載入【${selectedTemplate.name}】拆帳模板`);
+    } else { 
+      setFormData({ ...formData, templateId: templateId }); 
+    }
   };
 
   const updateCommission = (code, field, value) => {
     setFormData({ ...formData, commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
   };
 
+  // 🟢 獨立出來的拆帳矩陣 UI 元件 (給 Templates 和 Staff 共用)
+  const renderMatrixEditor = () => (
+    <div className="col-span-2 pt-6 border-t border-gray-800">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-sm font-bold text-[#D4AF37]"><i className="fa-solid fa-calculator"></i> 拆帳矩陣參數設定</h3>
+        <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
+      </div>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'SCALP'].map(code => (
+          <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
+             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
+               <span>{code === 'W1' ? 'W1 - 洗剪吹 (含扣款)' : code === 'R1' ? 'R1 - 染燙化學 (含扣款)' : code === 'SCALP' ? 'SCALP - 頭皮套票' : code + ' 類'}</span>
+             </div>
+             <div className="flex items-center gap-2">
+               <div className="flex-1 relative">
+                 <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                 <input type="number" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+               </div>
+               <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+               <div className="flex-1 relative">
+                 <input type="number" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
+                 <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+               </div>
+             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') {
-      return { ...group, items: group.items.filter(item => item.id !== 'staff' && item.id !== 'settings') };
+      return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates'].includes(item.id)) };
     }
     return group;
   }).filter(group => group.items.length > 0);
@@ -205,16 +224,28 @@ export default function AdminManagePage() {
         <div className="lg:col-span-9">
           <div className={`bg-[#1a1a1a] p-8 rounded-[40px] border-2 ${editingId ? 'border-[#D4AF37]' : 'border-gray-800'} mb-12 shadow-2xl relative transition-all`}>
             <h2 className="text-xl font-bold mb-8 text-white flex items-center gap-2">
-              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : '✨ 新增項目'}
+              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
             </h2>
 
-            {['staff', 'settings'].includes(activeTab) && currentUserRole !== 'admin' ? (
+            {/* 🛡️ 機密防護 */}
+            {['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
                </div>
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
+                {/* 🟢 動態抽成模板設定 */}
+                {activeTab === 'templates' && (
+                  <>
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">抽成模板名稱</label>
+                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：A 級師傅、G 級大師、設計助理..." />
+                    </div>
+                    {renderMatrixEditor()}
+                  </>
+                )}
+
                 {activeTab === 'settings' && (
                   <div className="space-y-2 col-span-2">
                     <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
@@ -266,40 +297,14 @@ export default function AdminManagePage() {
                       <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Kelvin" />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">師傅職級與套用模板</label>
-                      <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.grade} onChange={e => applyTemplate(e.target.value)}>
-                        <option value="A">A 級師傅</option><option value="B">B 級師傅</option><option value="C">C 級師傅</option>
-                        <option value="D">D 級師傅</option><option value="E">E 級師傅</option><option value="F">F 級師傅</option>
+                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">快速套用資料庫模板</label>
+                      <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
+                        <option value="">-- 手動自訂比例 --</option>
+                        {templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
                     </div>
 
-                    <div className="col-span-2 pt-6 border-t border-gray-800">
-                      <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-sm font-bold text-[#D4AF37]"><i className="fa-solid fa-calculator"></i> 專屬拆帳矩陣設定</h3>
-                        <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'SCALP'].map(code => (
-                          <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
-                             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                               {code === 'W1' ? 'W1 - 洗剪吹 (含扣款)' : code === 'R1' ? 'R1 - 染燙化學 (含扣款)' : code === 'SCALP' ? 'SCALP - 頭皮套票' : code + ' 類'}
-                             </div>
-                             <div className="flex items-center gap-2">
-                               <div className="flex-1 relative">
-                                 <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
-                                 <input type="number" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
-                               </div>
-                               <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
-                               <div className="flex-1 relative">
-                                 <input type="number" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
-                                 <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
-                               </div>
-                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    {renderMatrixEditor()}
                   </>
                 )}
 
@@ -348,30 +353,28 @@ export default function AdminManagePage() {
             )}
           </div>
 
-          {activeTab !== 'settings' && (!['staff'].includes(activeTab) || currentUserRole === 'admin') && (
+          {/* 列表區 */}
+          {activeTab !== 'settings' && (!['staff', 'templates'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
               {list.map((item) => (
                 <div key={item.id} className="bg-gray-900/60 p-6 rounded-3xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
                   <div className="flex items-center gap-5 w-full md:w-auto">
                     <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-2xl shrink-0">
-                        {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
+                        {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-3">
                         <span className="font-bold text-xl text-white">{item.name || item.title}</span>
-                        
-                        {/* 🟢 修復：只有在服務與套票時顯示「類」 */}
                         {['services', 'packages'].includes(activeTab) && item.commissionCode && (
                           <span className="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">
                             {item.commissionCode} 類
                           </span>
                         )}
-                        
-                        {/* 🟢 修復：只有在髮型師時顯示「級師傅」 */}
-                        {activeTab === 'staff' && item.grade && (
-                          <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-0.5 rounded border border-[#D4AF37]/30 font-bold uppercase tracking-tighter">
-                            {item.grade} 級師傅
+                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
+                        {activeTab === 'staff' && item.templateId && (
+                          <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
+                            已套用模板
                           </span>
                         )}
                       </div>
@@ -379,12 +382,15 @@ export default function AdminManagePage() {
                       <div className="flex flex-wrap gap-4 mt-2 text-sm items-center">
                         {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold text-base">${item.price}</span><span className="text-[#D4AF37] font-bold text-base bg-[#D4AF37]/10 px-2 py-0.5 rounded-md border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
                         {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
+                        
+                        {activeTab === 'templates' && <span className="text-gray-400 text-xs italic">包含 W1-W3, R1-R2, P1, SCALP 完整公式</span>}
+
                         {activeTab === 'tiers' && (
                           <>
                             <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>
                             <span className="text-green-400 font-bold text-base">折扣: {Number(item.discount) * 10} 折</span>
-                            {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded">🎁 送 {item.upgradeBonus} 分</span>}
-                            {item.giftPackageName && <span className="text-pink-400 font-bold text-sm bg-pink-500/20 px-2 py-0.5 rounded">🎫 送套票: {item.giftPackageName}</span>}
+                            {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">🎁 送 {item.upgradeBonus} 分</span>}
+                            {item.giftPackageName && <span className="text-pink-400 font-bold text-sm bg-pink-500/20 px-2 py-0.5 rounded border border-pink-500/30">🎫 送套票: {item.giftPackageName}</span>}
                           </>
                         )}
                       </div>
