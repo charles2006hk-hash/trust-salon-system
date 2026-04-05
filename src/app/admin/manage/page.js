@@ -27,11 +27,46 @@ export default function AdminManagePage() {
     P1: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
+  // 🟢 根據老闆手寫筆記建立的「自動化帶入模板」 (E、F 級也補上基礎預設)
+  const commissionTemplates = {
+    A: {
+      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 },
+      R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 },
+      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
+    },
+    B: {
+      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
+      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 },
+      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
+    },
+    C: {
+      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 },
+      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 },
+      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
+    },
+    D: {
+      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
+      R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 },
+      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 }
+    },
+    E: {
+      W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 },
+      R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 },
+      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 }
+    },
+    F: {
+      W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 },
+      R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 },
+      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 }
+    }
+  };
+
+  // 🟢 修復點：初始表單直接載入 commissionTemplates['A']，而不是全0
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', commissions: defaultCommissions 
+    commissionCode: 'W1', templateId: '', commissions: commissionTemplates['A'] 
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -124,9 +159,15 @@ export default function AdminManagePage() {
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
+  // 🟢 修復點：點擊修改時，如果資料庫沒存過 commissions，就抓取對應職級的模板
   const startEdit = (item) => {
     setEditingId(item.id);
-    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions });
+    const itemGrade = item.grade || 'A';
+    setFormData({ 
+      ...initialForm, 
+      ...item, 
+      commissions: item.commissions || commissionTemplates[itemGrade] || commissionTemplates['A'] 
+    });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
