@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, runTransaction, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, runTransaction, onSnapshot, addDoc, deleteDoc, getDoc } from 'firebase/firestore'; // 🟢 補上 getDoc
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -10,6 +10,9 @@ import { Toaster, toast } from 'react-hot-toast';
 export default function SmartPOS() {
   const router = useRouter();
   
+  // 🟢 權限狀態
+  const [currentUserRole, setCurrentUserRole] = useState(null);
+
   // 🟢 跨店連鎖核心狀態
   const [branches, setBranches] = useState([]);
   const [currentBranch, setCurrentBranch] = useState('');
@@ -17,7 +20,7 @@ export default function SmartPOS() {
 
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
-  const [rawStaff, setRawStaff] = useState([]); // 儲存原始員工資料供動態過濾
+  const [rawStaff, setRawStaff] = useState([]); 
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
@@ -43,9 +46,20 @@ export default function SmartPOS() {
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
   useEffect(() => {
-    onAuthStateChanged(auth, (user) => { if (!user) router.push('/login'); });
+    const unsubscribe = onAuthStateChanged(auth, async (user) => { 
+      if (!user) {
+        router.push('/login'); 
+      } else {
+        // 🟢 抓取目前登入者的權限 Role
+        try {
+          const docSnap = await getDoc(doc(db, 'users', user.uid));
+          if (docSnap.exists()) {
+            setCurrentUserRole(docSnap.data().role);
+          }
+        } catch(e) { console.error(e); }
+      }
+    });
     
-    // 🟢 初始化門市選擇 (記憶在瀏覽器)
     const savedBranch = localStorage.getItem('pos_branch');
     if (savedBranch) setCurrentBranch(savedBranch);
     
@@ -60,7 +74,7 @@ export default function SmartPOS() {
     });
 
     fetchBasicData();
-    return () => { unsubActive(); unsubApp(); };
+    return () => { unsubscribe(); unsubActive(); unsubApp(); };
   }, []);
 
   const fetchBasicData = async () => {
@@ -73,14 +87,12 @@ export default function SmartPOS() {
       safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches')
     ]);
     
-    // 🟢 載入門店清單
     const branchList = bSnap.docs.map(d => d.data().name);
     setBranches(branchList);
     if (!localStorage.getItem('pos_branch') && branchList.length > 0) {
       setShowBranchModal(true);
     }
 
-    // 🟢 儲存完整的員工設定 (包含綁定的 branch)
     setRawStaff(sSnap.docs.map(d => d.data())); 
 
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -96,7 +108,6 @@ export default function SmartPOS() {
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
 
-  // 🟢 門市切換功能
   const selectBranch = (branchName) => {
     setCurrentBranch(branchName);
     localStorage.setItem('pos_branch', branchName);
@@ -104,12 +115,10 @@ export default function SmartPOS() {
     toast.success(`已切換至 ${branchName} 收銀模式`);
   };
 
-  // 🟢 動態過濾：只顯示目前門店 + 跨店通用的員工
   const displayStaff = [...new Set(
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
   )];
 
-  // 🟢 動態過濾：只顯示目前門店的報到與預約 (相容舊資料則允許 !s.branch)
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
   const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
 
@@ -128,7 +137,7 @@ export default function SmartPOS() {
         service: bookingData?.service || walkInService, 
         startTime: new Date().toISOString(), 
         bookingId: bookingData?.id || null,
-        branch: currentBranch // 🟢 打上門店標籤
+        branch: currentBranch 
       });
       if (bookingData?.id) { const appRef = doc(db, "appointments", bookingData.id); await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); }
       toast.success(`${formattedPhone} 已入店服務`);
@@ -211,7 +220,6 @@ export default function SmartPOS() {
           }
           if (Object.keys(deductMap).length > 0) tx.update(userRef, { packageBalances: newPackageBalances });
 
-          // 🟢 寫入交易並強制打上門店標籤 (branch)
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
@@ -282,7 +290,6 @@ export default function SmartPOS() {
           if (giftPkgGrids > 0) newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
 
           transaction.update(userRef, { tDollarBalance: newBalance, points: newPoints, totalTopUp: newTotalTopUp, tier: newTier.name, discount: newTier.discount, tDollarExpiry: newExpiry, packageBalances: newPackageBalances, status: 'active' });
-          // 🟢 增值同樣打上門店標籤
           transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "topup", tDollarAdded: paidHKD, pointsAdded: paidHKD + upgradeBonus, upgradeBonusAdded: upgradeBonus, giftPackageAdded: giftPkgName, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
         toast.success(`增值成功！已將客人升級至 ${newTier.name}`);
@@ -298,7 +305,6 @@ export default function SmartPOS() {
           const currentPkgs = userDoc.data().packageBalances || {};
           const newQuantity = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
           transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newQuantity }, tDollarExpiry: newExpiry });
-          // 🟢 售票同樣打上門店標籤
           transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
         toast.success(`成功售出套票：${pkg.name}`);
@@ -311,7 +317,7 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
-      {/* 🟢 強制門店選擇 Modal (無法關閉，直到選擇為止) */}
+      {/* 🟢 強制門店選擇 Modal */}
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
            <div className="bg-[#121212] w-full max-w-md rounded-[40px] p-10 border border-[#D4AF37]/50 shadow-[0_0_50px_rgba(212,175,55,0.2)] text-center animate-fade-in">
@@ -340,12 +346,16 @@ export default function SmartPOS() {
           <h1 className="text-3xl font-black tracking-tighter flex items-center gap-3">
             <span className="bg-[#D4AF37] text-black px-3 py-1 rounded-lg">TRUST</span> 收銀與派單系統
           </h1>
-          {/* 🟢 顯示目前綁定門市與切換按鈕 */}
           <div className="mt-3 flex items-center gap-3">
             <span className="bg-blue-600/20 border border-blue-500/50 text-blue-400 px-3 py-1 rounded-md text-xs font-bold uppercase tracking-widest">
               <i className="fa-solid fa-location-dot mr-1"></i> {currentBranch || '未選門市'}
             </span>
-            <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">切換門市</button>
+            {/* 🟢 權限隔離：只有老闆與經理才能看到這顆按鈕，重新呼叫 Modal 換店 */}
+            {['admin', 'manager'].includes(currentUserRole) && (
+              <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">
+                切換門市
+              </button>
+            )}
           </div>
         </div>
 
@@ -377,7 +387,6 @@ export default function SmartPOS() {
                 <div className="grid grid-cols-2 gap-3">
                   <select value={walkInStylist} onChange={e => setWalkInStylist(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇髮型師</option>
-                    {/* 🟢 只顯示屬於這個門店的髮型師 */}
                     {displayStaff.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                   <select value={walkInService} onChange={e => setWalkInService(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
@@ -415,7 +424,6 @@ export default function SmartPOS() {
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">本門市現場動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* 🟢 只顯示屬於這個門店的客人 */}
             {displaySessions.map(session => (
               <div key={session.id} className="bg-[#121212] rounded-[40px] p-8 border border-white/5 relative group overflow-hidden flex flex-col justify-between min-h-[250px]">
                 
@@ -471,7 +479,6 @@ export default function SmartPOS() {
                {displayStaff.length === 0 && (
                  <p className="text-xs text-gray-500">此門市尚無排班設計師。</p>
                )}
-               {/* 🟢 只計算本門店設計師的負荷 */}
                {displayStaff.map(name => {
                  const count = displaySessions.filter(s => s.stylist === name).length;
                  return (
