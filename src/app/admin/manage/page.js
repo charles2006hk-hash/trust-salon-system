@@ -114,20 +114,25 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
+  // 🟢 暴力修復：不論是否存在，強制寫入並更新 P1~P5 完整結構！
   const initDefaultTemplates = async () => {
     setLoading(true);
-    const toastId = toast.loading("正在為您建立 A~F 級預設抽成模板...");
+    const toastId = toast.loading("正在為您強制更新 A~F 級預設抽成模板...");
     try {
       for (const [name, comms] of Object.entries(defaultPresets)) {
         const existing = templatesList.find(t => t.name === name);
-        if (!existing) {
+        if (existing) {
+          // 如果已經存在舊版的，直接強制 Update 更新覆蓋
+          await updateDoc(doc(db, 'templates', existing.id), { commissions: comms, updatedAt: new Date().toISOString() });
+        } else {
+          // 不存在則新建
           await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
         }
       }
-      toast.success("A~F 預設模板已全數寫入資料庫！", { id: toastId });
+      toast.success("A~F 預設模板已強制覆蓋更新完成！", { id: toastId });
       fetchTemplates(); 
       fetchData(); 
-    } catch (e) { toast.error("建立失敗", { id: toastId }); } finally { setLoading(false); }
+    } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
   const handleSave = async (e) => {
@@ -274,11 +279,11 @@ export default function AdminManagePage() {
                   <>
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
-                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
+                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 強制更新模板庫</h4>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
-                        一鍵寫入 A~F 模板
+                        強制更新 A~F 模板
                       </button>
                     </div>
 
@@ -328,7 +333,6 @@ export default function AdminManagePage() {
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
                         <option value="SCALP">SCALP - 頭皮/養護套票類</option>
-                        {/* 🟢 加入 P1~P5 產品類別 */}
                         <option value="P1">P1 - 產品實體 (預設 A級抽 20%)</option>
                         <option value="P2">P2 - 產品實體 (預設 A級抽 25%)</option>
                         <option value="P3">P3 - 產品實體 (預設 A級抽 18%)</option>
