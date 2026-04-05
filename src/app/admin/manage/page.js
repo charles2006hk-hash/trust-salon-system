@@ -21,20 +21,22 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
+  // 🟢 擴充包含 P1 ~ P5 的預設空結構
   const defaultCommissions = {
     W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
     R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 },
-    P1: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
+    P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, P3: { deduct: 0, percent: 0 }, 
+    P4: { deduct: 0, percent: 0 }, P5: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
-  // 🟢 預設參數模板 (對應你的手寫筆記)
+  // 🟢 嚴格還原手寫單 A1~A10, B1~B11 的參數矩陣
   const defaultPresets = {
-    "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
-    "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
-    "C 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
-    "D 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 25 } },
-    "E 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } },
-    "F 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } }
+    "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "C 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "D 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 35 }, P2: { deduct: 0, percent: 35 }, P3: { deduct: 0, percent: 35 }, P4: { deduct: 0, percent: 35 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "E 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } },
+    "F 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } }
   };
 
   const initialForm = { 
@@ -112,13 +114,11 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 暴力防呆版：一鍵自動建立 A~F 預設模板按鈕功能
   const initDefaultTemplates = async () => {
     setLoading(true);
     const toastId = toast.loading("正在為您建立 A~F 級預設抽成模板...");
     try {
       for (const [name, comms] of Object.entries(defaultPresets)) {
-        // 檢查是否已經建過，避免重複
         const existing = templatesList.find(t => t.name === name);
         if (!existing) {
           await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
@@ -190,11 +190,17 @@ export default function AdminManagePage() {
         <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
       </div>
       
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'SCALP'].map(code => (
+      {/* 🟢 加入 P2 ~ P5 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
           <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-               <span>{code === 'W1' ? 'W1 - 洗剪吹 (含扣款)' : code === 'R1' ? 'R1 - 染燙化學 (含扣款)' : code === 'SCALP' ? 'SCALP - 頭皮套票' : code + ' 類'}</span>
+               <span>
+                 {code.startsWith('W') ? `${code} - 洗剪吹` : 
+                  code.startsWith('R') ? `${code} - 染燙化學` : 
+                  code.startsWith('P') ? `${code} - 產品實體` : 
+                  'SCALP - 頭皮套票'}
+               </span>
              </div>
              <div className="flex items-center gap-2">
                <div className="flex-1 relative">
@@ -257,7 +263,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -265,14 +270,12 @@ export default function AdminManagePage() {
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
-                {/* 🟢 動態抽成模板設定 */}
                 {activeTab === 'templates' && (
                   <>
-                    {/* 🟢 暴力防呆：永遠顯示的「一鍵匯入」按鈕，放進表單最醒目的位置 */}
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
                         <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入 A~F 級師傅預設的拆帳公式，免去手動輸入。</p>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
                         一鍵寫入 A~F 模板
@@ -325,7 +328,12 @@ export default function AdminManagePage() {
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
                         <option value="SCALP">SCALP - 頭皮/養護套票類</option>
-                        <option value="P1">P1 - 實體產品類</option>
+                        {/* 🟢 加入 P1~P5 產品類別 */}
+                        <option value="P1">P1 - 產品實體 (預設 A級抽 20%)</option>
+                        <option value="P2">P2 - 產品實體 (預設 A級抽 25%)</option>
+                        <option value="P3">P3 - 產品實體 (預設 A級抽 18%)</option>
+                        <option value="P4">P4 - 產品實體 (預設 A級抽 15%)</option>
+                        <option value="P5">P5 - 產品實體 (預設 A級抽 35%)</option>
                       </select>
                     </div>
                   </>
@@ -394,6 +402,7 @@ export default function AdminManagePage() {
             )}
           </div>
 
+          {/* 列表區 */}
           {activeTab !== 'settings' && (!['staff', 'templates'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
@@ -423,7 +432,7 @@ export default function AdminManagePage() {
                         {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold text-base">${item.price}</span><span className="text-[#D4AF37] font-bold text-base bg-[#D4AF37]/10 px-2 py-0.5 rounded-md border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
                         {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
                         
-                        {activeTab === 'templates' && <span className="text-gray-400 text-xs italic">包含 W1-W3, R1-R2, P1, SCALP 完整公式</span>}
+                        {activeTab === 'templates' && <span className="text-gray-400 text-xs italic">包含 W1-W3, R1-R2, P1-P5, SCALP 完整公式</span>}
 
                         {activeTab === 'tiers' && (
                           <>
