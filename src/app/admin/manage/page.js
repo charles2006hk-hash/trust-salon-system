@@ -13,8 +13,8 @@ export default function AdminManagePage() {
   const [categories, setCategories] = useState([]); 
   const [packagesList, setPackagesList] = useState([]); 
   const [templatesList, setTemplatesList] = useState([]); 
+  const [branchesList, setBranchesList] = useState([]); // 🟢 新增：儲存門店清單
   
-  // 🟢 智能名單綁定狀態
   const [registeredStaff, setRegisteredStaff] = useState([]); 
   const [isCustomStaff, setIsCustomStaff] = useState(false);
 
@@ -45,7 +45,7 @@ export default function AdminManagePage() {
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', commissions: defaultCommissions 
+    commissionCode: 'W1', templateId: '', commissions: defaultCommissions, branch: '' // 🟢 新增 branch 欄位
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -55,7 +55,7 @@ export default function AdminManagePage() {
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } // 🟢 新增 branches 選單
   ];
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export default function AdminManagePage() {
 
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
-       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff();
+       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); // 🟢 加入 fetchBranches
     }
   }, [activeTab, currentUserRole]);
 
@@ -116,7 +116,14 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 抓取系統已註冊的內部人員名單
+  // 🟢 抓取門店資料
+  const fetchBranches = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'branches'));
+      setBranchesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch(e) { console.error(e); }
+  };
+
   const fetchRegisteredStaff = async () => {
     try {
       const snap = await getDocs(collection(db, 'users'));
@@ -150,7 +157,7 @@ export default function AdminManagePage() {
     e.preventDefault();
     setLoading(true);
     try {
-      if (['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin') {
+      if (['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin') {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
 
@@ -169,6 +176,7 @@ export default function AdminManagePage() {
       setFormData(initialForm); setEditingId(null); setIsCustomStaff(false); fetchData();
       if (activeTab === 'categories') fetchCategories();
       if (activeTab === 'templates') fetchTemplates();
+      if (activeTab === 'branches') fetchBranches(); // 🟢 儲存門店後更新選單
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
@@ -176,8 +184,7 @@ export default function AdminManagePage() {
     setEditingId(item.id);
     setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions });
     
-    // 🟢 如果編輯的舊資料不在目前的註冊名單中，自動切換到手動輸入模式
-    if (item.name && !registeredStaff.includes(item.name)) {
+    if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') {
       setIsCustomStaff(true);
     } else {
       setIsCustomStaff(false);
@@ -186,10 +193,11 @@ export default function AdminManagePage() {
   };
 
   const handleDelete = async (id) => {
-    if (['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
+    if (['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
     if (!window.confirm("確定刪除？")) return;
     await deleteDoc(doc(db, activeTab, id)); toast.success("已刪除"); fetchData();
     if (activeTab === 'templates') fetchTemplates();
+    if (activeTab === 'branches') fetchBranches();
   };
 
   const applyTemplate = (templateId) => {
@@ -243,7 +251,7 @@ export default function AdminManagePage() {
 
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') {
-      return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates'].includes(item.id)) };
+      return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches'].includes(item.id)) };
     }
     return group;
   }).filter(group => group.items.length > 0);
@@ -282,16 +290,30 @@ export default function AdminManagePage() {
         <div className="lg:col-span-9">
           <div className={`bg-[#1a1a1a] p-8 rounded-[40px] border-2 ${editingId ? 'border-[#D4AF37]' : 'border-gray-800'} mb-12 shadow-2xl relative transition-all`}>
             <h2 className="text-xl font-bold mb-8 text-white flex items-center gap-2">
-              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
+              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
-            {['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin' ? (
+            {/* 🛡️ 機密防護 */}
+            {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
                </div>
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
+                {/* 🟢 新增：門店管理模組 */}
+                {activeTab === 'branches' && (
+                  <>
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">門店名稱</label>
+                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：大埔店、樂富店" />
+                    </div>
+                    <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-4 rounded-2xl">
+                      <p className="text-xs text-[#D4AF37]">💡 建立門店後，您可以在「髮型師名單」中將人員綁定至特定分店。未來的 POS 與報表系統將依此門店進行資料隔離。</p>
+                    </div>
+                  </>
+                )}
+
                 {activeTab === 'templates' && (
                   <>
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
@@ -360,7 +382,6 @@ export default function AdminManagePage() {
                   </>
                 )}
 
-                {/* 🟢 全新升級：髮型師綁定智能下拉選單 */}
                 {activeTab === 'staff' && (
                   <>
                     <div className="space-y-2">
@@ -403,9 +424,19 @@ export default function AdminManagePage() {
                         </div>
                       )}
                     </div>
-
+                    
+                    {/* 🟢 擴充：髮型師綁定門店功能 */}
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">快速套用資料庫模板</label>
+                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                        <option value="">-- 請選擇門店 --</option>
+                        <option value="ALL">🌐 全線通用 (跨店支援)</option>
+                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">套用抽成模板</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
                         <option value="">-- 手動自訂比例 --</option>
                         {templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -462,14 +493,14 @@ export default function AdminManagePage() {
           </div>
 
           {/* 列表區 */}
-          {activeTab !== 'settings' && (!['staff', 'templates'].includes(activeTab) || currentUserRole === 'admin') && (
+          {activeTab !== 'settings' && (!['staff', 'templates', 'branches'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
               {list.map((item) => (
                 <div key={item.id} className="bg-gray-900/60 p-6 rounded-3xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
                   <div className="flex items-center gap-5 w-full md:w-auto">
                     <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-2xl shrink-0">
-                        {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
+                        {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'branches' ? '📍' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center gap-3">
@@ -479,10 +510,15 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
-                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
                         {activeTab === 'staff' && item.templateId && (
                           <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
                             已套用模板
+                          </span>
+                        )}
+                        {/* 🟢 顯示綁定的門店標籤 */}
+                        {activeTab === 'staff' && item.branch && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
+                            {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
                           </span>
                         )}
                       </div>
@@ -490,9 +526,8 @@ export default function AdminManagePage() {
                       <div className="flex flex-wrap gap-4 mt-2 text-sm items-center">
                         {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold text-base">${item.price}</span><span className="text-[#D4AF37] font-bold text-base bg-[#D4AF37]/10 px-2 py-0.5 rounded-md border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
                         {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
-                        
+                        {activeTab === 'branches' && <span className="text-gray-400 text-xs italic">連鎖門店資料</span>}
                         {activeTab === 'templates' && <span className="text-gray-400 text-xs italic">包含 W1-W3, R1-R2, P1-P5, SCALP 完整公式</span>}
-
                         {activeTab === 'tiers' && (
                           <>
                             <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>
