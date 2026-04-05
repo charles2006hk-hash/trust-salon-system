@@ -12,8 +12,8 @@ export default function SmartPOS() {
   
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
-  const [staff, setStaff] = useState([]); // 🟢 這裡嚴格只放髮型師
-  const [services, setServices] = useState([]); 
+  const [staff, setStaff] = useState([]); // 🟢 將合併 CMS 與 User 的髮型師名單
+  const [services, setServices] = useState([]); // 🟢 將合併純服務與套票
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
@@ -58,24 +58,29 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    const [sSnap, svSnap, tSnap, pSnap, setSnap] = await Promise.all([
+    const [sSnap, svSnap, tSnap, pSnap, setSnap, uSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'tiers')),
       getDocs(collection(db, 'packages')),
-      getDocs(collection(db, 'settings')) 
+      getDocs(collection(db, 'settings')),
+      getDocs(collection(db, 'users')) // 🟢 新增抓取 users 集合
     ]);
     
-    // 🟢 嚴格把關：只讀取 CMS 裡面的「髮型師名單」作為派單與監控的依據
-    setStaff(sSnap.docs.map(d => d.data().name).filter(Boolean));
+    // 🟢 1. 完美合併髮型師名單
+    const cmsStaff = sSnap.docs.map(d => d.data().name).filter(Boolean);
+    const userStaff = uSnap.docs.map(d => d.data()).filter(u => ['staff', 'manager', 'admin'].includes(u.role) && u.name).map(u => u.name);
+    setStaff([...new Set([...cmsStaff, ...userStaff])]); // 聯集並去重
 
-    setServices(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    // 🟢 2. 完美合併服務與套票菜單
+    const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    setServices([...svData, ...pkData]); // 合併，讓下拉選單都能選到
+    setPackages(pkData); // 保留一份獨立的 packages 給「售賣套票」使用
     
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     tData.sort((a, b) => Number(b.threshold) - Number(a.threshold)); 
     setTiers(tData);
-    
-    setPackages(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
@@ -453,7 +458,6 @@ export default function SmartPOS() {
             )}
           </div>
 
-          {/* 🟢 髮型師負荷檢查 */}
           <div className="mt-12 pt-8 border-t border-white/5">
             <h3 className="text-[10px] font-bold text-gray-600 uppercase tracking-[0.4em] mb-6">Stylist Load (負荷監控)</h3>
             <div className="flex flex-wrap gap-4">
