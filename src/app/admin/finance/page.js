@@ -15,22 +15,21 @@ export default function FinancePage() {
   const [viewMode, setViewMode] = useState('dashboard');
   
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
-  const [currentUserName, setCurrentUserName] = useState(''); // 🟢 儲存當前登入者姓名供過濾用
+  const [currentUserName, setCurrentUserName] = useState(''); 
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
 
   const [transactions, setTransactions] = useState([]);
   const [staffConfig, setStaffConfig] = useState([]);
   const [usersRef, setUsersRef] = useState([]);
-  const [servicesData, setServicesData] = useState([]); // 🟢 用來抓取服務標籤
-  const [packagesData, setPackagesData] = useState([]); // 🟢 用來抓取套票標籤
+  const [servicesData, setServicesData] = useState([]); 
+  const [packagesData, setPackagesData] = useState([]); 
   
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0 });
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
   const [payrollReport, setPayrollReport] = useState([]);
 
-  // 🟢 用於展開明細 Modal 的狀態
   const [selectedStaffDetail, setSelectedStaffDetail] = useState(null);
 
   useEffect(() => {
@@ -43,7 +42,6 @@ export default function FinancePage() {
         setCurrentAdminRole(role);
         setCurrentUserName(name);
         
-        // 🚫 嚴格阻擋會員與櫃台進入財務區
         if (role === 'member' || role === 'reception') {
           toast.error("⛔ 權限不足：您無法進入財務報表區");
           router.push(role === 'member' ? '/dashboard' : '/admin/pos');
@@ -90,7 +88,6 @@ export default function FinancePage() {
 
     usersRef.forEach(u => { totalOutstanding += (u.tDollarBalance || 0); });
 
-    // 初始化員工數據包
     staffConfig.forEach(staff => {
       stylistAggregator[staff.name] = { 
         name: staff.name, 
@@ -119,9 +116,8 @@ export default function FinancePage() {
         let commCode = null;
         let formulaStr = "無提成標籤";
 
-        // 🟢 判斷是一般服務還是扣套票
         if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
-          revenue = Number(tx.amount || 0); // 實收金額
+          revenue = Number(tx.amount || 0);
           const serviceItem = servicesData.find(s => s.name === tx.service);
           commCode = serviceItem ? serviceItem.commissionCode : null;
           services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
@@ -129,13 +125,13 @@ export default function FinancePage() {
         else if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
-            const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); // 計算單格價值
-            revenue = tx.deductedGrids * perGridValue;
-            commCode = pkgItem.commissionCode; // 通常是 SCALP
+            const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
+            // 🟢 修復：將套票單格價值的無限小數，四捨五入到小數點第一位，避免出現 .909
+            revenue = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
+            commCode = pkgItem.commissionCode; 
           }
         }
 
-        // 🟢 套用矩陣公式計算佣金
         let commission = 0;
         if (commCode && staff.commissionsRule[commCode]) {
           const rule = staff.commissionsRule[commCode];
@@ -154,7 +150,6 @@ export default function FinancePage() {
         staff.totalCommission += commission;
         staff.clientCount += 1;
         
-        // 儲存明細供 Modal 顯示
         staff.details.push({
           id: tx.id,
           date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
@@ -173,7 +168,7 @@ export default function FinancePage() {
     setServiceRanking(Object.entries(services).sort((a, b) => b[1] - a[1]));
 
     const report = Object.values(stylistAggregator)
-      .filter(s => s.clientCount > 0 || s.name === currentUserName) // 過濾掉沒接客的，但保留自己
+      .filter(s => s.clientCount > 0 || s.name === currentUserName) 
       .sort((a, b) => b.totalRevenue - a.totalRevenue);
     
     setPayrollReport(report);
@@ -200,11 +195,8 @@ export default function FinancePage() {
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">報表生成中...</div>;
 
-  // 🛡️ 權限隔離：髮型師只能看自己
   const isManagement = ['admin', 'manager'].includes(currentAdminRole);
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
-
-  // 🟢 計算預計發放總佣金 (僅供管理層看)
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
   return (
@@ -237,9 +229,7 @@ export default function FinancePage() {
           </div>
         </header>
 
-        {/* 頂部視圖切換器 */}
         <div className="flex flex-wrap gap-2 mb-8 bg-[#121212] p-1.5 rounded-2xl border border-white/5 inline-flex">
-          {/* 🟢 髮型師看不到 Dashboard，強制預設為 payroll */}
           {isManagement && (
             <button onClick={() => setViewMode('dashboard')} className={`px-6 py-3 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${viewMode === 'dashboard' ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-gray-400 hover:text-white'}`}>
               <i className="fa-solid fa-chart-line"></i> 營運儀表板
@@ -250,9 +240,6 @@ export default function FinancePage() {
           </button>
         </div>
 
-        {/* =========================================
-            視圖 1：營運儀表板 (Dashboard) - 僅管理層可見
-        ========================================= */}
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
@@ -261,7 +248,8 @@ export default function FinancePage() {
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">門市充值現金流 (HKD)</p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
-                  <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString()}</p>
+                  {/* 🟢 修復：統一限制小數點，防止多餘小數位 */}
+                  <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                 </div>
               </div>
               
@@ -270,7 +258,8 @@ export default function FinancePage() {
                 <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">店鋪總業績 (扣 T-Dollar)</p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString()}</p>
+                  {/* 🟢 修復：統一限制小數點，防止多餘小數位 */}
+                  <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                 </div>
               </div>
 
@@ -288,7 +277,8 @@ export default function FinancePage() {
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
                   系統未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
                 </p>
-                <p className="text-3xl font-black text-gray-300 tracking-tighter">${metrics.outstandingTDollar.toLocaleString()}</p>
+                {/* 🟢 修復：統一限制小數點 */}
+                <p className="text-3xl font-black text-gray-300 tracking-tighter">${metrics.outstandingTDollar.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
               </div>
             </div>
 
@@ -309,7 +299,8 @@ export default function FinancePage() {
                               <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[10px] ${index === 0 ? 'bg-[#D4AF37] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#CD7F32] text-white' : 'bg-white/10 text-gray-400'}`}>{index + 1}</span>
                               {name}
                             </span>
-                            <span className="text-[#D4AF37] font-mono">${val.toLocaleString()}</span>
+                            {/* 🟢 修復：統一限制小數點 */}
+                            <span className="text-[#D4AF37] font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
                           </div>
                           <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
                             <div className="bg-[#D4AF37] h-full rounded-full transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
@@ -334,7 +325,8 @@ export default function FinancePage() {
                         <div key={name} className="relative">
                           <div className="flex justify-between text-xs font-bold uppercase tracking-widest mb-2">
                             <span className="text-gray-300">{name}</span>
-                            <span className="text-white font-mono">${val.toLocaleString()}</span>
+                            {/* 🟢 修復：統一限制小數點 */}
+                            <span className="text-white font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
                           </div>
                           <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden">
                             <div className="bg-blue-500/80 h-full rounded-full transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
