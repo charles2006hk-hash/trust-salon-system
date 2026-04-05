@@ -10,9 +10,14 @@ import { Toaster, toast } from 'react-hot-toast';
 export default function SmartPOS() {
   const router = useRouter();
   
+  // 🟢 跨店連鎖核心狀態
+  const [branches, setBranches] = useState([]);
+  const [currentBranch, setCurrentBranch] = useState('');
+  const [showBranchModal, setShowBranchModal] = useState(false);
+
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
-  const [staff, setStaff] = useState([]); 
+  const [rawStaff, setRawStaff] = useState([]); // 儲存原始員工資料供動態過濾
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
@@ -25,25 +30,24 @@ export default function SmartPOS() {
   const [checkoutSession, setCheckoutSession] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // 🟢 購物車核心狀態 (取代原本的單一結帳狀態)
   const [cart, setCart] = useState([]);
-  const [addItemMode, setAddItemMode] = useState('pay'); // 'pay' 或 'deduct'
+  const [addItemMode, setAddItemMode] = useState('pay'); 
   const [newItemName, setNewItemName] = useState('');
   const [newItemStylist, setNewItemStylist] = useState('');
   const [newItemGrids, setNewItemGrids] = useState(1);
 
-  const [showRegModal, setShowRegModal] = useState(false);
-  const [unregisteredPhone, setUnregisteredPhone] = useState('');
-
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('');
   const [topUpUser, setTopUpUser] = useState(null);
-  
   const [topUpTab, setTopUpTab] = useState('tdollar'); 
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
   useEffect(() => {
     onAuthStateChanged(auth, (user) => { if (!user) router.push('/login'); });
+    
+    // 🟢 初始化門市選擇 (記憶在瀏覽器)
+    const savedBranch = localStorage.getItem('pos_branch');
+    if (savedBranch) setCurrentBranch(savedBranch);
     
     const unsubActive = onSnapshot(collection(db, "active_sessions"), (snap) => {
       setActiveSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -60,33 +64,25 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    // 🟢 防雷裝甲：即使某個 collection 權限不足報錯，也不會讓整個 POS 崩潰
     const safeGet = async (colName) => {
-      try { 
-        return await getDocs(collection(db, colName)); 
-      } catch (e) { 
-        console.error(`Error fetching ${colName}:`, e); 
-        return { docs: [] }; 
-      }
+      try { return await getDocs(collection(db, colName)); } 
+      catch (e) { console.error(`Error fetching ${colName}:`, e); return { docs: [] }; }
     };
 
-    const [sSnap, svSnap, tSnap, pSnap, setSnap, uSnap] = await Promise.all([
-      safeGet('staff'), 
-      safeGet('services'), 
-      safeGet('tiers'), 
-      safeGet('packages'), 
-      safeGet('settings'), 
-      safeGet('users')
+    const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap] = await Promise.all([
+      safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches')
     ]);
     
-    // 🟢 合併髮型師名單 (CMS名單 + 權限純為 staff 的帳號)
-    const cmsStaff = sSnap.docs.map(d => d.data().name).filter(Boolean);
-    const userStaff = uSnap.docs.map(d => d.data())
-      .filter(u => u.role === 'staff' && u.name)
-      .map(u => u.name);
-    setStaff([...new Set([...cmsStaff, ...userStaff])]); 
+    // 🟢 載入門店清單
+    const branchList = bSnap.docs.map(d => d.data().name);
+    setBranches(branchList);
+    if (!localStorage.getItem('pos_branch') && branchList.length > 0) {
+      setShowBranchModal(true);
+    }
 
-    // 🟢 合併服務與套票菜單 (讓結帳下拉選單都能選到)
+    // 🟢 儲存完整的員工設定 (包含綁定的 branch)
+    setRawStaff(sSnap.docs.map(d => d.data())); 
+
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     setServices([...svData, ...pkData]); 
@@ -97,46 +93,51 @@ export default function SmartPOS() {
     setTiers(tData);
 
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
-    if (settingsDoc) {
-      setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
-    }
+    if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); handleCheckIn(phone); }
+  // 🟢 門市切換功能
+  const selectBranch = (branchName) => {
+    setCurrentBranch(branchName);
+    localStorage.setItem('pos_branch', branchName);
+    setShowBranchModal(false);
+    toast.success(`已切換至 ${branchName} 收銀模式`);
   };
+
+  // 🟢 動態過濾：只顯示目前門店 + 跨店通用的員工
+  const displayStaff = [...new Set(
+    rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
+  )];
+
+  // 🟢 動態過濾：只顯示目前門店的報到與預約 (相容舊資料則允許 !s.branch)
+  const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
+  const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
+
+  const handleKeyDown = (e) => { if (e.key === 'Enter') { e.preventDefault(); handleCheckIn(phone); } };
 
   const handleCheckIn = async (phoneNum, bookingData = null) => {
+    if (!currentBranch) return toast.error("請先選擇營業門市");
     if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話");
     if (!bookingData && (!walkInStylist || !walkInService)) return toast.error("請選擇髮型師與服務項目");
 
     const formattedPhone = phoneNum.startsWith('+') ? phoneNum : `+852${phoneNum}`;
-
     try {
       await addDoc(collection(db, "active_sessions"), {
-        phoneNumber: formattedPhone,
-        stylist: bookingData?.stylist || walkInStylist,
-        service: bookingData?.service || walkInService,
-        startTime: new Date().toISOString(),
-        bookingId: bookingData?.id || null
+        phoneNumber: formattedPhone, 
+        stylist: bookingData?.stylist || walkInStylist, 
+        service: bookingData?.service || walkInService, 
+        startTime: new Date().toISOString(), 
+        bookingId: bookingData?.id || null,
+        branch: currentBranch // 🟢 打上門店標籤
       });
-
-      if (bookingData?.id) {
-        const appRef = doc(db, "appointments", bookingData.id);
-        await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); });
-      }
-
+      if (bookingData?.id) { const appRef = doc(db, "appointments", bookingData.id); await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); }
       toast.success(`${formattedPhone} 已入店服務`);
-      setPhone(''); 
-      setWalkInStylist(''); 
-      setWalkInService('');
-    } catch (e) { 
-      toast.error("報到失敗"); 
-    }
+      setPhone(''); setWalkInStylist(''); setWalkInService('');
+    } catch (e) { toast.error("報到失敗"); }
   };
 
   const openCheckout = async (session) => {
-    const toastId = toast.loading("正在準備購物車結帳單...");
+    const toastId = toast.loading("正在載入結帳單...");
     try {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
@@ -144,90 +145,46 @@ export default function SmartPOS() {
       const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {} } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
-      
       const discountRate = Number(uData.discount) || 1;
       const finalPrice = Math.round(originalPrice * discountRate);
 
       setCheckoutSession({
-        ...session,
-        discountRate,
-        tier: uData.tier || '基本會員 (Basic)',
-        balance: uData.tDollarBalance || 0,
-        userId: userSnap.empty ? null : userSnap.docs[0].id,
-        packageBalances: uData.packageBalances || {}
+        ...session, discountRate, tier: uData.tier || '基本會員', balance: uData.tDollarBalance || 0, userId: userSnap.empty ? null : userSnap.docs[0].id, packageBalances: uData.packageBalances || {}
       });
 
-      // 🟢 將客人的首要服務，自動加入購物車
-      setCart([{
-        id: Date.now().toString(),
-        type: 'pay',
-        name: session.service,
-        stylist: session.stylist,
-        originalPrice,
-        finalPrice,
-        grids: 0
-      }]);
-
-      setAddItemMode('pay'); 
-      setNewItemName(''); 
-      setNewItemStylist(''); 
-      setNewItemGrids(1);
-      
+      setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
+      setAddItemMode('pay'); setNewItemName(''); setNewItemStylist(''); setNewItemGrids(1);
       toast.dismiss(toastId);
-    } catch (error) {
-      toast.error("讀取帳單失敗", { id: toastId });
-    }
+    } catch (error) { toast.error("讀取帳單失敗", { id: toastId }); }
   };
 
-  // 🟢 購物車：新增項目
   const handleAddToCart = () => {
     if (!newItemName) return toast.error("請選擇項目");
-    const itemStylist = newItemStylist || checkoutSession.stylist; // 未選則套用預設髮型師
+    const itemStylist = newItemStylist || checkoutSession.stylist; 
 
     if (addItemMode === 'pay') {
       const sItem = services.find(s => s.name === newItemName);
       if (!sItem) return toast.error("項目不存在");
-      
       const orig = Number(sItem.price);
       const fin = Math.round(orig * checkoutSession.discountRate);
-      
-      setCart([...cart, { 
-        id: Date.now().toString(), 
-        type: 'pay', 
-        name: newItemName, 
-        stylist: itemStylist, 
-        originalPrice: orig, 
-        finalPrice: fin, 
-        grids: 0 
-      }]);
+      setCart([...cart, { id: Date.now().toString(), type: 'pay', name: newItemName, stylist: itemStylist, originalPrice: orig, finalPrice: fin, grids: 0 }]);
     } else {
-      setCart([...cart, { 
-        id: Date.now().toString(), 
-        type: 'deduct', 
-        name: newItemName, 
-        stylist: itemStylist, 
-        originalPrice: 0, 
-        finalPrice: 0, 
-        grids: Number(newItemGrids) 
-      }]);
+      setCart([...cart, { id: Date.now().toString(), type: 'deduct', name: newItemName, stylist: itemStylist, originalPrice: 0, finalPrice: 0, grids: Number(newItemGrids) }]);
     }
-    setNewItemName(''); 
-    setNewItemGrids(1);
+    setNewItemName(''); setNewItemGrids(1);
   };
 
   const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
 
-  // 🟢 購物車：綜合結帳與拆帳寫入
   const processSettlement = async (e) => {
     e.preventDefault();
+    if (!currentBranch) return toast.error("系統錯誤：未綁定門市");
     if (cart.length === 0) return toast.error("購物車不能為空");
 
     setIsProcessing(true);
     const toastId = toast.loading('綜合結帳處理中...');
     
-    let totalPay = 0;
-    let deductMap = {}; 
-    
+    let totalPay = 0; let deductMap = {}; 
     cart.forEach(item => {
       if (item.type === 'pay') totalPay += item.finalPrice;
       if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
@@ -236,75 +193,41 @@ export default function SmartPOS() {
     try {
       if (checkoutSession.userId) {
         const userRef = doc(db, "users", checkoutSession.userId);
-        
         await runTransaction(db, async (tx) => {
           const uDoc = await tx.get(userRef);
           const currentData = uDoc.data();
 
-          // 1. 驗證與扣除 T-Dollar
           if (totalPay > 0) {
             const newBal = (currentData.tDollarBalance || 0) - totalPay;
             if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
             tx.update(userRef, { tDollarBalance: newBal });
           }
 
-          // 2. 驗證與扣除套票格數
           let newPackageBalances = { ...(currentData.packageBalances || {}) };
           for (const [pkgName, grids] of Object.entries(deductMap)) {
             const currentGrids = newPackageBalances[pkgName] || 0;
             if (currentGrids < grids) throw new Error(`套票【${pkgName}】格數不足！剩餘 ${currentGrids} 格`);
             newPackageBalances[pkgName] = currentGrids - grids;
           }
-          if (Object.keys(deductMap).length > 0) {
-             tx.update(userRef, { packageBalances: newPackageBalances });
-          }
+          if (Object.keys(deductMap).length > 0) tx.update(userRef, { packageBalances: newPackageBalances });
 
-          // 3. 獨立寫入每一筆項目的交易紀錄 (實現多重拆帳)
+          // 🟢 寫入交易並強制打上門店標籤 (branch)
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
-               tx.set(newTxRef, { 
-                 userId: userRef.id, 
-                 phoneNumber: checkoutSession.phoneNumber, 
-                 amount: item.finalPrice, 
-                 originalAmount: item.originalPrice, 
-                 discountRate: checkoutSession.discountRate, 
-                 service: item.name, 
-                 stylist: item.stylist, 
-                 type: "deduct", 
-                 timestamp: new Date().toISOString() 
-               });
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: new Date().toISOString() });
              } else {
-               tx.set(newTxRef, { 
-                 userId: userRef.id, 
-                 phoneNumber: checkoutSession.phoneNumber, 
-                 amount: 0, 
-                 service: item.name, 
-                 stylist: item.stylist, 
-                 type: "deduct_package", 
-                 packageName: item.name, 
-                 deductedGrids: item.grids, 
-                 timestamp: new Date().toISOString() 
-               });
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: new Date().toISOString() });
              }
           });
-
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
         if (Object.keys(deductMap).length > 0) throw new Error("非會員無法扣除套票");
-        
         await runTransaction(db, async (tx) => {
           cart.forEach(item => {
             const newTxRef = doc(collection(db, "transactions"));
-            tx.set(newTxRef, { 
-              phoneNumber: checkoutSession.phoneNumber, 
-              amount: item.finalPrice, 
-              service: item.name, 
-              stylist: item.stylist, 
-              type: "walkin_cash", 
-              timestamp: new Date().toISOString() 
-            });
+            tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: new Date().toISOString() });
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
@@ -312,39 +235,25 @@ export default function SmartPOS() {
 
       toast.success("結帳完成，業績已分發！", { id: toastId });
       setCheckoutSession(null);
-    } catch (e) { 
-      toast.error(e.message, { id: toastId }); 
-    } finally { 
-      setIsProcessing(false); 
-    }
+    } catch (e) { toast.error(e.message, { id: toastId }); } finally { setIsProcessing(false); }
   };
 
   const cancelSession = async (sessionId) => {
     if (!window.confirm("確定要取消此服務嗎？\n這將會直接釋放髮型師，且不會扣除客人任何款項。")) return;
-    try {
-      await deleteDoc(doc(db, "active_sessions", sessionId));
-      toast.success("服務已取消");
-    } catch (e) { 
-      toast.error("取消失敗"); 
-    }
+    try { await deleteDoc(doc(db, "active_sessions", sessionId)); toast.success("服務已取消"); } catch (e) { toast.error("取消失敗"); }
   };
 
   const searchTopUpUser = async () => {
     if(!topUpPhone) return;
     const q = query(collection(db, "users"), where("phoneNumber", "==", topUpPhone));
     const snap = await getDocs(q);
-    if (!snap.empty) {
-      setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() });
-    } else {
-      toast.error("找不到此會員");
-      setTopUpUser(null);
-    }
+    if (!snap.empty) setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() }); else toast.error("找不到此會員");
   };
 
   const handleStoreAction = async (e) => {
     e.preventDefault();
+    if (!currentBranch) return toast.error("系統錯誤：未綁定門市");
     if (!topUpUser) return;
-    
     try {
       const userRef = doc(db, 'users', topUpUser.id);
       const newExpiry = new Date(Date.now() + globalSettings.validityDays * 24 * 60 * 60 * 1000).toISOString();
@@ -355,128 +264,98 @@ export default function SmartPOS() {
         const newTotalTopUp = (topUpUser.totalTopUp || 0) + paidHKD;
         
         let newTier = { name: '基本會員 (Basic)', discount: 1, upgradeBonus: 0, giftPackageName: '' };
-        for (const t of tiers) {
-           if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; }
+        for (const t of tiers) { if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; } }
+
+        let upgradeBonus = 0; let giftPkgName = ''; let giftPkgGrids = 0; let isUpgraded = false;
+        if (newTier.name !== (topUpUser.tier || '基本會員 (Basic)') && newTier.name !== '基本會員 (Basic)') {
+            isUpgraded = true; upgradeBonus = Number(newTier.upgradeBonus) || 0;
+            if (newTier.giftPackageName) { giftPkgName = newTier.giftPackageName; const pkgData = packages.find(p => p.name === giftPkgName); if (pkgData) giftPkgGrids = Number(pkgData.quantity); }
         }
 
-        let upgradeBonus = 0;
-        let giftPkgName = ''; 
-        let giftPkgGrids = 0; 
-        let isUpgraded = false;
-        
-        const currentTier = topUpUser.tier || '基本會員 (Basic)';
-        if (newTier.name !== currentTier && newTier.name !== '基本會員 (Basic)') {
-            isUpgraded = true;
-            upgradeBonus = Number(newTier.upgradeBonus) || 0;
-            
-            if (newTier.giftPackageName) {
-                giftPkgName = newTier.giftPackageName;
-                const pkgData = packages.find(p => p.name === giftPkgName);
-                if (pkgData) giftPkgGrids = Number(pkgData.quantity);
-            }
-        }
-
-        const confirmMsg = `確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)` + 
-                           (isUpgraded && upgradeBonus > 0 ? `\n🎁 觸發升級獎勵：系統將自動派發 ${upgradeBonus} 積分！` : '') +
-                           (isUpgraded && giftPkgGrids > 0 ? `\n🎫 送套票: ${giftPkgName} (${giftPkgGrids}格)` : '');
-        
-        if (!window.confirm(confirmMsg)) return;
+        if (!window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD}？\n\n結算後等級：${newTier.name} (${newTier.discount * 10} 折)`)) return;
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
-          
           const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
           const newPoints = (userDoc.data().points || 0) + paidHKD + upgradeBonus;
-
           let newPackageBalances = userDoc.data().packageBalances || {};
-          if (giftPkgGrids > 0) {
-             newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
-          }
+          if (giftPkgGrids > 0) newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
 
-          transaction.update(userRef, { 
-            tDollarBalance: newBalance, 
-            points: newPoints, 
-            totalTopUp: newTotalTopUp, 
-            tier: newTier.name, 
-            discount: newTier.discount, 
-            tDollarExpiry: newExpiry, 
-            packageBalances: newPackageBalances,
-            status: 'active' 
-          });
-          
-          transaction.set(doc(collection(db, "transactions")), {
-            userId: topUpUser.id, 
-            phoneNumber: topUpUser.phoneNumber, 
-            type: "topup", 
-            tDollarAdded: paidHKD, 
-            pointsAdded: paidHKD + upgradeBonus,
-            upgradeBonusAdded: upgradeBonus,     
-            giftPackageAdded: giftPkgName, 
-            amountPaidHKD: paidHKD, 
-            paymentMethod: topUpForm.paymentMethod, 
-            timestamp: new Date().toISOString()
-          });
+          transaction.update(userRef, { tDollarBalance: newBalance, points: newPoints, totalTopUp: newTotalTopUp, tier: newTier.name, discount: newTier.discount, tDollarExpiry: newExpiry, packageBalances: newPackageBalances, status: 'active' });
+          // 🟢 增值同樣打上門店標籤
+          transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "topup", tDollarAdded: paidHKD, pointsAdded: paidHKD + upgradeBonus, upgradeBonusAdded: upgradeBonus, giftPackageAdded: giftPkgName, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
-        toast.success(`增值成功！已將客人升級至 ${newTier.name}${upgradeBonus > 0 || giftPkgGrids > 0 ? `\n🎁 已發送升級專屬獎勵！` : ''}`);
+        toast.success(`增值成功！已將客人升級至 ${newTier.name}`);
 
       } else if (topUpTab === 'package') {
         const pkg = packages.find(p => p.id === topUpForm.packageId);
         if (!pkg) return toast.error("請選擇套票");
         const paidHKD = Number(pkg.price);
-
-        const isConfirmed = window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD} 售出【${pkg.name}】？\n客人將獲得 ${pkg.quantity} 格`);
-        if (!isConfirmed) return;
+        if (!window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD} 售出【${pkg.name}】？`)) return;
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
           const currentPkgs = userDoc.data().packageBalances || {};
           const newQuantity = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
-          
-          transaction.update(userRef, { 
-            packageBalances: { ...currentPkgs, [pkg.name]: newQuantity },
-            tDollarExpiry: newExpiry 
-          });
-          
-          transaction.set(doc(collection(db, "transactions")), { 
-            userId: topUpUser.id, 
-            phoneNumber: topUpUser.phoneNumber, 
-            type: "buy_package", 
-            packageName: pkg.name, 
-            gridsAdded: pkg.quantity, 
-            amountPaidHKD: paidHKD, 
-            paymentMethod: topUpForm.paymentMethod, 
-            timestamp: new Date().toISOString() 
-          });
+          transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newQuantity }, tDollarExpiry: newExpiry });
+          // 🟢 售票同樣打上門店標籤
+          transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
-        toast.success(`成功售出套票：${pkg.name}\n客人已獲得 ${pkg.quantity} 格`);
+        toast.success(`成功售出套票：${pkg.name}`);
       }
-
-      setShowTopUpModal(false); 
-      setTopUpUser(null); 
-      setTopUpPhone(''); 
-      setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
-    } catch (error) { 
-      toast.error("操作失敗"); 
-    }
+      setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone(''); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
+    } catch (error) { toast.error("操作失敗"); }
   };
 
   return (
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
+
+      {/* 🟢 強制門店選擇 Modal (無法關閉，直到選擇為止) */}
+      {showBranchModal && (
+        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
+           <div className="bg-[#121212] w-full max-w-md rounded-[40px] p-10 border border-[#D4AF37]/50 shadow-[0_0_50px_rgba(212,175,55,0.2)] text-center animate-fade-in">
+              <i className="fa-solid fa-store text-5xl text-[#D4AF37] mb-6"></i>
+              <h2 className="text-2xl font-black text-white mb-2">請選擇營業門市</h2>
+              <p className="text-sm text-gray-400 mb-8">此裝置的結帳與派單紀錄將歸屬於該門市</p>
+              
+              <div className="space-y-3">
+                {branches.length === 0 ? (
+                   <p className="text-red-400 font-bold text-sm bg-red-500/10 p-4 rounded-2xl">請先由老闆至 CMS 系統建立「門店資料」</p>
+                ) : (
+                  branches.map(b => (
+                    <button key={b} onClick={() => selectBranch(b)} className="w-full bg-white/5 border border-white/10 hover:bg-[#D4AF37] hover:text-black hover:border-[#D4AF37] text-white font-bold py-4 rounded-2xl transition-all shadow-lg flex justify-between items-center px-6 group">
+                      <span className="tracking-widest uppercase">{b}</span>
+                      <i className="fa-solid fa-arrow-right opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                    </button>
+                  ))
+                )}
+              </div>
+           </div>
+        </div>
+      )}
       
       <header className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 px-4">
         <div>
           <h1 className="text-3xl font-black tracking-tighter flex items-center gap-3">
             <span className="bg-[#D4AF37] text-black px-3 py-1 rounded-lg">TRUST</span> 收銀與派單系統
           </h1>
+          {/* 🟢 顯示目前綁定門市與切換按鈕 */}
+          <div className="mt-3 flex items-center gap-3">
+            <span className="bg-blue-600/20 border border-blue-500/50 text-blue-400 px-3 py-1 rounded-md text-xs font-bold uppercase tracking-widest">
+              <i className="fa-solid fa-location-dot mr-1"></i> {currentBranch || '未選門市'}
+            </span>
+            <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">切換門市</button>
+          </div>
         </div>
+
         <div className="flex gap-4">
            <button onClick={() => setShowTopUpModal(true)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-green-900/50">
-             <i className="fa-solid fa-hand-holding-dollar"></i> 門市客席增值 / 售票
+             <i className="fa-solid fa-hand-holding-dollar"></i> 客席增值 / 售票
            </button>
            <div className="bg-white/5 border border-white/10 px-6 py-3 rounded-xl flex items-center gap-3 hidden md:flex">
               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-sm font-bold tracking-widest uppercase">System Online</span>
+              <span className="text-sm font-bold tracking-widest uppercase">Online</span>
            </div>
         </div>
       </header>
@@ -498,7 +377,8 @@ export default function SmartPOS() {
                 <div className="grid grid-cols-2 gap-3">
                   <select value={walkInStylist} onChange={e => setWalkInStylist(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇髮型師</option>
-                    {staff.map(s => <option key={s} value={s}>{s}</option>)}
+                    {/* 🟢 只顯示屬於這個門店的髮型師 */}
+                    {displayStaff.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                   <select value={walkInService} onChange={e => setWalkInService(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇項目</option>
@@ -512,10 +392,10 @@ export default function SmartPOS() {
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest px-4">今日預約客 (點擊報到)</h3>
-            {appointments.length === 0 ? (
+            <h3 className="text-xs font-black text-gray-500 uppercase tracking-widest px-4">本門市今日預約客</h3>
+            {displayAppointments.length === 0 ? (
                 <div className="p-8 text-center text-gray-700 border border-dashed border-white/5 rounded-[32px]">目前無待報到預約</div>
-            ) : appointments.map(app => (
+            ) : displayAppointments.map(app => (
                 <div key={app.id} onClick={() => handleCheckIn(app.phoneNumber, app)} className="bg-[#121212]/50 p-6 rounded-[32px] border border-white/5 flex justify-between items-center cursor-pointer hover:border-[#D4AF37]/50 transition group">
                    <div>
                      <p className="text-white font-bold">{app.phoneNumber}</p>
@@ -533,9 +413,10 @@ export default function SmartPOS() {
 
         {/* 中間：現場服務動態 */}
         <div className="lg:col-span-8 space-y-6">
-          <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">現場服務動態 (Now Serving)</h3>
+          <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">本門市現場動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {activeSessions.map(session => (
+            {/* 🟢 只顯示屬於這個門店的客人 */}
+            {displaySessions.map(session => (
               <div key={session.id} className="bg-[#121212] rounded-[40px] p-8 border border-white/5 relative group overflow-hidden flex flex-col justify-between min-h-[250px]">
                 
                 <div className="absolute top-0 right-0 p-6 text-white/5 text-5xl z-0 pointer-events-none transition-colors">
@@ -577,7 +458,7 @@ export default function SmartPOS() {
               </div>
             ))}
             
-            {activeSessions.length === 0 && (
+            {displaySessions.length === 0 && (
                 <div className="col-span-2 py-32 text-center text-gray-800 font-black italic text-3xl uppercase tracking-tighter border border-dashed border-white/5 rounded-[40px]">
                     No Active Customers.
                 </div>
@@ -585,13 +466,14 @@ export default function SmartPOS() {
           </div>
 
           <div className="mt-12 pt-8 border-t border-white/5">
-            <h3 className="text-[10px] font-bold text-gray-600 uppercase tracking-[0.4em] mb-6">Stylist Load (負荷監控)</h3>
+            <h3 className="text-[10px] font-bold text-gray-600 uppercase tracking-[0.4em] mb-6">本門市人員負荷 (Stylist Load)</h3>
             <div className="flex flex-wrap gap-4">
-               {staff.length === 0 && (
-                 <p className="text-xs text-gray-500">請至 CMS 模組的「髮型師名單」建立人員。</p>
+               {displayStaff.length === 0 && (
+                 <p className="text-xs text-gray-500">此門市尚無排班設計師。</p>
                )}
-               {staff.map(name => {
-                 const count = activeSessions.filter(s => s.stylist === name).length;
+               {/* 🟢 只計算本門店設計師的負荷 */}
+               {displayStaff.map(name => {
+                 const count = displaySessions.filter(s => s.stylist === name).length;
                  return (
                    <div key={name} className={`px-6 py-3 rounded-full border flex items-center gap-3 ${count > 0 ? 'border-[#D4AF37]/30 bg-[#D4AF37]/5 text-white' : 'border-white/5 text-gray-600 transition-all'}`}>
                       <span className={`w-2 h-2 rounded-full shadow-lg ${count >= 2 ? 'bg-red-500 shadow-red-500/50' : count === 1 ? 'bg-yellow-500 shadow-yellow-500/50' : 'bg-green-500 shadow-green-500/50'}`}></span>
@@ -609,10 +491,8 @@ export default function SmartPOS() {
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
-            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white">
-              <i className="fa-solid fa-xmark text-xl"></i>
-            </button>
-            <h2 className="text-2xl font-black text-white italic mb-6">Store Action</h2>
+            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+            <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
             
             <div className="flex gap-2 mb-6">
               <input type="text" value={topUpPhone} onChange={e => setTopUpPhone(e.target.value)} placeholder="輸入客人電話 (如: +852...)" className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" />
@@ -678,7 +558,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 升級版：購物車綜合結帳彈窗 */}
+      {/* 🟢 購物車綜合結帳彈窗 */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
@@ -686,7 +566,7 @@ export default function SmartPOS() {
               <i className="fa-solid fa-xmark text-xl"></i>
             </button>
             
-            <h3 className="text-2xl font-black text-white italic mb-6">Cart Checkout</h3>
+            <h3 className="text-2xl font-black text-white italic mb-6">Cart Checkout <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h3>
             
             <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center mb-6">
               <div>
@@ -782,7 +662,7 @@ export default function SmartPOS() {
                 
                 <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm" value={newItemStylist} onChange={e => setNewItemStylist(e.target.value)}>
                   <option value="">選擇負責此項目的髮型師 (預設: {checkoutSession.stylist})</option>
-                  {staff.map(s => <option key={s} value={s}>{s}</option>)}
+                  {displayStaff.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
 
