@@ -18,6 +18,10 @@ export default function FinancePage() {
   const [currentUserName, setCurrentUserName] = useState(''); 
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  
+  // 🟢 跨店連鎖：門店過濾狀態
+  const [branches, setBranches] = useState([]);
+  const [selectedBranch, setSelectedBranch] = useState('ALL');
 
   const [transactions, setTransactions] = useState([]);
   const [staffConfig, setStaffConfig] = useState([]);
@@ -53,9 +57,10 @@ export default function FinancePage() {
     return () => unsubscribe();
   }, []);
 
+  // 🟢 當切換月份、切換門店、或資料改變時，重新計算
   useEffect(() => {
     if (transactions.length > 0) calculateData();
-  }, [selectedMonth, transactions, staffConfig, usersRef, servicesData, packagesData]);
+  }, [selectedMonth, selectedBranch, transactions, staffConfig, usersRef, servicesData, packagesData]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
@@ -75,18 +80,32 @@ export default function FinancePage() {
       
       const pkSnap = await getDocs(collection(db, 'packages'));
       setPackagesData(pkSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+      // 🟢 抓取門店清單供下拉選單使用
+      const bSnap = await getDocs(collection(db, 'branches'));
+      setBranches(bSnap.docs.map(d => d.data().name));
       
     } catch (error) { toast.error("讀取財務數據失敗"); } 
     finally { setLoading(false); }
   };
 
   const calculateData = () => {
-    const monthlyTx = transactions.filter(tx => tx.timestamp && tx.timestamp.startsWith(selectedMonth));
+    // 🟢 雙重過濾：1. 過濾月份 | 2. 過濾門店 (ALL 則全抓)
+    const filteredTx = transactions.filter(tx => {
+      const isMonthMatch = tx.timestamp && tx.timestamp.startsWith(selectedMonth);
+      const isBranchMatch = selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
+      return isMonthMatch && isBranchMatch;
+    });
     
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let totalOutstanding = 0;
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
-    usersRef.forEach(u => { totalOutstanding += (u.tDollarBalance || 0); });
+    // 系統總負債不受月份與門店限制，看的是全公司
+    if (selectedBranch === 'ALL') {
+      usersRef.forEach(u => { totalOutstanding += (u.tDollarBalance || 0); });
+    } else {
+      totalOutstanding = 0; // 暫不計算單店負債，因為餘額是跨店通用的
+    }
 
     staffConfig.forEach(staff => {
       stylistAggregator[staff.name] = { 
@@ -100,7 +119,7 @@ export default function FinancePage() {
       };
     });
 
-    monthlyTx.forEach(tx => {
+    filteredTx.forEach(tx => {
       if (tx.type === 'topup') {
         cashIn += Number(tx.amountPaidHKD || 0);
         givenPoints += Number(tx.pointsAdded || 0);
@@ -126,7 +145,6 @@ export default function FinancePage() {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
             const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
-            // 🟢 修復：將套票單格價值的無限小數，四捨五入到小數點第一位，避免出現 .909
             revenue = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
             commCode = pkgItem.commissionCode; 
           }
@@ -158,7 +176,8 @@ export default function FinancePage() {
           commCode: commCode || 'N/A',
           revenue: revenue,
           commission: commission,
-          formulaStr: formulaStr
+          formulaStr: formulaStr,
+          branch: tx.branch || '未知門店' // 🟢 明細中顯示這筆交易在哪家店發生
         });
       }
     });
@@ -178,7 +197,7 @@ export default function FinancePage() {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
     const toastId = toast.loading("正在打包全系統資料...");
     try {
-      const collectionsToBackup = ['users', 'transactions', 'staff', 'services', 'categories', 'tiers', 'appointments', 'active_sessions', 'packages', 'templates', 'settings'];
+      const collectionsToBackup = ['users', 'transactions', 'staff', 'services', 'categories', 'tiers', 'appointments', 'active_sessions', 'packages', 'templates', 'settings', 'branches'];
       let backupData = { metadata: { exportedAt: new Date().toISOString(), version: 'TRUST_OS_1.0' } };
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
@@ -222,6 +241,22 @@ export default function FinancePage() {
                   <i className="fa-solid fa-cloud-arrow-down"></i> 輸出備份
                 </button>
              )}
+             
+             {/* 🟢 全新升級：門店篩選下拉選單 (僅管理層可見) */}
+             {isManagement && (
+               <div className="bg-[#121212] border border-white/10 p-2 rounded-xl flex items-center gap-3 shadow-inner">
+                 <i className="fa-solid fa-store ml-3 text-[#D4AF37]"></i>
+                 <select 
+                   value={selectedBranch} 
+                   onChange={(e) => setSelectedBranch(e.target.value)} 
+                   className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none"
+                 >
+                   <option value="ALL">🌐 全線總計 (All Branches)</option>
+                   {branches.map(b => <option key={b} value={b}>📍 {b}</option>)}
+                 </select>
+               </div>
+             )}
+
              <div className="bg-[#121212] border border-white/10 p-2 rounded-xl flex items-center gap-3 shadow-inner">
                <i className="fa-regular fa-calendar ml-3 text-[#D4AF37]"></i>
                <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm" />
@@ -245,20 +280,22 @@ export default function FinancePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">門市充值現金流 (HKD)</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">
+                  {selectedBranch === 'ALL' ? '全線' : selectedBranch}充值現金流 (HKD)
+                </p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
-                  {/* 🟢 修復：統一限制小數點，防止多餘小數位 */}
                   <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                 </div>
               </div>
               
               <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-8 rounded-[32px] border border-[#D4AF37]/30 relative overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.05)]">
                 <div className="absolute -right-5 -bottom-5 text-[#D4AF37] opacity-10 text-7xl -z-10"><i className="fa-solid fa-fire"></i></div>
-                <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">店鋪總業績 (扣 T-Dollar)</p>
+                <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">
+                  {selectedBranch === 'ALL' ? '店鋪總業績' : `${selectedBranch} 產值`} (扣 T-Dollar)
+                </p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
-                  {/* 🟢 修復：統一限制小數點，防止多餘小數位 */}
                   <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                 </div>
               </div>
@@ -272,13 +309,15 @@ export default function FinancePage() {
                 </div>
               </div>
 
-              <div className="bg-[#1a1a1a] p-8 rounded-[32px] border border-red-500/20 relative overflow-hidden">
-                 <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>
+              <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5'}`}>
+                 {selectedBranch === 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>}
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
                   系統未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
                 </p>
-                {/* 🟢 修復：統一限制小數點 */}
-                <p className="text-3xl font-black text-gray-300 tracking-tighter">${metrics.outstandingTDollar.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                <p className="text-3xl font-black text-gray-300 tracking-tighter">
+                  {selectedBranch === 'ALL' ? `$${metrics.outstandingTDollar.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}` : '---'}
+                </p>
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-1">餘額屬全線通用，單店不計負債</p>}
               </div>
             </div>
 
@@ -299,7 +338,6 @@ export default function FinancePage() {
                               <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[10px] ${index === 0 ? 'bg-[#D4AF37] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#CD7F32] text-white' : 'bg-white/10 text-gray-400'}`}>{index + 1}</span>
                               {name}
                             </span>
-                            {/* 🟢 修復：統一限制小數點 */}
                             <span className="text-[#D4AF37] font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
                           </div>
                           <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
@@ -325,7 +363,6 @@ export default function FinancePage() {
                         <div key={name} className="relative">
                           <div className="flex justify-between text-xs font-bold uppercase tracking-widest mb-2">
                             <span className="text-gray-300">{name}</span>
-                            {/* 🟢 修復：統一限制小數點 */}
                             <span className="text-white font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
                           </div>
                           <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden">
@@ -346,6 +383,7 @@ export default function FinancePage() {
                   <thead>
                     <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/10">
                       <th className="pb-4 font-bold">時間 (Time)</th>
+                      <th className="pb-4 font-bold">門店 (Branch)</th>
                       <th className="pb-4 font-bold">類型 (Type)</th>
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
@@ -353,9 +391,13 @@ export default function FinancePage() {
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {transactions.filter(tx => tx.timestamp && tx.timestamp.startsWith(selectedMonth)).slice(0, 20).map((tx) => (
+                    {transactions
+                      .filter(tx => tx.timestamp && tx.timestamp.startsWith(selectedMonth))
+                      .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
+                      .slice(0, 20).map((tx) => (
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
-                        <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('en-US', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
+                        <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
+                        <td className="py-4 text-[10px] text-gray-400 font-bold">{tx.branch || '未指定'}</td>
                         <td className="py-4">
                           {tx.type === 'topup' ? (
                             <span className="text-[9px] bg-green-500/10 text-green-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Top Up</span>
@@ -379,7 +421,7 @@ export default function FinancePage() {
                       </tr>
                     ))}
                     {transactions.filter(tx => tx.timestamp && tx.timestamp.startsWith(selectedMonth)).length === 0 && (
-                      <tr><td colSpan="5" className="py-10 text-center text-gray-600 font-bold tracking-widest">本月尚無任何交易紀錄</td></tr>
+                      <tr><td colSpan="6" className="py-10 text-center text-gray-600 font-bold tracking-widest">本月尚無任何交易紀錄</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -427,7 +469,7 @@ export default function FinancePage() {
               </div>
             ))}
             {displayPayroll.length === 0 && (
-               <div className="text-center py-20 text-gray-600 font-bold border border-dashed border-gray-800 rounded-3xl">此月份尚無業績紀錄</div>
+               <div className="text-center py-20 text-gray-600 font-bold border border-dashed border-gray-800 rounded-3xl">此篩選條件下尚無業績紀錄</div>
             )}
           </div>
         )}
@@ -443,9 +485,9 @@ export default function FinancePage() {
             
             <div className="mb-6 border-b border-white/10 pb-6 shrink-0">
               <h2 className="text-2xl md:text-3xl font-black text-white italic tracking-tighter">Commission <span className="text-[#D4AF37]">Details</span></h2>
-              <div className="flex items-center gap-3 mt-2">
+              <div className="flex flex-col md:flex-row md:items-center gap-3 mt-2">
                 <span className="text-sm font-bold text-gray-300">髮型師：{selectedStaffDetail.name}</span>
-                <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-0.5 rounded uppercase tracking-widest">{selectedStaffDetail.grade} 級模板</span>
+                <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-0.5 rounded uppercase tracking-widest w-fit">{selectedStaffDetail.grade} 級模板</span>
               </div>
             </div>
             
@@ -456,10 +498,12 @@ export default function FinancePage() {
                 selectedStaffDetail.details.map((item, idx) => (
                   <div key={idx} className="bg-black/50 p-4 md:p-5 rounded-2xl border border-white/5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-white/20 transition-colors">
                     <div className="flex-1 w-full">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-white font-bold text-sm md:text-base">{item.service}</span>
                         <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-bold uppercase">{item.commCode} 類</span>
                         {item.type === 'deduct_package' && <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-bold">扣套票</span>}
+                        {/* 🟢 顯示這筆業績是在哪家店做的 */}
+                        <span className="text-[9px] border border-gray-600 text-gray-400 px-1.5 py-0.5 rounded font-bold uppercase">📍 {item.branch}</span>
                       </div>
                       <p className="text-[10px] text-gray-500">{item.date}</p>
                     </div>
