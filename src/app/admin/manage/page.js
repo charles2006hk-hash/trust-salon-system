@@ -41,7 +41,7 @@ export default function AdminManagePage() {
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', commissions: defaultPresets["A 級師傅"] 
+    commissionCode: 'W1', templateId: '', commissions: defaultCommissions 
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -105,22 +105,25 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 自動化預設 A~F 模板，不用再點按鈕
   const fetchTemplates = async () => {
     try {
       const snap = await getDocs(collection(db, 'templates'));
-      if (snap.empty) {
-        const newTemplates = [];
-        for (const [name, comms] of Object.entries(defaultPresets)) {
-          const docRef = await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
-          newTemplates.push({ id: docRef.id, name: name, commissions: comms });
-        }
-        setTemplatesList(newTemplates);
-        toast.success("已自動為您載入 A~F 級預設模板！");
-      } else {
-        setTemplatesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }
+      setTemplatesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch(e) { console.error(e); }
+  };
+
+  // 🟢 一鍵自動建立預設模板按鈕功能
+  const initDefaultTemplates = async () => {
+    setLoading(true);
+    const toastId = toast.loading("正在為您建立 A~F 級預設抽成模板...");
+    try {
+      for (const [name, comms] of Object.entries(defaultPresets)) {
+        await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
+      }
+      toast.success("預設模板建立完成！", { id: toastId });
+      fetchTemplates(); 
+      fetchData(); // 強制更新下方列表
+    } catch (e) { toast.error("建立失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
   const handleSave = async (e) => {
@@ -245,6 +248,17 @@ export default function AdminManagePage() {
         </div>
 
         <div className="lg:col-span-9">
+          
+          {/* 🟢 自動生成模板魔法按鈕區塊 */}
+          {activeTab === 'templates' && list.length === 0 && !loading && (
+             <div className="bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-8 rounded-[40px] flex flex-col items-center justify-center text-center gap-4 mb-8 shadow-xl">
+                <i className="fa-solid fa-wand-magic-sparkles text-4xl text-[#D4AF37]"></i>
+                <p className="text-white font-bold text-lg">系統檢測到尚無任何抽成模板</p>
+                <p className="text-sm text-gray-400 max-w-md">我們已為您準備好符合沙龍業界標準的 A~F 級距公式，包含自動扣除耗材成本。</p>
+                <button type="button" onClick={initDefaultTemplates} className="mt-2 bg-[#D4AF37] text-black px-8 py-4 rounded-2xl font-black uppercase tracking-widest hover:scale-105 transition-transform shadow-lg">一鍵自動建立 A~F 預設模板</button>
+             </div>
+          )}
+
           <div className={`bg-[#1a1a1a] p-8 rounded-[40px] border-2 ${editingId ? 'border-[#D4AF37]' : 'border-gray-800'} mb-12 shadow-2xl relative transition-all`}>
             <h2 className="text-xl font-bold mb-8 text-white flex items-center gap-2">
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
