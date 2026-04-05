@@ -14,6 +14,10 @@ export default function AdminManagePage() {
   const [packagesList, setPackagesList] = useState([]); 
   const [templatesList, setTemplatesList] = useState([]); 
   
+  // 🟢 智能名單綁定狀態
+  const [registeredStaff, setRegisteredStaff] = useState([]); 
+  const [isCustomStaff, setIsCustomStaff] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true); 
   const [currentUserRole, setCurrentUserRole] = useState(null); 
@@ -21,7 +25,6 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
-  // 🟢 擴充包含 P1 ~ P5 的預設空結構
   const defaultCommissions = {
     W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
     R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 },
@@ -29,7 +32,6 @@ export default function AdminManagePage() {
     P4: { deduct: 0, percent: 0 }, P5: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
-  // 🟢 嚴格還原手寫單 A1~A10, B1~B11 的參數矩陣
   const defaultPresets = {
     "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
     "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
@@ -77,7 +79,7 @@ export default function AdminManagePage() {
 
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
-       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates();
+       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff();
     }
   }, [activeTab, currentUserRole]);
 
@@ -114,7 +116,18 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 暴力修復：不論是否存在，強制寫入並更新 P1~P5 完整結構！
+  // 🟢 抓取系統已註冊的內部人員名單
+  const fetchRegisteredStaff = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'users'));
+      const staffNames = snap.docs
+        .map(doc => doc.data())
+        .filter(u => ['staff', 'manager', 'admin'].includes(u.role) && u.name)
+        .map(u => u.name);
+      setRegisteredStaff([...new Set(staffNames)]);
+    } catch (e) { console.error(e); }
+  };
+
   const initDefaultTemplates = async () => {
     setLoading(true);
     const toastId = toast.loading("正在為您強制更新 A~F 級預設抽成模板...");
@@ -122,10 +135,8 @@ export default function AdminManagePage() {
       for (const [name, comms] of Object.entries(defaultPresets)) {
         const existing = templatesList.find(t => t.name === name);
         if (existing) {
-          // 如果已經存在舊版的，直接強制 Update 更新覆蓋
           await updateDoc(doc(db, 'templates', existing.id), { commissions: comms, updatedAt: new Date().toISOString() });
         } else {
-          // 不存在則新建
           await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
         }
       }
@@ -155,7 +166,7 @@ export default function AdminManagePage() {
           toast.success("新增成功！");
         }
       }
-      setFormData(initialForm); setEditingId(null); fetchData();
+      setFormData(initialForm); setEditingId(null); setIsCustomStaff(false); fetchData();
       if (activeTab === 'categories') fetchCategories();
       if (activeTab === 'templates') fetchTemplates();
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
@@ -164,6 +175,13 @@ export default function AdminManagePage() {
   const startEdit = (item) => {
     setEditingId(item.id);
     setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions });
+    
+    // 🟢 如果編輯的舊資料不在目前的註冊名單中，自動切換到手動輸入模式
+    if (item.name && !registeredStaff.includes(item.name)) {
+      setIsCustomStaff(true);
+    } else {
+      setIsCustomStaff(false);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -195,7 +213,6 @@ export default function AdminManagePage() {
         <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
       </div>
       
-      {/* 🟢 加入 P2 ~ P5 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
           <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
@@ -252,7 +269,7 @@ export default function AdminManagePage() {
                <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3 ml-2">{group.title}</h3>
                <div className="space-y-1">
                  {group.items.map(tab => (
-                   <button key={tab.id} onClick={() => { setActiveTab(tab.id); setEditingId(null); setFormData(initialForm); }} 
+                   <button key={tab.id} onClick={() => { setActiveTab(tab.id); setEditingId(null); setFormData(initialForm); setIsCustomStaff(false); }} 
                      className={`w-full text-left px-4 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 ${activeTab === tab.id ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
                      <span className="text-lg w-6 text-center">{tab.icon}</span> {tab.label}
                    </button>
@@ -279,8 +296,8 @@ export default function AdminManagePage() {
                   <>
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
-                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 強制更新模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
+                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
                         強制更新 A~F 模板
@@ -343,12 +360,50 @@ export default function AdminManagePage() {
                   </>
                 )}
 
+                {/* 🟢 全新升級：髮型師綁定智能下拉選單 */}
                 {activeTab === 'staff' && (
                   <>
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
-                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：Kelvin" />
+                      {!isCustomStaff ? (
+                        <select 
+                          className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
+                          value={registeredStaff.includes(formData.name) ? formData.name : (formData.name ? 'CUSTOM' : '')} 
+                          onChange={e => {
+                            if (e.target.value === 'CUSTOM') {
+                              setIsCustomStaff(true);
+                              setFormData({...formData, name: ''});
+                            } else {
+                              setFormData({...formData, name: e.target.value});
+                            }
+                          }} 
+                          required
+                        >
+                          <option value="">-- 請選擇已註冊員工 --</option>
+                          {registeredStaff.map(name => <option key={name} value={name}>{name}</option>)}
+                          <option value="CUSTOM">➕ 手動輸入 (無帳號的自由業)</option>
+                        </select>
+                      ) : (
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            className="flex-1 bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
+                            value={formData.name} 
+                            onChange={e => setFormData({...formData, name: e.target.value})} 
+                            required 
+                            placeholder="輸入自訂姓名..." 
+                          />
+                          <button 
+                            type="button" 
+                            onClick={() => { setIsCustomStaff(false); setFormData({...formData, name: ''}); }} 
+                            className="px-6 bg-gray-800 text-gray-400 rounded-xl hover:text-white hover:bg-gray-700 transition-colors font-bold text-sm"
+                          >
+                            返回選單
+                          </button>
+                        </div>
+                      )}
                     </div>
+
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">快速套用資料庫模板</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
@@ -399,7 +454,7 @@ export default function AdminManagePage() {
                     {activeTab === 'settings' ? '💾 儲存全局設定' : editingId ? '💾 儲存修改內容' : '➕ 確認新增資料'}
                   </button>
                   {editingId && (
-                    <button type="button" onClick={() => {setEditingId(null); setFormData(initialForm);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
+                    <button type="button" onClick={() => {setEditingId(null); setFormData(initialForm); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
                   )}
                 </div>
               </form>
