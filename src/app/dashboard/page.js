@@ -24,10 +24,14 @@ export default function DashboardPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
 
+  // 🟢 預約系統狀態
   const [showBooking, setShowBooking] = useState(false);
-  const [stylists, setStylists] = useState([]);
+  const [rawStaff, setRawStaff] = useState([]); // 儲存包含門店資訊的完整員工名單
+  const [branches, setBranches] = useState([]); // 儲存門店清單
   const [services, setServices] = useState([]);
-  const [bookingForm, setBookingForm] = useState({ date: '', time: '', stylist: '', service: '' });
+  
+  // 🟢 預約表單加入 branch 欄位
+  const [bookingForm, setBookingForm] = useState({ branch: '', date: '', time: '', stylist: '', service: '' });
   const [bookingLoading, setBookingLoading] = useState(false);
   const [bookedSlots, setBookedSlots] = useState([]); 
   const allTimeSlots = ['11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
@@ -88,15 +92,19 @@ export default function DashboardPage() {
   }, [router]);
 
   const fetchBookingData = async () => {
-    const [sSnap, svSnap, rSnap, tSnap] = await Promise.all([
+    const [sSnap, svSnap, rSnap, tSnap, bSnap] = await Promise.all([
       getDocs(collection(db, 'staff')), 
       getDocs(collection(db, 'services')),
       getDocs(collection(db, 'rewards')),
-      getDocs(collection(db, 'tiers')) 
+      getDocs(collection(db, 'tiers')),
+      getDocs(collection(db, 'branches')) // 🟢 抓取門店資料
     ]);
-    setStylists(sSnap.docs.map(d => d.data().name));
+    
+    // 🟢 儲存原始員工物件，包含他們所屬的 branch
+    setRawStaff(sSnap.docs.map(d => d.data()));
     setServices(svSnap.docs.map(d => d.data().name));
     setRewardsList(rSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+    setBranches(bSnap.docs.map(d => d.data().name));
     
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     tData.sort((a, b) => Number(a.threshold) - Number(b.threshold));
@@ -113,28 +121,41 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const checkAvailableTimes = async () => {
-      if (bookingForm.date && bookingForm.stylist) {
-        const q = query(collection(db, "appointments"), where("date", "==", bookingForm.date), where("stylist", "==", bookingForm.stylist), where("status", "==", "pending"));
+      // 🟢 查詢可用時間需加上 branch 條件 (選擇性，但有助於防錯)
+      if (bookingForm.date && bookingForm.stylist && bookingForm.branch) {
+        const q = query(
+          collection(db, "appointments"), 
+          where("date", "==", bookingForm.date), 
+          where("stylist", "==", bookingForm.stylist), 
+          where("status", "==", "pending")
+        );
         const snap = await getDocs(q);
         setBookedSlots(snap.docs.map(d => d.data().time));
         setBookingForm(prev => ({...prev, time: ''}));
-      } else { setBookedSlots([]); }
+      } else { 
+        setBookedSlots([]); 
+      }
     };
     checkAvailableTimes();
-  }, [bookingForm.date, bookingForm.stylist]);
+  }, [bookingForm.date, bookingForm.stylist, bookingForm.branch]);
 
   const handleBooking = async (e) => {
     e.preventDefault();
-    if (!bookingForm.date || !bookingForm.time || !bookingForm.stylist || !bookingForm.service) return alert("請填寫完整預約資料");
+    if (!bookingForm.branch || !bookingForm.date || !bookingForm.time || !bookingForm.stylist || !bookingForm.service) {
+       return alert("請填寫完整預約資料");
+    }
     setBookingLoading(true);
     try {
       await addDoc(collection(db, "appointments"), {
-        userId: user.uid, phoneNumber: user.phoneNumber, ...bookingForm,
-        status: "pending", createdAt: new Date().toISOString()
+        userId: user.uid, 
+        phoneNumber: user.phoneNumber, 
+        ...bookingForm, // 🟢 包含 branch, date, time, stylist, service
+        status: "pending", 
+        createdAt: new Date().toISOString()
       });
-      alert(`📅 預約成功！\n期待在 ${bookingForm.date} ${bookingForm.time} 為您服務。`);
+      alert(`📅 預約成功！\n期待在 ${bookingForm.date} ${bookingForm.time} 於【${bookingForm.branch}】為您服務。`);
       setShowBooking(false);
-      setBookingForm({ date: '', time: '', stylist: '', service: '' });
+      setBookingForm({ branch: '', date: '', time: '', stylist: '', service: '' });
       fetchMyAppointments(user.phoneNumber);
     } catch (error) { alert("預約失敗，請稍後再試"); } finally { setBookingLoading(false); }
   };
@@ -171,6 +192,11 @@ export default function DashboardPage() {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">資料同步中...</div>;
 
   const activePackages = Object.entries(packageBalances).filter(([_, grids]) => grids > 0);
+
+  // 🟢 動態過濾：依據客人選擇的門市，只顯示該門市與跨店支援的髮型師
+  const availableStylists = bookingForm.branch 
+    ? [...new Set(rawStaff.filter(s => s.branch === bookingForm.branch || s.branch === 'ALL').map(s => s.name))]
+    : [];
 
   return (
     <div className="bg-[#080808] min-h-screen pb-32 font-sans text-gray-200 selection:bg-[#D4AF37] selection:text-black">
@@ -239,6 +265,31 @@ export default function DashboardPage() {
             <i className="fa-solid fa-qrcode text-lg"></i> 出示結帳條碼 (Checkout)
           </div>
         </div>
+
+        {/* 我的預約 (可選：新增顯示門市) */}
+        {myAppointments.length > 0 && (
+          <div className="bg-[#121212] rounded-[32px] p-6 border border-white/5 relative overflow-hidden">
+             <div className="absolute top-0 right-0 w-16 h-16 bg-[#D4AF37]/5 rounded-bl-[60px] -z-10"></div>
+             <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+               <i className="fa-regular fa-calendar-check text-[#D4AF37]"></i> Upcoming Appointments
+             </h3>
+             <div className="space-y-3">
+               {myAppointments.map(app => (
+                 <div key={app.id} className="bg-black border border-white/5 p-4 rounded-2xl flex justify-between items-center relative overflow-hidden group">
+                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#D4AF37]"></div>
+                   <div className="pl-3">
+                     <p className="text-white font-bold text-sm mb-1">{app.date} <span className="text-[#D4AF37] ml-2">{app.time}</span></p>
+                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">
+                       <i className="fa-solid fa-scissors mr-1"></i>{app.stylist} | {app.service}
+                     </p>
+                     {/* 🟢 顯示預約的門店 */}
+                     {app.branch && <p className="text-[9px] text-gray-500 mt-1">📍 {app.branch}</p>}
+                   </div>
+                 </div>
+               ))}
+             </div>
+          </div>
+        )}
 
         {/* 快捷操作 */}
         <div className="grid grid-cols-2 gap-4">
@@ -363,7 +414,7 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* Modal 組件 */}
+      {/* 🟢 Modal 組件：預約系統更新 */}
       {showBooking && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-xl">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-white/10 relative shadow-2xl">
@@ -371,18 +422,37 @@ export default function DashboardPage() {
             <h3 className="text-2xl font-black text-white italic mb-8 border-b border-white/10 pb-4">Reservation</h3>
             
             <form onSubmit={handleBooking} className="space-y-6">
+              
+              {/* 第一步：選擇門市 */}
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">1. Date & Stylist</label>
-                <input type="date" required min={new Date().toISOString().split('T')[0]} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] mb-3" value={bookingForm.date} onChange={e => setBookingForm({...bookingForm, date: e.target.value})} />
-                <select required className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" value={bookingForm.stylist} onChange={e => setBookingForm({...bookingForm, stylist: e.target.value})}>
-                  <option value="">選擇髮型師...</option>
-                  {stylists.map(s => <option key={s} value={s}>{s}</option>)}
+                <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest">1. 選擇預約門市</label>
+                <select 
+                  required 
+                  className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" 
+                  value={bookingForm.branch} 
+                  onChange={e => setBookingForm({...bookingForm, branch: e.target.value, stylist: '', time: ''})} // 門市變更時，清空設計師與時間
+                >
+                  <option value="">選擇門市...</option>
+                  {branches.map(b => <option key={b} value={b}>{b}</option>)}
                 </select>
               </div>
 
-              {bookingForm.date && bookingForm.stylist && (
+              {/* 第二步：日期與設計師 (必須先選門市) */}
+              <div className={`space-y-2 transition-opacity ${!bookingForm.branch ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">2. 日期與設計師</label>
+                <input type="date" required disabled={!bookingForm.branch} min={new Date().toISOString().split('T')[0]} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] mb-3" value={bookingForm.date} onChange={e => setBookingForm({...bookingForm, date: e.target.value})} />
+                
+                <select required disabled={!bookingForm.branch} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" value={bookingForm.stylist} onChange={e => setBookingForm({...bookingForm, stylist: e.target.value})}>
+                  <option value="">選擇髮型師...</option>
+                  {/* 🟢 動態顯示該門店專屬的髮型師 */}
+                  {availableStylists.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+
+              {/* 第三步：可用時間 */}
+              {bookingForm.date && bookingForm.stylist && bookingForm.branch && (
                 <div className="space-y-2 animate-fade-in">
-                  <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest">2. Available Times (已過濾滿檔)</label>
+                  <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest">3. 選擇時段</label>
                   <div className="grid grid-cols-3 gap-2">
                     {allTimeSlots.map(t => {
                       const isBooked = bookedSlots.includes(t);
@@ -400,15 +470,16 @@ export default function DashboardPage() {
                 </div>
               )}
 
+              {/* 第四步：服務項目 */}
               <div className="space-y-2 pt-2">
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">3. Service</label>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">4. 服務項目</label>
                 <select required className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" value={bookingForm.service} onChange={e => setBookingForm({...bookingForm, service: e.target.value})}>
                   <option value="">選擇服務項目...</option>
                   {services.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
 
-              <button type="submit" disabled={bookingLoading || !bookingForm.time} className="w-full bg-white text-black font-black py-5 rounded-2xl uppercase tracking-widest text-[10px] hover:bg-[#D4AF37] transition-all disabled:opacity-20 mt-4 shadow-xl">
+              <button type="submit" disabled={bookingLoading || !bookingForm.time || !bookingForm.branch} className="w-full bg-white text-black font-black py-5 rounded-2xl uppercase tracking-widest text-[10px] hover:bg-[#D4AF37] transition-all disabled:opacity-20 mt-4 shadow-xl">
                 {bookingLoading ? "Processing..." : "Confirm Booking"}
               </button>
             </form>
@@ -426,7 +497,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🟢 History Modal 升級：完美支援升級獎勵顯示 */}
+      {/* 🟢 History Modal */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col justify-end backdrop-blur-sm">
           <div className="bg-[#121212] w-full h-[85vh] rounded-t-[40px] p-8 overflow-hidden flex flex-col border-t border-white/10 shadow-[0_-10px_50px_rgba(0,0,0,0.5)]">
@@ -438,16 +509,18 @@ export default function DashboardPage() {
               {transactions.map((tx) => (
                 <div key={tx.id} className="bg-black/50 p-6 rounded-3xl border border-white/5 flex justify-between items-center hover:border-white/20 transition-colors">
                   <div>
-                    <p className="text-white font-bold">
+                    <p className="text-white font-bold flex items-center gap-2">
                       {tx.type === 'topup' ? '門市增值 (Top-up)' : 
                        tx.type === 'buy_package' ? `購買套票: ${tx.packageName}` : 
                        tx.type === 'deduct_package' ? `扣抵套票: ${tx.packageName}` : 
                        tx.type === 'admin_adjustment' ? `系統手動發放 (${tx.note})` : 
                        tx.service}
+                       
+                      {/* 🟢 顯示消費門店 */}
+                      {tx.branch && <span className="text-[8px] border border-gray-600 text-gray-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-widest">📍 {tx.branch}</span>}
                     </p>
                     <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest">{new Date(tx.timestamp).toLocaleString()}</p>
                     
-                    {/* 🟢 顯示積分 (包含升級贈送的積分) */}
                     {tx.pointsAdded > 0 && (
                       <p className="text-[10px] text-[#D4AF37] font-bold mt-1">
                         獲得 {tx.pointsAdded} 積分 
