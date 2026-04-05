@@ -27,7 +27,7 @@ export default function AdminManagePage() {
     P1: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
-  // 🟢 依照你的手寫表單，嚴格還原 A~F 級抽成比例
+  // 🟢 預設參數模板 (對應你的手寫筆記)
   const defaultPresets = {
     "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
     "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
@@ -112,17 +112,21 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 一鍵自動建立預設模板按鈕功能
+  // 🟢 暴力防呆版：一鍵自動建立 A~F 預設模板按鈕功能
   const initDefaultTemplates = async () => {
     setLoading(true);
     const toastId = toast.loading("正在為您建立 A~F 級預設抽成模板...");
     try {
       for (const [name, comms] of Object.entries(defaultPresets)) {
-        await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
+        // 檢查是否已經建過，避免重複
+        const existing = templatesList.find(t => t.name === name);
+        if (!existing) {
+          await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
+        }
       }
-      toast.success("預設模板建立完成！", { id: toastId });
+      toast.success("A~F 預設模板已全數寫入資料庫！", { id: toastId });
       fetchTemplates(); 
-      fetchData(); // 強制更新下方列表
+      fetchData(); 
     } catch (e) { toast.error("建立失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
@@ -248,22 +252,12 @@ export default function AdminManagePage() {
         </div>
 
         <div className="lg:col-span-9">
-          
-          {/* 🟢 自動生成模板魔法按鈕區塊 */}
-          {activeTab === 'templates' && list.length === 0 && !loading && (
-             <div className="bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-8 rounded-[40px] flex flex-col items-center justify-center text-center gap-4 mb-8 shadow-xl">
-                <i className="fa-solid fa-wand-magic-sparkles text-4xl text-[#D4AF37]"></i>
-                <p className="text-white font-bold text-lg">系統檢測到尚無任何抽成模板</p>
-                <p className="text-sm text-gray-400 max-w-md">我們已為您準備好符合沙龍業界標準的 A~F 級距公式，包含自動扣除耗材成本。</p>
-                <button type="button" onClick={initDefaultTemplates} className="mt-2 bg-[#D4AF37] text-black px-8 py-4 rounded-2xl font-black uppercase tracking-widest hover:scale-105 transition-transform shadow-lg">一鍵自動建立 A~F 預設模板</button>
-             </div>
-          )}
-
           <div className={`bg-[#1a1a1a] p-8 rounded-[40px] border-2 ${editingId ? 'border-[#D4AF37]' : 'border-gray-800'} mb-12 shadow-2xl relative transition-all`}>
             <h2 className="text-xl font-bold mb-8 text-white flex items-center gap-2">
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
             </h2>
 
+            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -271,10 +265,22 @@ export default function AdminManagePage() {
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
+                {/* 🟢 動態抽成模板設定 */}
                 {activeTab === 'templates' && (
                   <>
+                    {/* 🟢 暴力防呆：永遠顯示的「一鍵匯入」按鈕，放進表單最醒目的位置 */}
+                    <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+                      <div>
+                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入 A~F 級師傅預設的拆帳公式，免去手動輸入。</p>
+                      </div>
+                      <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
+                        一鍵寫入 A~F 模板
+                      </button>
+                    </div>
+
                     <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">抽成模板名稱</label>
+                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">自訂抽成模板名稱</label>
                       <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：A 級師傅、G 級大師、設計助理..." />
                     </div>
                     {renderMatrixEditor()}
@@ -405,6 +411,7 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
+                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
                         {activeTab === 'staff' && item.templateId && (
                           <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
                             已套用模板
