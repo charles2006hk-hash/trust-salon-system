@@ -23,12 +23,14 @@ export default function SmartPOS() {
   const [walkInService, setWalkInService] = useState('');
 
   const [checkoutSession, setCheckoutSession] = useState(null);
-  const [checkoutAmount, setCheckoutAmount] = useState(''); 
   const [isProcessing, setIsProcessing] = useState(false);
   
-  const [checkoutMethod, setCheckoutMethod] = useState('tdollar'); 
-  const [selectedUserPackage, setSelectedUserPackage] = useState(''); 
-  const [deductGrids, setDeductGrids] = useState(1);
+  // 🟢 購物車核心狀態 (取代原本的單一結帳狀態)
+  const [cart, setCart] = useState([]);
+  const [addItemMode, setAddItemMode] = useState('pay'); // 'pay' 或 'deduct'
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemStylist, setNewItemStylist] = useState('');
+  const [newItemGrids, setNewItemGrids] = useState(1);
 
   const [showRegModal, setShowRegModal] = useState(false);
   const [unregisteredPhone, setUnregisteredPhone] = useState('');
@@ -58,23 +60,33 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
-    // 🟢 防雷裝甲：即使某個 collection 權限不足報錯，也不會讓整個 POS 崩潰空白
+    // 🟢 防雷裝甲：即使某個 collection 權限不足報錯，也不會讓整個 POS 崩潰
     const safeGet = async (colName) => {
-      try { return await getDocs(collection(db, colName)); } 
-      catch (e) { console.error(`Error fetching ${colName}:`, e); return { docs: [] }; }
+      try { 
+        return await getDocs(collection(db, colName)); 
+      } catch (e) { 
+        console.error(`Error fetching ${colName}:`, e); 
+        return { docs: [] }; 
+      }
     };
 
     const [sSnap, svSnap, tSnap, pSnap, setSnap, uSnap] = await Promise.all([
-      safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('users')
+      safeGet('staff'), 
+      safeGet('services'), 
+      safeGet('tiers'), 
+      safeGet('packages'), 
+      safeGet('settings'), 
+      safeGet('users')
     ]);
     
-    // 🟢 1. 完美合併髮型師名單 (只抓 CMS 建立的名單 + 帳號權限純為 'staff' 的員工)
+    // 🟢 合併髮型師名單 (CMS名單 + 權限純為 staff 的帳號)
     const cmsStaff = sSnap.docs.map(d => d.data().name).filter(Boolean);
-    // 🚨 修正：移除 'manager' 與 'admin'，避免老闆和經理出現在接單選單
-    const userStaff = uSnap.docs.map(d => d.data()).filter(u => u.role === 'staff' && u.name).map(u => u.name);
+    const userStaff = uSnap.docs.map(d => d.data())
+      .filter(u => u.role === 'staff' && u.name)
+      .map(u => u.name);
     setStaff([...new Set([...cmsStaff, ...userStaff])]); 
 
-    // 🟢 2. 完美合併服務與套票菜單
+    // 🟢 合併服務與套票菜單 (讓結帳下拉選單都能選到)
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     setServices([...svData, ...pkData]); 
@@ -85,7 +97,9 @@ export default function SmartPOS() {
     setTiers(tData);
 
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
-    if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
+    if (settingsDoc) {
+      setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -113,12 +127,16 @@ export default function SmartPOS() {
       }
 
       toast.success(`${formattedPhone} 已入店服務`);
-      setPhone(''); setWalkInStylist(''); setWalkInService('');
-    } catch (e) { toast.error("報到失敗"); }
+      setPhone(''); 
+      setWalkInStylist(''); 
+      setWalkInService('');
+    } catch (e) { 
+      toast.error("報到失敗"); 
+    }
   };
 
   const openCheckout = async (session) => {
-    const toastId = toast.loading("正在結算帳單與會員折扣...");
+    const toastId = toast.loading("正在準備購物車結帳單...");
     try {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
@@ -132,31 +150,89 @@ export default function SmartPOS() {
 
       setCheckoutSession({
         ...session,
-        originalPrice,
         discountRate,
-        finalPrice,
         tier: uData.tier || '基本會員 (Basic)',
         balance: uData.tDollarBalance || 0,
         userId: userSnap.empty ? null : userSnap.docs[0].id,
         packageBalances: uData.packageBalances || {}
       });
-      setCheckoutAmount(finalPrice); 
-      setCheckoutMethod('tdollar'); 
-      setSelectedUserPackage('');
-      setDeductGrids(1);
+
+      // 🟢 將客人的首要服務，自動加入購物車
+      setCart([{
+        id: Date.now().toString(),
+        type: 'pay',
+        name: session.service,
+        stylist: session.stylist,
+        originalPrice,
+        finalPrice,
+        grids: 0
+      }]);
+
+      setAddItemMode('pay'); 
+      setNewItemName(''); 
+      setNewItemStylist(''); 
+      setNewItemGrids(1);
+      
       toast.dismiss(toastId);
     } catch (error) {
       toast.error("讀取帳單失敗", { id: toastId });
     }
   };
 
+  // 🟢 購物車：新增項目
+  const handleAddToCart = () => {
+    if (!newItemName) return toast.error("請選擇項目");
+    const itemStylist = newItemStylist || checkoutSession.stylist; // 未選則套用預設髮型師
+
+    if (addItemMode === 'pay') {
+      const sItem = services.find(s => s.name === newItemName);
+      if (!sItem) return toast.error("項目不存在");
+      
+      const orig = Number(sItem.price);
+      const fin = Math.round(orig * checkoutSession.discountRate);
+      
+      setCart([...cart, { 
+        id: Date.now().toString(), 
+        type: 'pay', 
+        name: newItemName, 
+        stylist: itemStylist, 
+        originalPrice: orig, 
+        finalPrice: fin, 
+        grids: 0 
+      }]);
+    } else {
+      setCart([...cart, { 
+        id: Date.now().toString(), 
+        type: 'deduct', 
+        name: newItemName, 
+        stylist: itemStylist, 
+        originalPrice: 0, 
+        finalPrice: 0, 
+        grids: Number(newItemGrids) 
+      }]);
+    }
+    setNewItemName(''); 
+    setNewItemGrids(1);
+  };
+
+  const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
+
+  // 🟢 購物車：綜合結帳與拆帳寫入
   const processSettlement = async (e) => {
     e.preventDefault();
-    if (checkoutMethod === 'tdollar' && (!checkoutAmount || isNaN(checkoutAmount))) return toast.error("請輸入有效金額");
+    if (cart.length === 0) return toast.error("購物車不能為空");
 
     setIsProcessing(true);
-    const toastId = toast.loading('結帳處理中...');
+    const toastId = toast.loading('綜合結帳處理中...');
     
+    let totalPay = 0;
+    let deductMap = {}; 
+    
+    cart.forEach(item => {
+      if (item.type === 'pay') totalPay += item.finalPrice;
+      if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
+    });
+
     try {
       if (checkoutSession.userId) {
         const userRef = doc(db, "users", checkoutSession.userId);
@@ -165,42 +241,76 @@ export default function SmartPOS() {
           const uDoc = await tx.get(userRef);
           const currentData = uDoc.data();
 
-          if (checkoutMethod === 'tdollar') {
-            const finalAmountNum = Number(checkoutAmount);
-            const newBal = (currentData.tDollarBalance || 0) - finalAmountNum;
+          // 1. 驗證與扣除 T-Dollar
+          if (totalPay > 0) {
+            const newBal = (currentData.tDollarBalance || 0) - totalPay;
             if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
-
             tx.update(userRef, { tDollarBalance: newBal });
-            tx.set(doc(collection(db, "transactions")), {
-              userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: finalAmountNum, originalAmount: checkoutSession.originalPrice, discountRate: checkoutSession.discountRate, service: checkoutSession.service, stylist: checkoutSession.stylist, type: "deduct", timestamp: new Date().toISOString()
-            });
-
-          } else if (checkoutMethod === 'package') {
-            if (!selectedUserPackage) throw new Error("請選擇要扣除的套票");
-            const currentPkgs = currentData.packageBalances || {};
-            const currentGrids = currentPkgs[selectedUserPackage] || 0;
-            if (currentGrids < deductGrids) throw new Error(`套票格數不足！剩餘 ${currentGrids} 格`);
-            
-            const newPkgs = { ...currentPkgs, [selectedUserPackage]: currentGrids - deductGrids };
-            tx.update(userRef, { packageBalances: newPkgs });
-            
-            tx.set(doc(collection(db, "transactions")), {
-              userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: checkoutSession.service, stylist: checkoutSession.stylist, type: "deduct_package", packageName: selectedUserPackage, deductedGrids: deductGrids, timestamp: new Date().toISOString()
-            });
           }
+
+          // 2. 驗證與扣除套票格數
+          let newPackageBalances = { ...(currentData.packageBalances || {}) };
+          for (const [pkgName, grids] of Object.entries(deductMap)) {
+            const currentGrids = newPackageBalances[pkgName] || 0;
+            if (currentGrids < grids) throw new Error(`套票【${pkgName}】格數不足！剩餘 ${currentGrids} 格`);
+            newPackageBalances[pkgName] = currentGrids - grids;
+          }
+          if (Object.keys(deductMap).length > 0) {
+             tx.update(userRef, { packageBalances: newPackageBalances });
+          }
+
+          // 3. 獨立寫入每一筆項目的交易紀錄 (實現多重拆帳)
+          cart.forEach(item => {
+             const newTxRef = doc(collection(db, "transactions"));
+             if (item.type === 'pay') {
+               tx.set(newTxRef, { 
+                 userId: userRef.id, 
+                 phoneNumber: checkoutSession.phoneNumber, 
+                 amount: item.finalPrice, 
+                 originalAmount: item.originalPrice, 
+                 discountRate: checkoutSession.discountRate, 
+                 service: item.name, 
+                 stylist: item.stylist, 
+                 type: "deduct", 
+                 timestamp: new Date().toISOString() 
+               });
+             } else {
+               tx.set(newTxRef, { 
+                 userId: userRef.id, 
+                 phoneNumber: checkoutSession.phoneNumber, 
+                 amount: 0, 
+                 service: item.name, 
+                 stylist: item.stylist, 
+                 type: "deduct_package", 
+                 packageName: item.name, 
+                 deductedGrids: item.grids, 
+                 timestamp: new Date().toISOString() 
+               });
+             }
+          });
 
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
+        if (Object.keys(deductMap).length > 0) throw new Error("非會員無法扣除套票");
+        
         await runTransaction(db, async (tx) => {
-          tx.set(doc(collection(db, "transactions")), {
-            phoneNumber: checkoutSession.phoneNumber, amount: Number(checkoutAmount), service: checkoutSession.service, stylist: checkoutSession.stylist, type: "walkin_cash", timestamp: new Date().toISOString()
+          cart.forEach(item => {
+            const newTxRef = doc(collection(db, "transactions"));
+            tx.set(newTxRef, { 
+              phoneNumber: checkoutSession.phoneNumber, 
+              amount: item.finalPrice, 
+              service: item.name, 
+              stylist: item.stylist, 
+              type: "walkin_cash", 
+              timestamp: new Date().toISOString() 
+            });
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       }
 
-      toast.success("結帳完成，資源已釋放！", { id: toastId });
+      toast.success("結帳完成，業績已分發！", { id: toastId });
       setCheckoutSession(null);
     } catch (e) { 
       toast.error(e.message, { id: toastId }); 
@@ -214,7 +324,9 @@ export default function SmartPOS() {
     try {
       await deleteDoc(doc(db, "active_sessions", sessionId));
       toast.success("服務已取消");
-    } catch (e) { toast.error("取消失敗"); }
+    } catch (e) { 
+      toast.error("取消失敗"); 
+    }
   };
 
   const searchTopUpUser = async () => {
@@ -326,14 +438,26 @@ export default function SmartPOS() {
           });
           
           transaction.set(doc(collection(db, "transactions")), { 
-            userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() 
+            userId: topUpUser.id, 
+            phoneNumber: topUpUser.phoneNumber, 
+            type: "buy_package", 
+            packageName: pkg.name, 
+            gridsAdded: pkg.quantity, 
+            amountPaidHKD: paidHKD, 
+            paymentMethod: topUpForm.paymentMethod, 
+            timestamp: new Date().toISOString() 
           });
         });
         toast.success(`成功售出套票：${pkg.name}\n客人已獲得 ${pkg.quantity} 格`);
       }
 
-      setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone(''); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
-    } catch (error) { toast.error("操作失敗"); }
+      setShowTopUpModal(false); 
+      setTopUpUser(null); 
+      setTopUpPhone(''); 
+      setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
+    } catch (error) { 
+      toast.error("操作失敗"); 
+    }
   };
 
   return (
@@ -448,7 +572,7 @@ export default function SmartPOS() {
                   onClick={() => openCheckout(session)}
                   className="relative z-10 w-full bg-[#D4AF37]/10 border border-[#D4AF37]/30 text-[#D4AF37] font-black py-4 rounded-2xl text-[10px] uppercase tracking-[0.3em] hover:bg-[#D4AF37] hover:text-black transition-all"
                 >
-                  服務完成 ‧ 準備結帳
+                  服務完成 ‧ 進入購物車結帳
                 </button>
               </div>
             ))}
@@ -481,10 +605,13 @@ export default function SmartPOS() {
         </div>
       </div>
 
+      {/* 門市收款 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
-            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white">
+              <i className="fa-solid fa-xmark text-xl"></i>
+            </button>
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action</h2>
             
             <div className="flex gap-2 mb-6">
@@ -495,7 +622,6 @@ export default function SmartPOS() {
             {topUpUser && (
               <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
                 
-                {/* 雙分頁按鈕 */}
                 <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
                   <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值 T-Dollar</button>
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
@@ -552,115 +678,127 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 結帳彈窗 */}
+      {/* 🟢 升級版：購物車綜合結帳彈窗 */}
       {checkoutSession && (
-        <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md">
-          <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
-            <button onClick={() => setCheckoutSession(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+        <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
+          <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
+            <button onClick={() => setCheckoutSession(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white">
+              <i className="fa-solid fa-xmark text-xl"></i>
+            </button>
             
-            <h3 className="text-2xl font-black text-white italic mb-6">Checkout</h3>
+            <h3 className="text-2xl font-black text-white italic mb-6">Cart Checkout</h3>
             
-            <form onSubmit={processSettlement} className="space-y-4">
-              <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center">
-                <div>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
-                  <p className="text-lg font-bold text-white">{checkoutSession.phoneNumber}</p>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
-                    {checkoutSession.tier}
-                  </span>
-                  {checkoutSession.discountRate < 1 && checkoutMethod === 'tdollar' && (
-                     <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
-                  )}
-                </div>
+            <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center mb-6">
+              <div>
+                <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
+                <p className="text-lg font-bold text-white">{checkoutSession.phoneNumber}</p>
               </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                 <div className="bg-black p-3 rounded-2xl border border-white/5">
-                  <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Stylist</p>
-                  <p className="text-xs font-bold text-gray-300 truncate">{checkoutSession.stylist}</p>
-                </div>
-                <div className="bg-black p-3 rounded-2xl border border-white/5">
-                  <p className="text-[9px] text-gray-500 font-bold uppercase mb-1">Service</p>
-                  <p className="text-xs font-bold text-gray-300 truncate">{checkoutSession.service}</p>
-                </div>
+              <div className="text-right">
+                <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
+                  {checkoutSession.tier}
+                </span>
+                {checkoutSession.discountRate < 1 && (
+                  <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
+                )}
+              </div>
+            </div>
+
+            {/* 購物車清單展示區 */}
+            <div className="space-y-3 mb-6 bg-white/5 p-4 rounded-2xl border border-white/5">
+               <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-2 border-b border-white/10 pb-2">
+                 已加入的消費清單 ({cart.length})
+               </h4>
+               
+               {cart.length === 0 && <p className="text-sm text-gray-500 text-center py-4">購物車為空</p>}
+               
+               {cart.map(item => (
+                 <div key={item.id} className="flex justify-between items-center bg-black p-3 rounded-xl border border-white/5 group">
+                   <div>
+                     <p className="text-sm font-bold text-white leading-tight">{item.name}</p>
+                     <div className="flex items-center gap-2 mt-1">
+                       <span className="text-[10px] text-gray-500 italic"><i className="fa-solid fa-scissors mr-1"></i>{item.stylist}</span>
+                       {item.type === 'deduct' && <span className="text-[8px] bg-purple-500/20 text-purple-400 px-1.5 rounded uppercase">扣抵套票</span>}
+                     </div>
+                   </div>
+                   <div className="flex items-center gap-4">
+                     <div className="text-right">
+                       {item.type === 'pay' ? (
+                          <p className="text-[#D4AF37] font-bold">${item.finalPrice}</p>
+                       ) : (
+                          <p className="text-purple-400 font-bold">-{item.grids} 格</p>
+                       )}
+                     </div>
+                     <button type="button" onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-full bg-red-900/30 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex justify-center items-center">
+                       <i className="fa-solid fa-trash text-xs"></i>
+                     </button>
+                   </div>
+                 </div>
+               ))}
+               
+               {/* 總計結算顯示 */}
+               <div className="pt-4 border-t border-white/10 flex justify-between items-end">
+                 <div className="text-purple-400 text-xs font-bold">
+                    {cart.filter(i => i.type === 'deduct').length > 0 && `共扣除 ${cart.filter(i => i.type === 'deduct').reduce((a, b) => a + b.grids, 0)} 格`}
+                 </div>
+                 <div className="text-right">
+                   <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">應付總額 (T-Dollar / Cash)</p>
+                   <p className="text-3xl font-black text-white">${cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0)}</p>
+                 </div>
+               </div>
+            </div>
+
+            {/* 新增加購區塊 */}
+            <div className="bg-black border border-dashed border-gray-700 p-4 rounded-2xl mb-6">
+              <h4 className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-3">➕ 繼續加購項目</h4>
+              <div className="flex gap-2 mb-3">
+                <button type="button" onClick={() => setAddItemMode('pay')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${addItemMode === 'pay' ? 'bg-white/20 text-white' : 'text-gray-500 hover:bg-white/5'}`}>
+                  💰 收費項目
+                </button>
+                {checkoutSession.userId && (
+                  <button type="button" onClick={() => setAddItemMode('deduct')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${addItemMode === 'deduct' ? 'bg-purple-500/30 text-purple-300' : 'text-gray-500 hover:bg-white/5'}`}>
+                    🎫 扣抵套票
+                  </button>
+                )}
               </div>
 
-              {/* 選擇結帳方式 */}
-              {checkoutSession.userId && (
-                <div className="flex gap-2 p-1 bg-black rounded-xl border border-white/5 mt-4">
-                  <button type="button" onClick={() => setCheckoutMethod('tdollar')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>扣減餘額</button>
-                  <button type="button" onClick={() => setCheckoutMethod('package')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 扣抵套票</button>
-                </div>
-              )}
-
-              {checkoutMethod === 'tdollar' ? (
-                <>
-                  <div className="bg-white/5 rounded-2xl p-4 space-y-2 mt-4 animate-fade-in">
-                     <div className="flex justify-between text-sm text-gray-400">
-                        <span>服務定價</span>
-                        <span>${checkoutSession.originalPrice}</span>
-                     </div>
-                     {checkoutSession.discountRate < 1 && (
-                       <div className="flex justify-between text-sm text-green-400 font-bold">
-                          <span>會員專屬折扣</span>
-                          <span>-${checkoutSession.originalPrice - checkoutSession.finalPrice}</span>
-                       </div>
-                     )}
-                     <div className="border-t border-white/10 pt-2 flex justify-between items-center mt-2">
-                        <span className="text-xs text-[#D4AF37] font-bold uppercase tracking-widest">實收金額</span>
-                        <span className="text-2xl font-black text-white">${checkoutSession.finalPrice}</span>
-                     </div>
-                  </div>
-
-                  {!checkoutSession.userId && (
-                     <p className="text-[10px] text-red-400 text-center bg-red-500/10 py-2 rounded-lg">此客為非會員(Walk-in)，不扣餘額，請收取現金/刷卡</p>
-                  )}
-
-                  <div className="pt-2 animate-fade-in">
-                    <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest block mb-2">手動確認扣款 (T-Dollar)</label>
-                    <div className="relative">
-                      <span className="absolute left-4 top-4 text-[#D4AF37] font-bold text-2xl">$</span>
-                      <input 
-                        type="number" required
-                        value={checkoutAmount} 
-                        onChange={e => setCheckoutAmount(e.target.value)} 
-                        className="w-full bg-black border border-[#D4AF37]/50 rounded-2xl p-4 pl-12 text-3xl font-black text-white outline-none focus:border-[#D4AF37]"
-                      />
-                    </div>
-                    {checkoutSession.userId && (
-                      <p className="text-[10px] text-gray-500 mt-2 text-right">客人當前餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="pt-4 space-y-4 animate-fade-in">
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">選擇要扣除的套票</label>
-                    <select required value={selectedUserPackage} onChange={e => setSelectedUserPackage(e.target.value)} className="w-full bg-black border border-purple-500/50 rounded-xl p-4 text-white outline-none focus:border-purple-400">
-                      <option value="">請選擇...</option>
-                      {Object.entries(checkoutSession.packageBalances || {})
-                        .filter(([_, grids]) => grids > 0)
-                        .map(([name, grids]) => (
-                          <option key={name} value={name}>{name} (剩餘 {grids} 格)</option>
-                      ))}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                {addItemMode === 'pay' ? (
+                  <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm focus:border-[#D4AF37]" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
+                    <option value="">選擇服務或產品...</option>
+                    {services.map(s => <option key={s.id} value={s.name}>{s.name} (${s.price})</option>)}
+                  </select>
+                ) : (
+                  <>
+                    <select className="col-span-2 w-full bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm focus:border-purple-400" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
+                      <option value="">選擇客人可用的套票...</option>
+                      {Object.entries(checkoutSession.packageBalances || {}).filter(([_, g]) => g > 0).map(([n, g]) => <option key={n} value={n}>{n} (剩餘 {g} 格)</option>)}
                     </select>
-                    {Object.keys(checkoutSession.packageBalances || {}).length === 0 && (
-                       <p className="text-[10px] text-red-400 mt-1">此客人目前沒有任何可用套票。</p>
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">本次扣除格數</label>
-                    <input type="number" min="1" required value={deductGrids} onChange={e => setDeductGrids(Number(e.target.value))} className="w-full bg-black border border-purple-500/50 rounded-xl p-4 text-white outline-none text-xl font-bold" />
-                  </div>
-                </div>
-              )}
+                    <div className="col-span-2 flex items-center gap-3">
+                       <span className="text-xs text-gray-400 w-16">扣除數量</span>
+                       <input type="number" min="1" className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm text-center font-bold" value={newItemGrids} onChange={e => setNewItemGrids(e.target.value)} />
+                    </div>
+                  </>
+                )}
+                
+                <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm" value={newItemStylist} onChange={e => setNewItemStylist(e.target.value)}>
+                  <option value="">選擇負責此項目的髮型師 (預設: {checkoutSession.stylist})</option>
+                  {staff.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
 
-              <button type="submit" disabled={isProcessing} className={`w-full mt-4 font-black py-4 rounded-2xl uppercase tracking-widest text-xs transition-all shadow-xl ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black hover:scale-105' : 'bg-purple-600 text-white hover:bg-purple-500 hover:scale-105'}`}>
-                {isProcessing ? "Processing..." : (checkoutMethod === 'package' ? "🎫 確認扣除套票格數" : (checkoutSession.userId ? "💰 確認扣減 T-Dollar" : "確認紀錄現金營收"))}
+              <button type="button" onClick={handleAddToCart} className="w-full border border-gray-600 text-gray-300 py-3 rounded-xl text-xs font-bold hover:bg-white hover:text-black transition">
+                ➕ 加入購物車清單
+              </button>
+            </div>
+
+            <form onSubmit={processSettlement}>
+              {checkoutSession.userId && <p className="text-[10px] text-gray-500 text-center mb-2">該會員目前 T-Dollar 餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>}
+              {!checkoutSession.userId && <p className="text-[10px] text-red-400 text-center mb-2 bg-red-500/10 py-1 rounded">此客為非會員(Walk-in)，請向客人收取現金或刷卡</p>}
+              <button type="submit" disabled={isProcessing || cart.length === 0} className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl bg-[#D4AF37] text-black hover:scale-105 disabled:opacity-30 disabled:hover:scale-100`}>
+                {isProcessing ? "Processing..." : "確認綜合結帳"}
               </button>
             </form>
+
           </div>
         </div>
       )}
