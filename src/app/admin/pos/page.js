@@ -68,10 +68,13 @@ export default function SmartPOS() {
       safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('users')
     ]);
     
+    // 🟢 1. 完美合併髮型師名單 (只抓 CMS 建立的名單 + 帳號權限純為 'staff' 的員工)
     const cmsStaff = sSnap.docs.map(d => d.data().name).filter(Boolean);
-    const userStaff = uSnap.docs.map(d => d.data()).filter(u => ['staff', 'manager', 'admin'].includes(u.role) && u.name).map(u => u.name);
+    // 🚨 修正：移除 'manager' 與 'admin'，避免老闆和經理出現在接單選單
+    const userStaff = uSnap.docs.map(d => d.data()).filter(u => u.role === 'staff' && u.name).map(u => u.name);
     setStaff([...new Set([...cmsStaff, ...userStaff])]); 
 
+    // 🟢 2. 完美合併服務與套票菜單
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     setServices([...svData, ...pkData]); 
@@ -356,6 +359,7 @@ export default function SmartPOS() {
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
+        {/* 左側：報到與預約 */}
         <div className="lg:col-span-4 space-y-8">
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
@@ -403,6 +407,7 @@ export default function SmartPOS() {
           </div>
         </div>
 
+        {/* 中間：現場服務動態 */}
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">現場服務動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -490,6 +495,7 @@ export default function SmartPOS() {
             {topUpUser && (
               <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
                 
+                {/* 雙分頁按鈕 */}
                 <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
                   <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值 T-Dollar</button>
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
@@ -581,6 +587,7 @@ export default function SmartPOS() {
                 </div>
               </div>
 
+              {/* 選擇結帳方式 */}
               {checkoutSession.userId && (
                 <div className="flex gap-2 p-1 bg-black rounded-xl border border-white/5 mt-4">
                   <button type="button" onClick={() => setCheckoutMethod('tdollar')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>扣減餘額</button>
