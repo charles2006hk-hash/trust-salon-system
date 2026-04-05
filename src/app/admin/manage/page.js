@@ -12,7 +12,7 @@ export default function AdminManagePage() {
   const [list, setList] = useState([]);
   const [categories, setCategories] = useState([]); 
   const [packagesList, setPackagesList] = useState([]); 
-  const [templatesList, setTemplatesList] = useState([]); // 🟢 儲存資料庫裡的動態模板
+  const [templatesList, setTemplatesList] = useState([]); 
   
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true); 
@@ -27,46 +27,21 @@ export default function AdminManagePage() {
     P1: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
   };
 
-  // 🟢 根據老闆手寫筆記建立的「自動化帶入模板」 (E、F 級也補上基礎預設)
-  const commissionTemplates = {
-    A: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 },
-      R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    B: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
-      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    C: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 },
-      R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 },
-      P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    D: {
-      W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 },
-      R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 },
-      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 }
-    },
-    E: {
-      W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 },
-      R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 },
-      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 }
-    },
-    F: {
-      W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 },
-      R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 },
-      P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 }
-    }
+  // 🟢 依照你的手寫表單，嚴格還原 A~F 級抽成比例
+  const defaultPresets = {
+    "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
+    "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
+    "C 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 }, P1: { deduct: 0, percent: 20 }, SCALP: { deduct: 0, percent: 25 } },
+    "D 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 25 } },
+    "E 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } },
+    "F 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 }, P1: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } }
   };
 
-  // 🟢 修復點：初始表單直接載入 commissionTemplates['A']，而不是全0
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', commissions: commissionTemplates['A'] 
+    commissionCode: 'W1', templateId: '', commissions: defaultPresets["A 級師傅"] 
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -106,37 +81,52 @@ export default function AdminManagePage() {
 
   const fetchData = async () => {
     setLoading(true);
-    const querySnapshot = await getDocs(collection(db, activeTab));
-    const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
-    
-    if (activeTab === 'settings' && data.length === 0) {
-       setFormData({...initialForm, validityDays: 365, name: '全局系統參數'});
-    }
-    setList(data);
+    try {
+      const querySnapshot = await getDocs(collection(db, activeTab));
+      const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
+      if (activeTab === 'settings' && data.length === 0) setFormData({...initialForm, validityDays: 365, name: '全局系統參數'});
+      setList(data);
+    } catch(e) { console.error(e); }
     setLoading(false);
   };
 
   const fetchCategories = async () => {
-    const querySnapshot = await getDocs(collection(db, 'categories'));
-    setCategories(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    try {
+      const snap = await getDocs(collection(db, 'categories'));
+      setCategories(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch(e) { console.error(e); }
   };
 
   const fetchPackages = async () => {
-    const snap = await getDocs(collection(db, 'packages'));
-    setPackagesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    try {
+      const snap = await getDocs(collection(db, 'packages'));
+      setPackagesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch(e) { console.error(e); }
   };
 
+  // 🟢 自動化預設 A~F 模板，不用再點按鈕
   const fetchTemplates = async () => {
-    const snap = await getDocs(collection(db, 'templates'));
-    setTemplatesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    try {
+      const snap = await getDocs(collection(db, 'templates'));
+      if (snap.empty) {
+        const newTemplates = [];
+        for (const [name, comms] of Object.entries(defaultPresets)) {
+          const docRef = await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() });
+          newTemplates.push({ id: docRef.id, name: name, commissions: comms });
+        }
+        setTemplatesList(newTemplates);
+        toast.success("已自動為您載入 A~F 級預設模板！");
+      } else {
+        setTemplatesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
+    } catch(e) { console.error(e); }
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
     setLoading(true);
     try {
-      // 🚫 經理防護：防堵 API 層級修改機密
       if (['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin') {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
@@ -159,15 +149,9 @@ export default function AdminManagePage() {
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
-  // 🟢 修復點：點擊修改時，如果資料庫沒存過 commissions，就抓取對應職級的模板
   const startEdit = (item) => {
     setEditingId(item.id);
-    const itemGrade = item.grade || 'A';
-    setFormData({ 
-      ...initialForm, 
-      ...item, 
-      commissions: item.commissions || commissionTemplates[itemGrade] || commissionTemplates['A'] 
-    });
+    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -178,7 +162,6 @@ export default function AdminManagePage() {
     if (activeTab === 'templates') fetchTemplates();
   };
 
-  // 🟢 從資料庫模板套用數值
   const applyTemplate = (templateId) => {
     const selectedTemplate = templatesList.find(t => t.id === templateId);
     if (selectedTemplate) {
@@ -193,7 +176,6 @@ export default function AdminManagePage() {
     setFormData({ ...formData, commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
   };
 
-  // 🟢 獨立出來的拆帳矩陣 UI 元件 (給 Templates 和 Staff 共用)
   const renderMatrixEditor = () => (
     <div className="col-span-2 pt-6 border-t border-gray-800">
       <div className="flex justify-between items-center mb-4">
@@ -268,7 +250,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -276,7 +257,6 @@ export default function AdminManagePage() {
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
-                {/* 🟢 動態抽成模板設定 */}
                 {activeTab === 'templates' && (
                   <>
                     <div className="space-y-2 col-span-2">
@@ -394,7 +374,6 @@ export default function AdminManagePage() {
             )}
           </div>
 
-          {/* 列表區 */}
           {activeTab !== 'settings' && (!['staff', 'templates'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
@@ -412,7 +391,6 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
-                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
                         {activeTab === 'staff' && item.templateId && (
                           <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
                             已套用模板
