@@ -12,8 +12,8 @@ export default function SmartPOS() {
   
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
-  const [staff, setStaff] = useState([]); // 🟢 將合併 CMS 與 User 的髮型師名單
-  const [services, setServices] = useState([]); // 🟢 將合併純服務與套票
+  const [staff, setStaff] = useState([]); 
+  const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
@@ -58,25 +58,24 @@ export default function SmartPOS() {
   }, []);
 
   const fetchBasicData = async () => {
+    // 🟢 防雷裝甲：即使某個 collection 權限不足報錯，也不會讓整個 POS 崩潰空白
+    const safeGet = async (colName) => {
+      try { return await getDocs(collection(db, colName)); } 
+      catch (e) { console.error(`Error fetching ${colName}:`, e); return { docs: [] }; }
+    };
+
     const [sSnap, svSnap, tSnap, pSnap, setSnap, uSnap] = await Promise.all([
-      getDocs(collection(db, 'staff')), 
-      getDocs(collection(db, 'services')),
-      getDocs(collection(db, 'tiers')),
-      getDocs(collection(db, 'packages')),
-      getDocs(collection(db, 'settings')),
-      getDocs(collection(db, 'users')) // 🟢 新增抓取 users 集合
+      safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('users')
     ]);
     
-    // 🟢 1. 完美合併髮型師名單
     const cmsStaff = sSnap.docs.map(d => d.data().name).filter(Boolean);
     const userStaff = uSnap.docs.map(d => d.data()).filter(u => ['staff', 'manager', 'admin'].includes(u.role) && u.name).map(u => u.name);
-    setStaff([...new Set([...cmsStaff, ...userStaff])]); // 聯集並去重
+    setStaff([...new Set([...cmsStaff, ...userStaff])]); 
 
-    // 🟢 2. 完美合併服務與套票菜單
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    setServices([...svData, ...pkData]); // 合併，讓下拉選單都能選到
-    setPackages(pkData); // 保留一份獨立的 packages 給「售賣套票」使用
+    setServices([...svData, ...pkData]); 
+    setPackages(pkData); 
     
     const tData = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     tData.sort((a, b) => Number(b.threshold) - Number(a.threshold)); 
@@ -357,7 +356,6 @@ export default function SmartPOS() {
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* 左側：報到與預約 */}
         <div className="lg:col-span-4 space-y-8">
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
@@ -405,7 +403,6 @@ export default function SmartPOS() {
           </div>
         </div>
 
-        {/* 中間：現場服務動態 */}
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">現場服務動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -479,7 +476,6 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 門市收款 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -494,7 +490,6 @@ export default function SmartPOS() {
             {topUpUser && (
               <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
                 
-                {/* 雙分頁按鈕 */}
                 <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
                   <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值 T-Dollar</button>
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
@@ -586,7 +581,6 @@ export default function SmartPOS() {
                 </div>
               </div>
 
-              {/* 選擇結帳方式 */}
               {checkoutSession.userId && (
                 <div className="flex gap-2 p-1 bg-black rounded-xl border border-white/5 mt-4">
                   <button type="button" onClick={() => setCheckoutMethod('tdollar')} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-colors ${checkoutMethod === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>扣減餘額</button>
