@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
 import { collection, query, where, getDocs, doc, runTransaction, onSnapshot, addDoc, deleteDoc, getDoc } from 'firebase/firestore';
-import { onAuthStateChanged, signOut } from 'firebase/auth'; // 🟢 引入 signOut
+import { onAuthStateChanged, signOut } from 'firebase/auth'; 
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
@@ -86,7 +86,6 @@ export default function SmartPOS() {
       setShowBranchModal(true);
     }
 
-    // 🟢 效能優化：不再下載所有 Users！只精準下載內部員工
     try {
       const qStaff = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
       const uSnap = await getDocs(qStaff);
@@ -94,7 +93,7 @@ export default function SmartPOS() {
       const cmsStaff = sSnap.docs.map(d => d.data());
       setRawStaff([...cmsStaff, ...userStaff]); 
     } catch(e) {
-      setRawStaff(sSnap.docs.map(d => d.data())); // fallback
+      setRawStaff(sSnap.docs.map(d => d.data())); 
     }
 
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -110,12 +109,11 @@ export default function SmartPOS() {
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
 
-  // 🟢 徹底登出功能 (解決權限串線問題)
   const handleSignOut = async () => {
     if(!window.confirm("確定要登出並清除這台裝置的權限嗎？")) return;
     try {
       await signOut(auth);
-      localStorage.removeItem('pos_branch'); // 拔除本地記憶
+      localStorage.removeItem('pos_branch'); 
       setCurrentUserRole(null);
       router.push('/login');
     } catch(e) { toast.error("登出失敗"); }
@@ -128,9 +126,13 @@ export default function SmartPOS() {
     toast.success(`已切換至 ${branchName} 收銀模式`);
   };
 
+  // 🟢 智能過濾：根據當前門市，動態篩選出屬於該門市（或全線通用）的人員、服務、套票
   const displayStaff = [...new Set(
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
   )].filter(Boolean);
+
+  const displayServices = services.filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch);
+  const displayPackages = packages.filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch);
 
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
   const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
@@ -366,7 +368,6 @@ export default function SmartPOS() {
         </div>
 
         <div className="flex items-center gap-4">
-           {/* 🟢 增強登出按鈕：直接顯示在右上角 */}
            <button onClick={handleSignOut} className="text-gray-400 hover:text-white bg-white/5 hover:bg-red-500/20 hover:border-red-500/50 border border-white/10 px-4 py-3 rounded-xl text-xs font-bold transition-all uppercase tracking-widest flex items-center gap-2">
               <i className="fa-solid fa-power-off"></i> 安全登出
            </button>
@@ -397,7 +398,8 @@ export default function SmartPOS() {
                   </select>
                   <select value={walkInService} onChange={e => setWalkInService(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇項目</option>
-                    {services.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    {/* 🟢 修改：套用 displayServices 過濾 */}
+                    {displayServices.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                   </select>
                 </div>
                 <button onClick={() => handleCheckIn(phone)} className="w-full bg-white text-black py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-[#D4AF37] transition">
@@ -544,7 +546,8 @@ export default function SmartPOS() {
                     <label className="text-[10px] font-bold text-purple-400 uppercase tracking-widest ml-1">選擇套票方案</label>
                     <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-purple-500/50 p-4 rounded-2xl text-white outline-none focus:border-purple-400">
                       <option value="">請選擇...</option>
-                      {packages.map(p => <option key={p.id} value={p.id}>{p.name} - ${p.price} ({p.quantity}格)</option>)}
+                      {/* 🟢 修改：套用 displayPackages 過濾 */}
+                      {displayPackages.map(p => <option key={p.id} value={p.id}>{p.name} - ${p.price} ({p.quantity}格)</option>)}
                     </select>
                   </div>
                 )}
@@ -652,7 +655,8 @@ export default function SmartPOS() {
                 {addItemMode === 'pay' ? (
                   <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm focus:border-[#D4AF37]" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
                     <option value="">選擇服務或產品...</option>
-                    {services.map(s => <option key={s.id} value={s.name}>{s.name} (${s.price})</option>)}
+                    {/* 🟢 修改：套用 displayServices 過濾 */}
+                    {displayServices.map(s => <option key={s.id} value={s.name}>{s.name} (${s.price})</option>)}
                   </select>
                 ) : (
                   <>
