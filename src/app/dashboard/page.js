@@ -28,7 +28,7 @@ export default function DashboardPage() {
   const [showBooking, setShowBooking] = useState(false);
   const [rawStaff, setRawStaff] = useState([]); // 儲存包含門店資訊的完整員工名單
   const [branches, setBranches] = useState([]); // 儲存門店清單
-  const [services, setServices] = useState([]);
+  const [servicesData, setServicesData] = useState([]); // 🟢 儲存完整的服務資料 (含門店)
   
   // 🟢 預約表單加入 branch 欄位
   const [bookingForm, setBookingForm] = useState({ branch: '', date: '', time: '', stylist: '', service: '' });
@@ -100,9 +100,9 @@ export default function DashboardPage() {
       getDocs(collection(db, 'branches')) // 🟢 抓取門店資料
     ]);
     
-    // 🟢 儲存原始員工物件，包含他們所屬的 branch
+    // 🟢 儲存原始員工與服務物件，包含他們所屬的 branch
     setRawStaff(sSnap.docs.map(d => d.data()));
-    setServices(svSnap.docs.map(d => d.data().name));
+    setServicesData(svSnap.docs.map(d => d.data()));
     setRewardsList(rSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     setBranches(bSnap.docs.map(d => d.data().name));
     
@@ -193,9 +193,12 @@ export default function DashboardPage() {
 
   const activePackages = Object.entries(packageBalances).filter(([_, grids]) => grids > 0);
 
-  // 🟢 動態過濾：依據客人選擇的門市，只顯示該門市與跨店支援的髮型師
+  // 🟢 動態過濾：依據客人選擇的門市，只顯示該門市與跨店支援的髮型師及服務
   const availableStylists = bookingForm.branch 
     ? [...new Set(rawStaff.filter(s => s.branch === bookingForm.branch || s.branch === 'ALL').map(s => s.name))]
+    : [];
+  const availableServices = bookingForm.branch 
+    ? [...new Set(servicesData.filter(s => !s.branch || s.branch === bookingForm.branch || s.branch === 'ALL').map(s => s.name))]
     : [];
 
   return (
@@ -266,7 +269,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* 我的預約 (可選：新增顯示門市) */}
+        {/* 我的預約 */}
         {myAppointments.length > 0 && (
           <div className="bg-[#121212] rounded-[32px] p-6 border border-white/5 relative overflow-hidden">
              <div className="absolute top-0 right-0 w-16 h-16 bg-[#D4AF37]/5 rounded-bl-[60px] -z-10"></div>
@@ -414,7 +417,7 @@ export default function DashboardPage() {
 
       </main>
 
-      {/* 🟢 Modal 組件：預約系統更新 */}
+      {/* Modal 組件：預約系統更新 */}
       {showBooking && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-xl">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-white/10 relative shadow-2xl">
@@ -430,7 +433,7 @@ export default function DashboardPage() {
                   required 
                   className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" 
                   value={bookingForm.branch} 
-                  onChange={e => setBookingForm({...bookingForm, branch: e.target.value, stylist: '', time: ''})} // 門市變更時，清空設計師與時間
+                  onChange={e => setBookingForm({...bookingForm, branch: e.target.value, stylist: '', time: '', service: ''})} 
                 >
                   <option value="">選擇門市...</option>
                   {branches.map(b => <option key={b} value={b}>{b}</option>)}
@@ -471,11 +474,12 @@ export default function DashboardPage() {
               )}
 
               {/* 第四步：服務項目 */}
-              <div className="space-y-2 pt-2">
+              <div className={`space-y-2 pt-2 transition-opacity ${!bookingForm.branch ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">4. 服務項目</label>
-                <select required className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" value={bookingForm.service} onChange={e => setBookingForm({...bookingForm, service: e.target.value})}>
+                <select required disabled={!bookingForm.branch} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-sm outline-none focus:border-[#D4AF37]" value={bookingForm.service} onChange={e => setBookingForm({...bookingForm, service: e.target.value})}>
                   <option value="">選擇服務項目...</option>
-                  {services.map(s => <option key={s} value={s}>{s}</option>)}
+                  {/* 🟢 動態顯示該門店專屬與跨店通用的服務 */}
+                  {availableServices.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
 
@@ -497,7 +501,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 🟢 History Modal */}
+      {/* 🟢 History Modal (完整還原版) */}
       {showHistory && (
         <div className="fixed inset-0 bg-black/90 z-50 flex flex-col justify-end backdrop-blur-sm">
           <div className="bg-[#121212] w-full h-[85vh] rounded-t-[40px] p-8 overflow-hidden flex flex-col border-t border-white/10 shadow-[0_-10px_50px_rgba(0,0,0,0.5)]">
@@ -521,6 +525,7 @@ export default function DashboardPage() {
                     </p>
                     <p className="text-[10px] text-gray-500 mt-1 uppercase tracking-widest">{new Date(tx.timestamp).toLocaleString()}</p>
                     
+                    {/* 🟢 顯示積分 (包含升級贈送的積分) */}
                     {tx.pointsAdded > 0 && (
                       <p className="text-[10px] text-[#D4AF37] font-bold mt-1">
                         獲得 {tx.pointsAdded} 積分 
