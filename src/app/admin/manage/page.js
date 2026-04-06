@@ -293,7 +293,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -301,7 +300,6 @@ export default function AdminManagePage() {
             ) : (
               <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 
-                {/* 🟢 新增：門店管理模組 */}
                 {activeTab === 'branches' && (
                   <>
                     <div className="space-y-2 col-span-2">
@@ -341,6 +339,7 @@ export default function AdminManagePage() {
                   </div>
                 )}
 
+                {/* 🟢 服務加入門店綁定 */}
                 {activeTab === 'services' && (
                   <>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
@@ -360,15 +359,34 @@ export default function AdminManagePage() {
                         <option value="R2">R2 - 染燙化學類 (純抽成)</option>
                       </select>
                     </div>
+                    {/* 🟢 加入服務門店綁定 */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                        <option value="">-- 請選擇門店 --</option>
+                        <option value="ALL">🌐 全線通用 (所有門店)</option>
+                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                      </select>
+                    </div>
                   </>
                 )}
 
+                {/* 🟢 套票/產品加入門店綁定 */}
                 {activeTab === 'packages' && (
                   <>
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="免費贈送用請填 0" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" /></div>
-                    <div className="space-y-2 col-span-2">
+                    {/* 🟢 加入套票門店綁定 */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                        <option value="">-- 請選擇門店 --</option>
+                        <option value="ALL">🌐 全線通用 (所有門店)</option>
+                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
                         <option value="SCALP">SCALP - 頭皮/養護套票類</option>
@@ -425,7 +443,6 @@ export default function AdminManagePage() {
                       )}
                     </div>
                     
-                    {/* 🟢 擴充：髮型師綁定門店功能 */}
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
@@ -510,13 +527,14 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
+                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
                         {activeTab === 'staff' && item.templateId && (
                           <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
                             已套用模板
                           </span>
                         )}
-                        {/* 🟢 顯示綁定的門店標籤 */}
-                        {activeTab === 'staff' && item.branch && (
+                        {/* 🟢 服務、套票、員工 都會顯示門店綁定標籤 */}
+                        {['staff', 'services', 'packages'].includes(activeTab) && item.branch && (
                           <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
                             {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
                           </span>
