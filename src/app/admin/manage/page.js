@@ -13,7 +13,7 @@ export default function AdminManagePage() {
   const [categories, setCategories] = useState([]); 
   const [packagesList, setPackagesList] = useState([]); 
   const [templatesList, setTemplatesList] = useState([]); 
-  const [branchesList, setBranchesList] = useState([]); // 🟢 新增：儲存門店清單
+  const [branchesList, setBranchesList] = useState([]); 
   
   const [registeredStaff, setRegisteredStaff] = useState([]); 
   const [isCustomStaff, setIsCustomStaff] = useState(false);
@@ -45,7 +45,7 @@ export default function AdminManagePage() {
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', commissions: defaultCommissions, branch: '' // 🟢 新增 branch 欄位
+    commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: ''
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -55,7 +55,7 @@ export default function AdminManagePage() {
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } // 🟢 新增 branches 選單
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } 
   ];
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export default function AdminManagePage() {
 
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
-       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); // 🟢 加入 fetchBranches
+       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); 
     }
   }, [activeTab, currentUserRole]);
 
@@ -116,7 +116,6 @@ export default function AdminManagePage() {
     } catch(e) { console.error(e); }
   };
 
-  // 🟢 抓取門店資料
   const fetchBranches = async () => {
     try {
       const snap = await getDocs(collection(db, 'branches'));
@@ -166,7 +165,8 @@ export default function AdminManagePage() {
          toast.success("系統參數更新成功！");
       } else {
         if (editingId) {
-          await updateDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() });
+          // 🟢 防呆優化：使用 setDoc + merge: true，如果文件不小心被刪除了，會自動重新建立，而不會報錯崩潰！
+          await setDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() }, { merge: true });
           toast.success("更新成功！");
         } else {
           await addDoc(collection(db, activeTab), { ...formData, createdAt: new Date().toISOString() });
@@ -176,7 +176,7 @@ export default function AdminManagePage() {
       setFormData(initialForm); setEditingId(null); setIsCustomStaff(false); fetchData();
       if (activeTab === 'categories') fetchCategories();
       if (activeTab === 'templates') fetchTemplates();
-      if (activeTab === 'branches') fetchBranches(); // 🟢 儲存門店後更新選單
+      if (activeTab === 'branches') fetchBranches(); 
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
@@ -195,7 +195,18 @@ export default function AdminManagePage() {
   const handleDelete = async (id) => {
     if (['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
     if (!window.confirm("確定刪除？")) return;
-    await deleteDoc(doc(db, activeTab, id)); toast.success("已刪除"); fetchData();
+    
+    await deleteDoc(doc(db, activeTab, id)); 
+    toast.success("已刪除"); 
+    
+    // 🟢 防呆優化：如果刪除的是正在編輯的項目，自動清空表單，防止「幽靈寫入」
+    if (editingId === id) {
+      setEditingId(null);
+      setFormData(initialForm);
+      setIsCustomStaff(false);
+    }
+    
+    fetchData();
     if (activeTab === 'templates') fetchTemplates();
     if (activeTab === 'branches') fetchBranches();
   };
@@ -203,15 +214,15 @@ export default function AdminManagePage() {
   const applyTemplate = (templateId) => {
     const selectedTemplate = templatesList.find(t => t.id === templateId);
     if (selectedTemplate) {
-      setFormData({ ...formData, templateId: templateId, commissions: selectedTemplate.commissions });
-      toast.success(`已載入【${selectedTemplate.name}】拆帳模板`);
+      setFormData({ ...formData, templateId: templateId, templateName: selectedTemplate.name, commissions: selectedTemplate.commissions });
+      toast.success(`已載入【${selectedTemplate.name}】數值！請務必點擊下方「儲存」按鈕！`);
     } else { 
-      setFormData({ ...formData, templateId: templateId }); 
+      setFormData({ ...formData, templateId: templateId, templateName: '' }); 
     }
   };
 
   const updateCommission = (code, field, value) => {
-    setFormData({ ...formData, commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
+    setFormData({ ...formData, templateName: '', commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
   };
 
   const renderMatrixEditor = () => (
@@ -293,6 +304,7 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
+            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -317,7 +329,7 @@ export default function AdminManagePage() {
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
                         <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動為您寫入包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
                         強制更新 A~F 模板
@@ -345,27 +357,26 @@ export default function AdminManagePage() {
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (HKD)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required /></div>
                     <div className="space-y-2">
+                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                        <option value="">-- 請選擇門店 --</option>
+                        <option value="ALL">🌐 全線通用 (所有門店)</option>
+                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
                       <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
                       <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
                         {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                       </select>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
                         <option value="W1">W1 - 洗剪吹類 (需扣耗材)</option>
                         <option value="W2">W2 - 洗剪吹類 (純抽成)</option>
                         <option value="R1">R1 - 染燙化學類 (需扣耗材)</option>
                         <option value="R2">R2 - 染燙化學類 (純抽成)</option>
-                      </select>
-                    </div>
-                    {/* 🟢 加入服務門店綁定 */}
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
-                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option>
-                        <option value="ALL">🌐 全線通用 (所有門店)</option>
-                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </div>
                   </>
@@ -377,7 +388,6 @@ export default function AdminManagePage() {
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="免費贈送用請填 0" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label><input type="number" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" /></div>
-                    {/* 🟢 加入套票門店綁定 */}
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
@@ -453,11 +463,17 @@ export default function AdminManagePage() {
                     </div>
 
                     <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">套用抽成模板</label>
+                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">📥 載入預設抽成模板 (載入後可微調)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
-                        <option value="">-- 手動自訂比例 --</option>
+                        <option value="">-- 保持原數值或自訂比例 --</option>
                         {templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
+                      {formData.templateName && (
+                        <p className="text-xs text-green-400 mt-2 bg-green-500/10 p-2 rounded-lg border border-green-500/20">
+                          ✅ <strong>目前已載入：{formData.templateName} 數值</strong> <br/>
+                          (確認無誤後，請務必點擊最下方「儲存」按鈕！)
+                        </p>
+                      )}
                     </div>
 
                     {renderMatrixEditor()}
