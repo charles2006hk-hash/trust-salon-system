@@ -2,18 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, query, where, getDocs, doc, runTransaction, onSnapshot, addDoc, deleteDoc, getDoc } from 'firebase/firestore'; // 🟢 補上 getDoc
-import { onAuthStateChanged } from 'firebase/auth';
+import { collection, query, where, getDocs, doc, runTransaction, onSnapshot, addDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signOut } from 'firebase/auth'; // 🟢 引入 signOut
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function SmartPOS() {
   const router = useRouter();
-  
-  // 🟢 權限狀態
   const [currentUserRole, setCurrentUserRole] = useState(null);
-
-  // 🟢 跨店連鎖核心狀態
   const [branches, setBranches] = useState([]);
   const [currentBranch, setCurrentBranch] = useState('');
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -50,12 +46,9 @@ export default function SmartPOS() {
       if (!user) {
         router.push('/login'); 
       } else {
-        // 🟢 抓取目前登入者的權限 Role
         try {
           const docSnap = await getDoc(doc(db, 'users', user.uid));
-          if (docSnap.exists()) {
-            setCurrentUserRole(docSnap.data().role);
-          }
+          if (docSnap.exists()) setCurrentUserRole(docSnap.data().role);
         } catch(e) { console.error(e); }
       }
     });
@@ -80,7 +73,7 @@ export default function SmartPOS() {
   const fetchBasicData = async () => {
     const safeGet = async (colName) => {
       try { return await getDocs(collection(db, colName)); } 
-      catch (e) { console.error(`Error fetching ${colName}:`, e); return { docs: [] }; }
+      catch (e) { return { docs: [] }; }
     };
 
     const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap] = await Promise.all([
@@ -93,7 +86,16 @@ export default function SmartPOS() {
       setShowBranchModal(true);
     }
 
-    setRawStaff(sSnap.docs.map(d => d.data())); 
+    // 🟢 效能優化：不再下載所有 Users！只精準下載內部員工
+    try {
+      const qStaff = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
+      const uSnap = await getDocs(qStaff);
+      const userStaff = uSnap.docs.map(d => d.data());
+      const cmsStaff = sSnap.docs.map(d => d.data());
+      setRawStaff([...cmsStaff, ...userStaff]); 
+    } catch(e) {
+      setRawStaff(sSnap.docs.map(d => d.data())); // fallback
+    }
 
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -108,6 +110,17 @@ export default function SmartPOS() {
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
   };
 
+  // 🟢 徹底登出功能 (解決權限串線問題)
+  const handleSignOut = async () => {
+    if(!window.confirm("確定要登出並清除這台裝置的權限嗎？")) return;
+    try {
+      await signOut(auth);
+      localStorage.removeItem('pos_branch'); // 拔除本地記憶
+      setCurrentUserRole(null);
+      router.push('/login');
+    } catch(e) { toast.error("登出失敗"); }
+  };
+
   const selectBranch = (branchName) => {
     setCurrentBranch(branchName);
     localStorage.setItem('pos_branch', branchName);
@@ -117,7 +130,7 @@ export default function SmartPOS() {
 
   const displayStaff = [...new Set(
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
-  )];
+  )].filter(Boolean);
 
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
   const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
@@ -132,12 +145,7 @@ export default function SmartPOS() {
     const formattedPhone = phoneNum.startsWith('+') ? phoneNum : `+852${phoneNum}`;
     try {
       await addDoc(collection(db, "active_sessions"), {
-        phoneNumber: formattedPhone, 
-        stylist: bookingData?.stylist || walkInStylist, 
-        service: bookingData?.service || walkInService, 
-        startTime: new Date().toISOString(), 
-        bookingId: bookingData?.id || null,
-        branch: currentBranch 
+        phoneNumber: formattedPhone, stylist: bookingData?.stylist || walkInStylist, service: bookingData?.service || walkInService, startTime: new Date().toISOString(), bookingId: bookingData?.id || null, branch: currentBranch 
       });
       if (bookingData?.id) { const appRef = doc(db, "appointments", bookingData.id); await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); }
       toast.success(`${formattedPhone} 已入店服務`);
@@ -317,7 +325,6 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
-      {/* 🟢 強制門店選擇 Modal */}
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
            <div className="bg-[#121212] w-full max-w-md rounded-[40px] p-10 border border-[#D4AF37]/50 shadow-[0_0_50px_rgba(212,175,55,0.2)] text-center animate-fade-in">
@@ -350,7 +357,6 @@ export default function SmartPOS() {
             <span className="bg-blue-600/20 border border-blue-500/50 text-blue-400 px-3 py-1 rounded-md text-xs font-bold uppercase tracking-widest">
               <i className="fa-solid fa-location-dot mr-1"></i> {currentBranch || '未選門市'}
             </span>
-            {/* 🟢 權限隔離：只有老闆與經理才能看到這顆按鈕，重新呼叫 Modal 換店 */}
             {['admin', 'manager'].includes(currentUserRole) && (
               <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">
                 切換門市
@@ -359,20 +365,20 @@ export default function SmartPOS() {
           </div>
         </div>
 
-        <div className="flex gap-4">
+        <div className="flex items-center gap-4">
+           {/* 🟢 增強登出按鈕：直接顯示在右上角 */}
+           <button onClick={handleSignOut} className="text-gray-400 hover:text-white bg-white/5 hover:bg-red-500/20 hover:border-red-500/50 border border-white/10 px-4 py-3 rounded-xl text-xs font-bold transition-all uppercase tracking-widest flex items-center gap-2">
+              <i className="fa-solid fa-power-off"></i> 安全登出
+           </button>
+
            <button onClick={() => setShowTopUpModal(true)} className="bg-green-600 hover:bg-green-500 text-white px-6 py-3 rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-green-900/50">
              <i className="fa-solid fa-hand-holding-dollar"></i> 客席增值 / 售票
            </button>
-           <div className="bg-white/5 border border-white/10 px-6 py-3 rounded-xl flex items-center gap-3 hidden md:flex">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-sm font-bold tracking-widest uppercase">Online</span>
-           </div>
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* 左側：報到與預約 */}
         <div className="lg:col-span-4 space-y-8">
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
@@ -420,7 +426,6 @@ export default function SmartPOS() {
           </div>
         </div>
 
-        {/* 中間：現場服務動態 */}
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">本門市現場動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -494,7 +499,6 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 門市收款 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -565,7 +569,6 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 購物車綜合結帳彈窗 */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
@@ -590,7 +593,6 @@ export default function SmartPOS() {
               </div>
             </div>
 
-            {/* 購物車清單展示區 */}
             <div className="space-y-3 mb-6 bg-white/5 p-4 rounded-2xl border border-white/5">
                <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-2 border-b border-white/10 pb-2">
                  已加入的消費清單 ({cart.length})
@@ -622,7 +624,6 @@ export default function SmartPOS() {
                  </div>
                ))}
                
-               {/* 總計結算顯示 */}
                <div className="pt-4 border-t border-white/10 flex justify-between items-end">
                  <div className="text-purple-400 text-xs font-bold">
                     {cart.filter(i => i.type === 'deduct').length > 0 && `共扣除 ${cart.filter(i => i.type === 'deduct').reduce((a, b) => a + b.grids, 0)} 格`}
@@ -634,7 +635,6 @@ export default function SmartPOS() {
                </div>
             </div>
 
-            {/* 新增加購區塊 */}
             <div className="bg-black border border-dashed border-gray-700 p-4 rounded-2xl mb-6">
               <h4 className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-3">➕ 繼續加購項目</h4>
               <div className="flex gap-2 mb-3">
