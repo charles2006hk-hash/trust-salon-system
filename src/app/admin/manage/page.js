@@ -45,7 +45,8 @@ export default function AdminManagePage() {
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: ''
+    commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
+    phoneNumber: '+852'
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -55,7 +56,7 @@ export default function AdminManagePage() {
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } 
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
   ];
 
   useEffect(() => {
@@ -128,7 +129,7 @@ export default function AdminManagePage() {
       const snap = await getDocs(collection(db, 'users'));
       const staffNames = snap.docs
         .map(doc => doc.data())
-        .filter(u => ['staff', 'manager', 'admin'].includes(u.role) && u.name)
+        .filter(u => ['staff', 'manager'].includes(u.role) && u.name)
         .map(u => u.name);
       setRegisteredStaff([...new Set(staffNames)]);
     } catch (e) { console.error(e); }
@@ -165,7 +166,6 @@ export default function AdminManagePage() {
          toast.success("系統參數更新成功！");
       } else {
         if (editingId) {
-          // 🟢 防呆優化：使用 setDoc + merge: true，如果文件不小心被刪除了，會自動重新建立，而不會報錯崩潰！
           await setDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() }, { merge: true });
           toast.success("更新成功！");
         } else {
@@ -182,7 +182,7 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
-    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions });
+    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions, phoneNumber: item.phoneNumber || '+852' });
     
     if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') {
       setIsCustomStaff(true);
@@ -199,7 +199,6 @@ export default function AdminManagePage() {
     await deleteDoc(doc(db, activeTab, id)); 
     toast.success("已刪除"); 
     
-    // 🟢 防呆優化：如果刪除的是正在編輯的項目，自動清空表單，防止「幽靈寫入」
     if (editingId === id) {
       setEditingId(null);
       setFormData(initialForm);
@@ -351,7 +350,6 @@ export default function AdminManagePage() {
                   </div>
                 )}
 
-                {/* 🟢 服務加入門店綁定 */}
                 {activeTab === 'services' && (
                   <>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
@@ -382,7 +380,6 @@ export default function AdminManagePage() {
                   </>
                 )}
 
-                {/* 🟢 套票/產品加入門店綁定 */}
                 {activeTab === 'packages' && (
                   <>
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
@@ -453,6 +450,18 @@ export default function AdminManagePage() {
                       )}
                     </div>
                     
+                    <div className="space-y-2">
+                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">聯絡電話 (Phone)</label>
+                      <input 
+                        type="text" 
+                        className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
+                        value={formData.phoneNumber} 
+                        onChange={e => setFormData({...formData, phoneNumber: e.target.value})} 
+                        required 
+                        placeholder="如: +85298765432" 
+                      />
+                    </div>
+
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
@@ -543,16 +552,22 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
-                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
-                        {activeTab === 'staff' && item.templateId && (
-                          <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
-                            已套用模板
+                        {/* 🟢 顯示真實套用的模板名稱 (如: A 級師傅)，若無則顯示自訂比例 */}
+                        {activeTab === 'staff' && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.templateName || item.templateId ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
+                            {item.templateName ? `📄 ${item.templateName}` : item.templateId ? '📄 已套用模板' : '⚙️ 自訂比例'}
                           </span>
                         )}
-                        {/* 🟢 服務、套票、員工 都會顯示門店綁定標籤 */}
+                        {/* 🟢 顯示綁定的門店標籤 */}
                         {['staff', 'services', 'packages'].includes(activeTab) && item.branch && (
                           <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
                             {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
+                          </span>
+                        )}
+                        {/* 🟢 顯示人員聯絡電話 */}
+                        {activeTab === 'staff' && item.phoneNumber && (
+                          <span className="text-[10px] bg-gray-800 text-gray-400 px-2 py-0.5 rounded border border-gray-700 font-mono tracking-widest">
+                            📞 {item.phoneNumber}
                           </span>
                         )}
                       </div>
