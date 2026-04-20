@@ -22,7 +22,7 @@ export default function SmartPOS() {
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
 
-  const [phone, setPhone] = useState('+852'); // 🟢 預設帶出區碼
+  const [phone, setPhone] = useState('+852');
   const [walkInStylist, setWalkInStylist] = useState('');
   const [walkInService, setWalkInService] = useState('');
 
@@ -40,6 +40,9 @@ export default function SmartPOS() {
   const [topUpUser, setTopUpUser] = useState(null);
   const [topUpTab, setTopUpTab] = useState('tdollar'); 
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
+
+  // 🟢 全域智能虛擬數字鍵盤狀態
+  const [numpadConfig, setNumpadConfig] = useState({ isOpen: false, title: '', value: '', onConfirm: null, isPhone: false });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => { 
@@ -194,7 +197,6 @@ export default function SmartPOS() {
 
   const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
 
-  // 🟢 支援自訂折扣：更新購物車內項目的金額
   const updateCartItemPrice = (id, newPrice) => {
     setCart(cart.map(item => item.id === id ? { ...item, finalPrice: newPrice } : item));
   };
@@ -327,18 +329,55 @@ export default function SmartPOS() {
     } catch (error) { toast.error("操作失敗"); }
   };
 
-  // 🟢 內建 POS 小鍵盤組件
+  // 🟢 智能虛擬鍵盤觸發器
+  const openNumpad = (title, initialValue, onConfirm, isPhone = false) => {
+    setNumpadConfig({ isOpen: true, title, value: initialValue.toString(), onConfirm, isPhone });
+  };
+
   const handleKeypadPress = (key, stateValue, setState) => {
-    if (key === 'C') {
-      setState(stateValue.length > 4 ? stateValue.slice(0, -1) : '+852');
-    } else {
-      setState(stateValue + key);
-    }
+    if (key === 'C') { setState(stateValue.length > 4 ? stateValue.slice(0, -1) : '+852'); } 
+    else { setState(stateValue + key); }
   };
 
   return (
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
+
+      {/* 🟢 全域智能虛擬數字盤 (Smart Numpad Modal) */}
+      {numpadConfig.isOpen && (
+        <div className="fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6 backdrop-blur-md">
+          <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.2)] flex flex-col animate-fade-in">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-[#D4AF37] font-bold tracking-widest uppercase text-xs">{numpadConfig.title}</h3>
+              <button onClick={() => setNumpadConfig({...numpadConfig, isOpen: false})} className="text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-2xl"></i></button>
+            </div>
+            
+            <div className="bg-black border border-white/10 rounded-2xl p-6 mb-8 text-right text-4xl font-black text-white tracking-tighter h-20 flex items-center justify-end overflow-hidden shadow-inner">
+              {numpadConfig.value || <span className="text-gray-700">0</span>}
+            </div>
+            
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              {['1','2','3','4','5','6','7','8','9', numpadConfig.isPhone ? '+' : '.', '0', 'Del'].map(key => (
+                <button 
+                  key={key} 
+                  onClick={() => {
+                    if (key === 'Del') setNumpadConfig(prev => ({...prev, value: prev.value.slice(0, -1)}));
+                    else setNumpadConfig(prev => ({...prev, value: prev.value + key}));
+                  }} 
+                  className="bg-white/5 hover:bg-[#D4AF37] hover:text-black text-white font-bold py-6 rounded-2xl text-2xl transition-all active:scale-95 shadow-lg border border-white/5"
+                >
+                  {key === 'Del' ? <i className="fa-solid fa-delete-left text-red-400"></i> : key}
+                </button>
+              ))}
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <button onClick={() => setNumpadConfig(prev => ({...prev, value: numpadConfig.isPhone ? '+852' : ''}))} className="bg-gray-800 text-white font-bold py-5 rounded-2xl active:scale-95 transition-all text-sm tracking-widest uppercase">清除</button>
+              <button onClick={() => { numpadConfig.onConfirm(numpadConfig.value); setNumpadConfig({...numpadConfig, isOpen: false}); }} className="bg-[#D4AF37] text-black font-black py-5 rounded-2xl active:scale-95 transition-all text-sm tracking-widest uppercase shadow-[0_0_15px_rgba(212,175,55,0.4)]">確認</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
@@ -402,7 +441,7 @@ export default function SmartPOS() {
                     value={phone} 
                     onChange={e => setPhone(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    inputMode="numeric" // 🟢 iPad 會彈出數字鍵盤
+                    inputMode="none" // 🟢 iPad 極致優化：阻擋原生鍵盤彈出，改用內建實體鍵盤
                     className="w-full bg-black border border-white/10 p-4 rounded-2xl text-xl font-bold text-white outline-none focus:border-[#D4AF37] placeholder:text-gray-700"
                     placeholder="請輸入電話..."
                 />
@@ -419,7 +458,6 @@ export default function SmartPOS() {
                       {key === 'C' ? <i className="fa-solid fa-delete-left text-red-400"></i> : key}
                     </button>
                   ))}
-                  {/* 第 12 個按鈕直接作為「送出報到」 */}
                   <button onClick={() => handleCheckIn(phone)} className="bg-[#D4AF37] text-black font-black py-3 rounded-xl transition-all shadow-xl active:scale-95">
                     GO <i className="fa-solid fa-arrow-right ml-1"></i>
                   </button>
@@ -538,7 +576,13 @@ export default function SmartPOS() {
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
             
             <div className="flex gap-2 mb-6">
-              <input type="tel" inputMode="numeric" value={topUpPhone} onChange={e => setTopUpPhone(e.target.value)} placeholder="輸入電話..." className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" />
+              {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
+              <div 
+                onClick={() => openNumpad('搜尋客人電話', topUpPhone, setTopUpPhone, true)}
+                className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white cursor-pointer flex items-center font-bold"
+              >
+                {topUpPhone || <span className="text-gray-600 font-normal">點擊輸入電話...</span>}
+              </div>
               <button onClick={searchTopUpUser} className="bg-white/10 hover:bg-white/20 text-white px-6 rounded-2xl font-bold transition">搜尋</button>
             </div>
 
@@ -569,7 +613,13 @@ export default function SmartPOS() {
                         <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
                       ))}
                     </div>
-                    <input type="number" inputMode="decimal" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
+                    {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
+                    <div 
+                      onClick={() => openNumpad('輸入充值金額 (HKD)', topUpForm.amount, val => setTopUpForm({...topUpForm, amount: val}))}
+                      className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white cursor-pointer flex items-center h-[58px] font-bold"
+                    >
+                      {topUpForm.amount ? `$ ${topUpForm.amount}` : <span className="text-gray-600 font-normal">點擊輸入金額...</span>}
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-2 animate-fade-in">
@@ -643,25 +693,21 @@ export default function SmartPOS() {
                    </div>
                    <div className="flex items-center gap-4">
                      <div className="text-right">
-                       {/* 🟢 核心功能：可以直接修改金額！支援自訂折扣！ */}
+                       {/* 🟢 點擊呼叫虛擬數字鍵盤 (支援自訂打折) */}
                        {item.type === 'pay' ? (
-                          <div className="flex items-center justify-end gap-1">
+                          <div 
+                            onClick={() => openNumpad(`修改金額 - ${item.name}`, item.finalPrice, val => updateCartItemPrice(item.id, Number(val)))}
+                            className="flex items-center justify-end gap-1 cursor-pointer hover:bg-white/5 p-1 rounded-lg transition-colors border-b border-dashed border-[#D4AF37]/50"
+                            title="點擊修改金額給予額外折扣"
+                          >
                             <span className="text-[#D4AF37] font-bold">$</span>
-                            <input 
-                              type="number" 
-                              inputMode="decimal"
-                              min="0"
-                              className="w-20 bg-black border border-[#D4AF37]/50 text-[#D4AF37] font-bold text-right p-1 rounded-lg outline-none focus:border-[#D4AF37] transition-colors" 
-                              value={item.finalPrice} 
-                              onChange={(e) => updateCartItemPrice(item.id, Number(e.target.value))} 
-                              title="可手動修改金額給予額外折扣"
-                            />
+                            <span className="text-[#D4AF37] font-bold text-lg">{item.finalPrice}</span>
                           </div>
                        ) : (
                           <p className="text-purple-400 font-bold">-{item.grids} 格</p>
                        )}
                      </div>
-                     <button type="button" onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-full bg-red-900/30 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex justify-center items-center">
+                     <button type="button" onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-full bg-red-900/30 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex justify-center items-center ml-2">
                        <i className="fa-solid fa-trash text-xs"></i>
                      </button>
                    </div>
@@ -704,9 +750,15 @@ export default function SmartPOS() {
                       <option value="">選擇客人可用的套票...</option>
                       {Object.entries(checkoutSession.packageBalances || {}).filter(([_, g]) => g > 0).map(([n, g]) => <option key={n} value={n}>{n} (剩餘 {g} 格)</option>)}
                     </select>
+                    {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
                     <div className="col-span-2 flex items-center gap-3">
                        <span className="text-xs text-gray-400 w-16">扣除數量</span>
-                       <input type="number" inputMode="decimal" min="1" className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm text-center font-bold" value={newItemGrids} onChange={e => setNewItemGrids(e.target.value)} />
+                       <div 
+                          onClick={() => openNumpad('扣除數量', newItemGrids, val => setNewItemGrids(Number(val) || 1))}
+                          className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white text-center font-bold cursor-pointer h-12 flex items-center justify-center"
+                       >
+                          {newItemGrids}
+                       </div>
                     </div>
                   </>
                 )}
@@ -735,8 +787,8 @@ export default function SmartPOS() {
       )}
 
       <style jsx>{`
-        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.2s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
     </div>
   );
