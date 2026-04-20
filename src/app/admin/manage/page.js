@@ -25,6 +25,15 @@ export default function AdminManagePage() {
   const [editingId, setEditingId] = useState(null);
   const router = useRouter();
 
+  // 🟢 新增：預設標籤名稱對照表
+  const defaultLabels = {
+    W1: '洗剪吹類 (需扣耗材)', W2: '洗剪吹類 (純抽成)', W3: '洗剪吹類 (高階)', 
+    R1: '染燙化學類 (需扣耗材)', R2: '染燙化學類 (純抽成)', 
+    P1: '產品實體 (預設 A級抽 20%)', P2: '產品實體 (預設 A級抽 25%)', P3: '產品實體 (預設 A級抽 18%)', P4: '產品實體 (預設 A級抽 15%)', P5: '產品實體 (預設 A級抽 35%)', 
+    SCALP: '頭皮/養護套票類'
+  };
+  const [globalLabels, setGlobalLabels] = useState(defaultLabels);
+
   const defaultCommissions = {
     W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
     R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 },
@@ -46,7 +55,7 @@ export default function AdminManagePage() {
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
-    phoneNumber: '+852'
+    phoneNumber: '+852', commissionLabels: defaultLabels // 🟢 加入表單預設結構
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -56,7 +65,7 @@ export default function AdminManagePage() {
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] }
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } 
   ];
 
   useEffect(() => {
@@ -80,17 +89,36 @@ export default function AdminManagePage() {
 
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
-       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); 
+       fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); fetchSettingsConfig();
     }
   }, [activeTab, currentUserRole]);
+
+  // 🟢 抓取自訂的標籤名稱
+  const fetchSettingsConfig = async () => {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'global_config'));
+      if (snap.exists() && snap.data().commissionLabels) {
+        setGlobalLabels(snap.data().commissionLabels);
+      }
+    } catch(e) {}
+  };
 
   const fetchData = async () => {
     setLoading(true);
     try {
       const querySnapshot = await getDocs(collection(db, activeTab));
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      
       if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
-      if (activeTab === 'settings' && data.length === 0) setFormData({...initialForm, validityDays: 365, name: '全局系統參數'});
+      
+      if (activeTab === 'settings') {
+        const settingsDoc = data.find(d => d.id === 'global_config');
+        if (settingsDoc) {
+          setFormData({...initialForm, validityDays: settingsDoc.validityDays || 365, commissionLabels: settingsDoc.commissionLabels || defaultLabels});
+        } else {
+          setFormData({...initialForm, validityDays: 365, commissionLabels: defaultLabels, name: '全局系統參數'});
+        }
+      }
       setList(data);
     } catch(e) { console.error(e); }
     setLoading(false);
@@ -162,8 +190,13 @@ export default function AdminManagePage() {
       }
 
       if (activeTab === 'settings') {
-         await setDoc(doc(db, 'settings', 'global_config'), { validityDays: Number(formData.validityDays), updatedAt: new Date().toISOString() });
-         toast.success("系統參數更新成功！");
+         await setDoc(doc(db, 'settings', 'global_config'), { 
+           validityDays: Number(formData.validityDays), 
+           commissionLabels: formData.commissionLabels, // 🟢 儲存自訂標籤
+           updatedAt: new Date().toISOString() 
+         }, { merge: true });
+         setGlobalLabels(formData.commissionLabels);
+         toast.success("系統參數與自訂標籤更新成功！");
       } else {
         if (editingId) {
           await setDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() }, { merge: true });
@@ -232,15 +265,11 @@ export default function AdminManagePage() {
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {['W1', 'W2', 'W3', 'R1', 'R2', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
+        {Object.keys(defaultCommissions).map(code => (
           <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-               <span>
-                 {code.startsWith('W') ? `${code} - 洗剪吹` : 
-                  code.startsWith('R') ? `${code} - 染燙化學` : 
-                  code.startsWith('P') ? `${code} - 產品實體` : 
-                  'SCALP - 頭皮套票'}
-               </span>
+               {/* 🟢 自動套用全域自訂標籤 */}
+               <span>{code} - {globalLabels[code] || defaultLabels[code]}</span>
              </div>
              <div className="flex items-center gap-2">
                <div className="flex-1 relative">
@@ -303,7 +332,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -344,10 +372,33 @@ export default function AdminManagePage() {
                 )}
 
                 {activeTab === 'settings' && (
-                  <div className="space-y-2 col-span-2">
-                    <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
-                    <input type="number" className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-xl text-white focus:border-[#D4AF37] outline-none text-xl font-black" value={formData.validityDays} onChange={e => setFormData({...formData, validityDays: e.target.value})} required />
-                  </div>
+                  <>
+                    <div className="space-y-2 col-span-2 mb-4">
+                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
+                      <input type="number" className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-xl text-white focus:border-[#D4AF37] outline-none text-xl font-black" value={formData.validityDays} onChange={e => setFormData({...formData, validityDays: e.target.value})} required />
+                    </div>
+                    
+                    {/* 🟢 加入：自訂拆帳標籤功能 */}
+                    <div className="col-span-2 pt-6 border-t border-gray-800">
+                      <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤名稱</h3>
+                      <p className="text-xs text-gray-400 mb-6">您可以自訂 W1~P5 標籤的顯示名稱，這不會影響歷史數據與底層計算，僅改變選單與列表的顯示文字。</p>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {Object.keys(defaultLabels).map(code => (
+                          <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5">
+                            <label className="text-[10px] font-bold text-gray-500 uppercase">{code} 標籤名稱</label>
+                            <input 
+                              type="text" 
+                              className="w-full bg-transparent border-b border-white/10 p-1 text-white outline-none text-sm focus:border-[#D4AF37] transition-colors" 
+                              value={formData.commissionLabels?.[code] || defaultLabels[code]} 
+                              onChange={e => setFormData({...formData, commissionLabels: {...formData.commissionLabels, [code]: e.target.value}})} 
+                              required 
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
                 )}
 
                 {activeTab === 'services' && (
@@ -371,10 +422,12 @@ export default function AdminManagePage() {
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        <option value="W1">W1 - 洗剪吹類 (需扣耗材)</option>
-                        <option value="W2">W2 - 洗剪吹類 (純抽成)</option>
-                        <option value="R1">R1 - 染燙化學類 (需扣耗材)</option>
-                        <option value="R2">R2 - 染燙化學類 (純抽成)</option>
+                        {/* 🟢 動態顯示自訂標籤名稱 */}
+                        <option value="W1">W1 - {globalLabels['W1'] || defaultLabels['W1']}</option>
+                        <option value="W2">W2 - {globalLabels['W2'] || defaultLabels['W2']}</option>
+                        <option value="W3">W3 - {globalLabels['W3'] || defaultLabels['W3']}</option>
+                        <option value="R1">R1 - {globalLabels['R1'] || defaultLabels['R1']}</option>
+                        <option value="R2">R2 - {globalLabels['R2'] || defaultLabels['R2']}</option>
                       </select>
                     </div>
                   </>
@@ -396,12 +449,13 @@ export default function AdminManagePage() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        <option value="SCALP">SCALP - 頭皮/養護套票類</option>
-                        <option value="P1">P1 - 產品實體 (預設 A級抽 20%)</option>
-                        <option value="P2">P2 - 產品實體 (預設 A級抽 25%)</option>
-                        <option value="P3">P3 - 產品實體 (預設 A級抽 18%)</option>
-                        <option value="P4">P4 - 產品實體 (預設 A級抽 15%)</option>
-                        <option value="P5">P5 - 產品實體 (預設 A級抽 35%)</option>
+                        {/* 🟢 動態顯示自訂標籤名稱 */}
+                        <option value="SCALP">SCALP - {globalLabels['SCALP'] || defaultLabels['SCALP']}</option>
+                        <option value="P1">P1 - {globalLabels['P1'] || defaultLabels['P1']}</option>
+                        <option value="P2">P2 - {globalLabels['P2'] || defaultLabels['P2']}</option>
+                        <option value="P3">P3 - {globalLabels['P3'] || defaultLabels['P3']}</option>
+                        <option value="P4">P4 - {globalLabels['P4'] || defaultLabels['P4']}</option>
+                        <option value="P5">P5 - {globalLabels['P5'] || defaultLabels['P5']}</option>
                       </select>
                     </div>
                   </>
@@ -552,10 +606,10 @@ export default function AdminManagePage() {
                             {item.commissionCode} 類
                           </span>
                         )}
-                        {/* 🟢 顯示真實套用的模板名稱 (如: A 級師傅)，若無則顯示自訂比例 */}
-                        {activeTab === 'staff' && (
-                          <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.templateName || item.templateId ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
-                            {item.templateName ? `📄 ${item.templateName}` : item.templateId ? '📄 已套用模板' : '⚙️ 自訂比例'}
+                        {/* 🟢 若有綁定模板名稱，顯示出來 */}
+                        {activeTab === 'staff' && item.templateId && (
+                          <span className="text-[10px] bg-green-500/20 text-green-400 px-2 py-0.5 rounded border border-green-500/30 font-bold uppercase tracking-tighter">
+                            已套用模板
                           </span>
                         )}
                         {/* 🟢 顯示綁定的門店標籤 */}
