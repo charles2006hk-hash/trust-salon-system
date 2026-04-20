@@ -126,7 +126,6 @@ export default function SmartPOS() {
     toast.success(`已切換至 ${branchName} 收銀模式`);
   };
 
-  // 🟢 智能過濾：根據當前門市，動態篩選出屬於該門市（或全線通用）的人員、服務、套票
   const displayStaff = [...new Set(
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
   )].filter(Boolean);
@@ -195,6 +194,11 @@ export default function SmartPOS() {
 
   const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
 
+  // 🟢 支援自訂折扣：更新購物車內項目的金額
+  const updateCartItemPrice = (id, newPrice) => {
+    setCart(cart.map(item => item.id === id ? { ...item, finalPrice: newPrice } : item));
+  };
+
   const processSettlement = async (e) => {
     e.preventDefault();
     if (!currentBranch) return toast.error("系統錯誤：未綁定門市");
@@ -233,6 +237,7 @@ export default function SmartPOS() {
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
+               // 🟢 寫入動態修改後的最新的金額 (item.finalPrice)，作為髮型師抽成依據
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: new Date().toISOString() });
              } else {
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: new Date().toISOString() });
@@ -398,7 +403,6 @@ export default function SmartPOS() {
                   </select>
                   <select value={walkInService} onChange={e => setWalkInService(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇項目</option>
-                    {/* 🟢 修改：套用 displayServices 過濾 */}
                     {displayServices.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                   </select>
                 </div>
@@ -546,7 +550,6 @@ export default function SmartPOS() {
                     <label className="text-[10px] font-bold text-purple-400 uppercase tracking-widest ml-1">選擇套票方案</label>
                     <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-purple-500/50 p-4 rounded-2xl text-white outline-none focus:border-purple-400">
                       <option value="">請選擇...</option>
-                      {/* 🟢 修改：套用 displayPackages 過濾 */}
                       {displayPackages.map(p => <option key={p.id} value={p.id}>{p.name} - ${p.price} ({p.quantity}格)</option>)}
                     </select>
                   </div>
@@ -614,8 +617,19 @@ export default function SmartPOS() {
                    </div>
                    <div className="flex items-center gap-4">
                      <div className="text-right">
+                       {/* 🟢 核心功能：可以直接修改金額！支援自訂折扣！ */}
                        {item.type === 'pay' ? (
-                          <p className="text-[#D4AF37] font-bold">${item.finalPrice}</p>
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-[#D4AF37] font-bold">$</span>
+                            <input 
+                              type="number" 
+                              min="0"
+                              className="w-16 bg-transparent border-b border-[#D4AF37]/50 text-[#D4AF37] font-bold text-right outline-none focus:border-[#D4AF37] transition-colors" 
+                              value={item.finalPrice} 
+                              onChange={(e) => updateCartItemPrice(item.id, Number(e.target.value))} 
+                              title="可手動修改金額給予額外折扣"
+                            />
+                          </div>
                        ) : (
                           <p className="text-purple-400 font-bold">-{item.grids} 格</p>
                        )}
@@ -655,7 +669,6 @@ export default function SmartPOS() {
                 {addItemMode === 'pay' ? (
                   <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm focus:border-[#D4AF37]" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
                     <option value="">選擇服務或產品...</option>
-                    {/* 🟢 修改：套用 displayServices 過濾 */}
                     {displayServices.map(s => <option key={s.id} value={s.name}>{s.name} (${s.price})</option>)}
                   </select>
                 ) : (
