@@ -22,7 +22,7 @@ export default function SmartPOS() {
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
 
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState('+852'); // 🟢 預設帶出區碼
   const [walkInStylist, setWalkInStylist] = useState('');
   const [walkInService, setWalkInService] = useState('');
 
@@ -36,7 +36,7 @@ export default function SmartPOS() {
   const [newItemGrids, setNewItemGrids] = useState(1);
 
   const [showTopUpModal, setShowTopUpModal] = useState(false);
-  const [topUpPhone, setTopUpPhone] = useState('');
+  const [topUpPhone, setTopUpPhone] = useState('+852');
   const [topUpUser, setTopUpUser] = useState(null);
   const [topUpTab, setTopUpTab] = useState('tdollar'); 
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
@@ -150,7 +150,7 @@ export default function SmartPOS() {
       });
       if (bookingData?.id) { const appRef = doc(db, "appointments", bookingData.id); await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); }
       toast.success(`${formattedPhone} 已入店服務`);
-      setPhone(''); setWalkInStylist(''); setWalkInService('');
+      setPhone('+852'); setWalkInStylist(''); setWalkInService('');
     } catch (e) { toast.error("報到失敗"); }
   };
 
@@ -237,7 +237,6 @@ export default function SmartPOS() {
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
-               // 🟢 寫入動態修改後的最新的金額 (item.finalPrice)，作為髮型師抽成依據
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: new Date().toISOString() });
              } else {
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: new Date().toISOString() });
@@ -324,8 +323,17 @@ export default function SmartPOS() {
         });
         toast.success(`成功售出套票：${pkg.name}`);
       }
-      setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone(''); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
+      setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852'); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
     } catch (error) { toast.error("操作失敗"); }
+  };
+
+  // 🟢 內建 POS 小鍵盤組件
+  const handleKeypadPress = (key, stateValue, setState) => {
+    if (key === 'C') {
+      setState(stateValue.length > 4 ? stateValue.slice(0, -1) : '+852');
+    } else {
+      setState(stateValue + key);
+    }
   };
 
   return (
@@ -390,13 +398,34 @@ export default function SmartPOS() {
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
             <div className="space-y-4">
                 <input 
-                    type="tel" value={phone} 
+                    type="tel" 
+                    value={phone} 
                     onChange={e => setPhone(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    inputMode="numeric" // 🟢 iPad 會彈出數字鍵盤
                     className="w-full bg-black border border-white/10 p-4 rounded-2xl text-xl font-bold text-white outline-none focus:border-[#D4AF37] placeholder:text-gray-700"
-                    placeholder="請掃描 QR 或輸入電話..."
+                    placeholder="請輸入電話..."
                 />
-                <div className="grid grid-cols-2 gap-3">
+                
+                {/* 🟢 內建實體化 POS 觸控數字盤 */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 'C', 0].map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => handleKeypadPress(key, phone, setPhone)}
+                      className="bg-white/5 hover:bg-[#D4AF37] hover:text-black text-gray-300 font-bold py-3 rounded-xl transition-colors text-lg shadow-inner border border-white/5 active:scale-95"
+                    >
+                      {key === 'C' ? <i className="fa-solid fa-delete-left text-red-400"></i> : key}
+                    </button>
+                  ))}
+                  {/* 第 12 個按鈕直接作為「送出報到」 */}
+                  <button onClick={() => handleCheckIn(phone)} className="bg-[#D4AF37] text-black font-black py-3 rounded-xl transition-all shadow-xl active:scale-95">
+                    GO <i className="fa-solid fa-arrow-right ml-1"></i>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2">
                   <select value={walkInStylist} onChange={e => setWalkInStylist(e.target.value)} className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm text-gray-400 outline-none">
                     <option value="">選擇髮型師</option>
                     {displayStaff.map(s => <option key={s} value={s}>{s}</option>)}
@@ -406,9 +435,6 @@ export default function SmartPOS() {
                     {displayServices.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                   </select>
                 </div>
-                <button onClick={() => handleCheckIn(phone)} className="w-full bg-white text-black py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-[#D4AF37] transition">
-                  確認報到入店
-                </button>
             </div>
           </div>
 
@@ -508,11 +534,11 @@ export default function SmartPOS() {
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
-            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null);}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
+            <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852');}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
             
             <div className="flex gap-2 mb-6">
-              <input type="text" value={topUpPhone} onChange={e => setTopUpPhone(e.target.value)} placeholder="輸入客人電話 (如: +852...)" className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" />
+              <input type="tel" inputMode="numeric" value={topUpPhone} onChange={e => setTopUpPhone(e.target.value)} placeholder="輸入電話..." className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" />
               <button onClick={searchTopUpUser} className="bg-white/10 hover:bg-white/20 text-white px-6 rounded-2xl font-bold transition">搜尋</button>
             </div>
 
@@ -543,7 +569,7 @@ export default function SmartPOS() {
                         <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
                       ))}
                     </div>
-                    <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
+                    <input type="number" inputMode="decimal" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" placeholder="手動輸入金額..." />
                   </div>
                 ) : (
                   <div className="space-y-2 animate-fade-in">
@@ -623,8 +649,9 @@ export default function SmartPOS() {
                             <span className="text-[#D4AF37] font-bold">$</span>
                             <input 
                               type="number" 
+                              inputMode="decimal"
                               min="0"
-                              className="w-16 bg-transparent border-b border-[#D4AF37]/50 text-[#D4AF37] font-bold text-right outline-none focus:border-[#D4AF37] transition-colors" 
+                              className="w-20 bg-black border border-[#D4AF37]/50 text-[#D4AF37] font-bold text-right p-1 rounded-lg outline-none focus:border-[#D4AF37] transition-colors" 
                               value={item.finalPrice} 
                               onChange={(e) => updateCartItemPrice(item.id, Number(e.target.value))} 
                               title="可手動修改金額給予額外折扣"
@@ -679,7 +706,7 @@ export default function SmartPOS() {
                     </select>
                     <div className="col-span-2 flex items-center gap-3">
                        <span className="text-xs text-gray-400 w-16">扣除數量</span>
-                       <input type="number" min="1" className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm text-center font-bold" value={newItemGrids} onChange={e => setNewItemGrids(e.target.value)} />
+                       <input type="number" inputMode="decimal" min="1" className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm text-center font-bold" value={newItemGrids} onChange={e => setNewItemGrids(e.target.value)} />
                     </div>
                   </>
                 )}
