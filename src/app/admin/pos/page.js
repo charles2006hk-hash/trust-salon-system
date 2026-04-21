@@ -31,9 +31,10 @@ export default function SmartPOS() {
   
   const [cart, setCart] = useState([]);
   const [addItemMode, setAddItemMode] = useState('pay'); 
-  const [newItemName, setNewItemName] = useState('');
+  
+  // 🟢 新增：購物車卡片分類狀態
+  const [selectedCategory, setSelectedCategory] = useState('全部');
   const [newItemStylist, setNewItemStylist] = useState('');
-  const [newItemGrids, setNewItemGrids] = useState(1);
 
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('+852');
@@ -41,7 +42,6 @@ export default function SmartPOS() {
   const [topUpTab, setTopUpTab] = useState('tdollar'); 
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
-  // 🟢 全域智能虛擬數字鍵盤狀態
   const [numpadConfig, setNumpadConfig] = useState({ isOpen: false, title: '', value: '', onConfirm: null, isPhone: false });
 
   useEffect(() => {
@@ -136,6 +136,9 @@ export default function SmartPOS() {
   const displayServices = services.filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch);
   const displayPackages = packages.filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch);
 
+  // 🟢 萃取一級分類，供卡片選單使用
+  const availableCategories = ['全部', ...new Set(displayServices.map(s => s.category || '未分類'))];
+
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
   const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
 
@@ -174,25 +177,30 @@ export default function SmartPOS() {
       });
 
       setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
-      setAddItemMode('pay'); setNewItemName(''); setNewItemStylist(''); setNewItemGrids(1);
+      setAddItemMode('pay'); 
+      setNewItemStylist(''); 
+      setSelectedCategory('全部');
       toast.dismiss(toastId);
     } catch (error) { toast.error("讀取帳單失敗", { id: toastId }); }
   };
 
-  const handleAddToCart = () => {
-    if (!newItemName) return toast.error("請選擇項目");
+  // 🟢 卡片點擊極速加單 (Service)
+  const handleQuickAddService = (itemName, price) => {
     const itemStylist = newItemStylist || checkoutSession.stylist; 
+    const orig = Number(price);
+    const fin = Math.round(orig * checkoutSession.discountRate);
+    setCart([...cart, { id: Date.now().toString() + Math.random(), type: 'pay', name: itemName, stylist: itemStylist, originalPrice: orig, finalPrice: fin, grids: 0 }]);
+    toast.success(`✅ 已加入購物車：${itemName}`);
+  };
 
-    if (addItemMode === 'pay') {
-      const sItem = services.find(s => s.name === newItemName);
-      if (!sItem) return toast.error("項目不存在");
-      const orig = Number(sItem.price);
-      const fin = Math.round(orig * checkoutSession.discountRate);
-      setCart([...cart, { id: Date.now().toString(), type: 'pay', name: newItemName, stylist: itemStylist, originalPrice: orig, finalPrice: fin, grids: 0 }]);
-    } else {
-      setCart([...cart, { id: Date.now().toString(), type: 'deduct', name: newItemName, stylist: itemStylist, originalPrice: 0, finalPrice: 0, grids: Number(newItemGrids) }]);
-    }
-    setNewItemName(''); setNewItemGrids(1);
+  // 🟢 卡片點擊極速加單 (Package Deduct)
+  const handleQuickAddDeduct = (itemName) => {
+    openNumpad(`輸入扣除格數 - ${itemName}`, 1, (val) => {
+      const grids = Number(val) || 1;
+      const itemStylist = newItemStylist || checkoutSession.stylist;
+      setCart(prev => [...prev, { id: Date.now().toString() + Math.random(), type: 'deduct', name: itemName, stylist: itemStylist, originalPrice: 0, finalPrice: 0, grids: grids }]);
+      toast.success(`🎫 已準備扣除：${itemName} (${grids}格)`);
+    });
   };
 
   const removeFromCart = (id) => setCart(cart.filter(item => item.id !== id));
@@ -329,7 +337,6 @@ export default function SmartPOS() {
     } catch (error) { toast.error("操作失敗"); }
   };
 
-  // 🟢 智能虛擬鍵盤觸發器
   const openNumpad = (title, initialValue, onConfirm, isPhone = false) => {
     setNumpadConfig({ isOpen: true, title, value: initialValue.toString(), onConfirm, isPhone });
   };
@@ -343,7 +350,6 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
-      {/* 🟢 全域智能虛擬數字盤 (Smart Numpad Modal) */}
       {numpadConfig.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.2)] flex flex-col animate-fade-in">
@@ -441,12 +447,11 @@ export default function SmartPOS() {
                     value={phone} 
                     onChange={e => setPhone(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    inputMode="none" // 🟢 iPad 極致優化：阻擋原生鍵盤彈出，改用內建實體鍵盤
+                    inputMode="none" 
                     className="w-full bg-black border border-white/10 p-4 rounded-2xl text-xl font-bold text-white outline-none focus:border-[#D4AF37] placeholder:text-gray-700"
                     placeholder="請輸入電話..."
                 />
                 
-                {/* 🟢 內建實體化 POS 觸控數字盤 */}
                 <div className="grid grid-cols-3 gap-2">
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 'C', 0].map((key) => (
                     <button
@@ -576,7 +581,6 @@ export default function SmartPOS() {
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
             
             <div className="flex gap-2 mb-6">
-              {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
               <div 
                 onClick={() => openNumpad('搜尋客人電話', topUpPhone, setTopUpPhone, true)}
                 className="flex-1 bg-black border border-white/10 p-4 rounded-2xl text-white cursor-pointer flex items-center font-bold"
@@ -613,7 +617,6 @@ export default function SmartPOS() {
                         <button key={amt} type="button" onClick={() => setTopUpForm({...topUpForm, amount: amt})} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-xl text-white text-xs font-bold transition">${amt}</button>
                       ))}
                     </div>
-                    {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
                     <div 
                       onClick={() => openNumpad('輸入充值金額 (HKD)', topUpForm.amount, val => setTopUpForm({...topUpForm, amount: val}))}
                       className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-2xl text-white cursor-pointer flex items-center h-[58px] font-bold"
@@ -693,7 +696,6 @@ export default function SmartPOS() {
                    </div>
                    <div className="flex items-center gap-4">
                      <div className="text-right">
-                       {/* 🟢 點擊呼叫虛擬數字鍵盤 (支援自訂打折) */}
                        {item.type === 'pay' ? (
                           <div 
                             onClick={() => openNumpad(`修改金額 - ${item.name}`, item.finalPrice, val => updateCartItemPrice(item.id, Number(val)))}
@@ -725,53 +727,67 @@ export default function SmartPOS() {
                </div>
             </div>
 
+            {/* 🟢 現代化觸控加購區 (卡片選單) */}
             <div className="bg-black border border-dashed border-gray-700 p-4 rounded-2xl mb-6">
-              <h4 className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-3">➕ 繼續加購項目</h4>
-              <div className="flex gap-2 mb-3">
-                <button type="button" onClick={() => setAddItemMode('pay')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${addItemMode === 'pay' ? 'bg-white/20 text-white' : 'text-gray-500 hover:bg-white/5'}`}>
-                  💰 收費項目
-                </button>
-                {checkoutSession.userId && (
-                  <button type="button" onClick={() => setAddItemMode('deduct')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${addItemMode === 'deduct' ? 'bg-purple-500/30 text-purple-300' : 'text-gray-500 hover:bg-white/5'}`}>
-                    🎫 扣抵套票
-                  </button>
-                )}
+              <div className="flex justify-between items-center mb-3">
+                <h4 className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">➕ 加購與自選項目</h4>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setAddItemMode('pay')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'pay' ? 'bg-white/20 text-white' : 'text-gray-500 hover:bg-white/5'}`}>💰 收費項目</button>
+                  {checkoutSession.userId && (
+                    <button type="button" onClick={() => setAddItemMode('deduct')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'deduct' ? 'bg-purple-500/30 text-purple-300' : 'text-gray-500 hover:bg-white/5'}`}>🎫 扣抵套票</button>
+                  )}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 mb-3">
+              {/* 髮型師選擇 (橫向滑動) */}
+              <div className="mb-3">
+                 <p className="text-[10px] text-gray-500 mb-1">指定負責設計師</p>
+                 <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2">
+                    {displayStaff.map(s => {
+                      const isSelected = newItemStylist ? newItemStylist === s : checkoutSession.stylist === s;
+                      return (
+                        <button key={s} type="button" onClick={() => setNewItemStylist(s)} className={`shrink-0 px-4 py-2 rounded-xl text-xs font-bold transition-colors border ${isSelected ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-[#121212] text-gray-400 border-white/5 hover:border-white/20'}`}>
+                          {s}
+                        </button>
+                      )
+                    })}
+                 </div>
+              </div>
+
+              {/* 服務分類 (橫向滑動) */}
+              {addItemMode === 'pay' && (
+                <div className="mb-3 border-t border-white/5 pt-3">
+                   <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2">
+                      {availableCategories.map(c => (
+                        <button key={c} type="button" onClick={() => setSelectedCategory(c)} className={`shrink-0 px-4 py-1.5 rounded-full text-[10px] font-bold transition-colors border ${selectedCategory === c ? 'bg-white text-black border-white' : 'bg-transparent text-gray-500 border-white/10 hover:text-white'}`}>
+                          {c}
+                        </button>
+                      ))}
+                   </div>
+                </div>
+              )}
+
+              {/* 小卡片網格 */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-[220px] overflow-y-auto custom-scrollbar pr-2 mt-2">
                 {addItemMode === 'pay' ? (
-                  <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm focus:border-[#D4AF37]" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
-                    <option value="">選擇服務或產品...</option>
-                    {displayServices.map(s => <option key={s.id} value={s.name}>{s.name} (${s.price})</option>)}
-                  </select>
+                   displayServices.filter(s => selectedCategory === '全部' || (s.category || '未分類') === selectedCategory).map(s => (
+                     <button key={s.id} type="button" onClick={() => handleQuickAddService(s.name, s.price)} className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37]/50 p-4 rounded-2xl text-left transition-all active:scale-95 flex flex-col justify-between min-h-[90px] shadow-lg group">
+                        <span className="text-sm font-bold text-white leading-snug group-hover:text-[#D4AF37] transition-colors">{s.name}</span>
+                        <span className="text-[#D4AF37] font-mono font-black mt-2">${s.price}</span>
+                     </button>
+                   ))
                 ) : (
-                  <>
-                    <select className="col-span-2 w-full bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white outline-none text-sm focus:border-purple-400" value={newItemName} onChange={e => setNewItemName(e.target.value)}>
-                      <option value="">選擇客人可用的套票...</option>
-                      {Object.entries(checkoutSession.packageBalances || {}).filter(([_, g]) => g > 0).map(([n, g]) => <option key={n} value={n}>{n} (剩餘 {g} 格)</option>)}
-                    </select>
-                    {/* 🟢 點擊呼叫虛擬數字鍵盤 */}
-                    <div className="col-span-2 flex items-center gap-3">
-                       <span className="text-xs text-gray-400 w-16">扣除數量</span>
-                       <div 
-                          onClick={() => openNumpad('扣除數量', newItemGrids, val => setNewItemGrids(Number(val) || 1))}
-                          className="flex-1 bg-[#121212] border border-purple-500/30 p-3 rounded-xl text-white text-center font-bold cursor-pointer h-12 flex items-center justify-center"
-                       >
-                          {newItemGrids}
-                       </div>
-                    </div>
-                  </>
+                   Object.entries(checkoutSession.packageBalances || {}).filter(([_, g]) => g > 0).map(([n, g]) => (
+                     <button key={n} type="button" onClick={() => handleQuickAddDeduct(n)} className="bg-purple-900/20 border border-purple-500/30 hover:border-purple-400 p-4 rounded-2xl text-left transition-all active:scale-95 flex flex-col justify-between min-h-[90px] shadow-lg group">
+                        <span className="text-sm font-bold text-white leading-snug group-hover:text-purple-300 transition-colors">{n}</span>
+                        <span className="text-purple-400 font-bold mt-2 text-xs bg-purple-500/20 w-fit px-2 py-0.5 rounded">剩餘 {g} 格</span>
+                     </button>
+                   ))
                 )}
-                
-                <select className="col-span-2 w-full bg-[#121212] border border-white/10 p-3 rounded-xl text-white outline-none text-sm" value={newItemStylist} onChange={e => setNewItemStylist(e.target.value)}>
-                  <option value="">選擇負責此項目的髮型師 (預設: {checkoutSession.stylist})</option>
-                  {displayStaff.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
+                {addItemMode === 'pay' && displayServices.filter(s => selectedCategory === '全部' || (s.category || '未分類') === selectedCategory).length === 0 && (
+                  <div className="col-span-2 md:col-span-3 text-center py-6 text-gray-600 text-xs">此分類無項目</div>
+                )}
               </div>
-
-              <button type="button" onClick={handleAddToCart} className="w-full border border-gray-600 text-gray-300 py-3 rounded-xl text-xs font-bold hover:bg-white hover:text-black transition">
-                ➕ 加入購物車清單
-              </button>
             </div>
 
             <form onSubmit={processSettlement}>
@@ -789,6 +805,12 @@ export default function SmartPOS() {
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.2s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
     </div>
   );
