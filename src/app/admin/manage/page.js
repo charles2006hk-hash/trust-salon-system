@@ -23,6 +23,9 @@ export default function AdminManagePage() {
   const [currentUserRole, setCurrentUserRole] = useState(null); 
 
   const [editingId, setEditingId] = useState(null);
+  
+  // 🟢 新增：控制摺疊面板的狀態
+  const [expandedGroups, setExpandedGroups] = useState({});
   const router = useRouter();
 
   // 🟢 加入預設標籤對照表 (支援 R3)
@@ -90,6 +93,7 @@ export default function AdminManagePage() {
   useEffect(() => {
     if (currentUserRole && !['member', 'reception', 'staff'].includes(currentUserRole)) {
        fetchData(); fetchCategories(); fetchPackages(); fetchTemplates(); fetchRegisteredStaff(); fetchBranches(); fetchSettingsConfig();
+       setExpandedGroups({}); // 🟢 切換 Tab 時重置摺疊狀態
     }
   }, [activeTab, currentUserRole]);
 
@@ -256,6 +260,14 @@ export default function AdminManagePage() {
     setFormData({ ...formData, templateName: '', commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
   };
 
+  // 🟢 控制群組收合/展開
+  const toggleGroup = (groupName) => {
+    setExpandedGroups(prev => ({
+      ...prev,
+      [groupName]: prev[groupName] === false ? true : false
+    }));
+  };
+
   const renderMatrixEditor = () => (
     <div className="col-span-2 pt-6 border-t border-gray-800">
       <div className="flex justify-between items-center mb-4">
@@ -264,11 +276,9 @@ export default function AdminManagePage() {
       </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* 🟢 擴充包含 R3 */}
         {['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
           <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-               {/* 🟢 如果沒有輸入名稱，就直接顯示代碼 */}
                <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
              </div>
              <div className="flex items-center gap-2">
@@ -332,7 +342,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
-            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -357,13 +366,12 @@ export default function AdminManagePage() {
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
                         <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
                         強制更新預設模板
                       </button>
                     </div>
-
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">自訂抽成模板名稱</label>
                       <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：A 級師傅、G 級大師、設計助理..." />
@@ -372,7 +380,6 @@ export default function AdminManagePage() {
                   </>
                 )}
 
-                {/* 🟢 設置標籤 UI 更新，支援 R3 */}
                 {activeTab === 'settings' && (
                   <>
                     <div className="space-y-2 col-span-2 mb-4">
@@ -383,7 +390,6 @@ export default function AdminManagePage() {
                     <div className="col-span-2 pt-6 border-t border-gray-800">
                       <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤名稱 (可留空)</h3>
                       <p className="text-xs text-gray-400 mb-6">您可以自訂標籤的顯示名稱。若留空，系統將只顯示代碼 (例如 W1)。</p>
-                      
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
                           <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5">
@@ -408,9 +414,7 @@ export default function AdminManagePage() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option>
-                        <option value="ALL">🌐 全線通用 (所有門店)</option>
-                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </div>
                     <div className="space-y-2">
@@ -422,10 +426,7 @@ export default function AdminManagePage() {
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {/* 🟢 動態顯示自訂標籤名稱，支援 R3 */}
-                        {['W1', 'W2', 'W3', 'R1', 'R2', 'R3'].map(c => (
-                          <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>
-                        ))}
+                        {['W1', 'W2', 'W3', 'R1', 'R2', 'R3'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
                       </select>
                     </div>
                   </>
@@ -439,17 +440,21 @@ export default function AdminManagePage() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option>
-                        <option value="ALL">🌐 全線通用 (所有門店)</option>
-                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </div>
+                    {/* 🟢 套票補上分類選擇 */}
                     <div className="space-y-2">
+                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
+                      <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                        <option value="">-- 選擇分類 (選填) --</option>
+                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {['SCALP', 'P1', 'P2', 'P3', 'P4', 'P5'].map(c => (
-                          <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>
-                        ))}
+                        {['SCALP', 'P1', 'P2', 'P3', 'P4', 'P5'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
                       </select>
                     </div>
                   </>
@@ -460,79 +465,33 @@ export default function AdminManagePage() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
                       {!isCustomStaff ? (
-                        <select 
-                          className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
-                          value={registeredStaff.includes(formData.name) ? formData.name : (formData.name ? 'CUSTOM' : '')} 
-                          onChange={e => {
-                            if (e.target.value === 'CUSTOM') {
-                              setIsCustomStaff(true);
-                              setFormData({...formData, name: ''});
-                            } else {
-                              setFormData({...formData, name: e.target.value});
-                            }
-                          }} 
-                          required
-                        >
-                          <option value="">-- 請選擇已註冊員工 --</option>
-                          {registeredStaff.map(name => <option key={name} value={name}>{name}</option>)}
-                          <option value="CUSTOM">➕ 手動輸入 (無帳號的自由業)</option>
+                        <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={registeredStaff.includes(formData.name) ? formData.name : (formData.name ? 'CUSTOM' : '')} onChange={e => { if (e.target.value === 'CUSTOM') { setIsCustomStaff(true); setFormData({...formData, name: ''}); } else { setFormData({...formData, name: e.target.value}); } }} required>
+                          <option value="">-- 請選擇已註冊員工 --</option>{registeredStaff.map(name => <option key={name} value={name}>{name}</option>)}<option value="CUSTOM">➕ 手動輸入 (無帳號的自由業)</option>
                         </select>
                       ) : (
                         <div className="flex gap-2">
-                          <input 
-                            type="text" 
-                            className="flex-1 bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
-                            value={formData.name} 
-                            onChange={e => setFormData({...formData, name: e.target.value})} 
-                            required 
-                            placeholder="輸入自訂姓名..." 
-                          />
-                          <button 
-                            type="button" 
-                            onClick={() => { setIsCustomStaff(false); setFormData({...formData, name: ''}); }} 
-                            className="px-6 bg-gray-800 text-gray-400 rounded-xl hover:text-white hover:bg-gray-700 transition-colors font-bold text-sm"
-                          >
-                            返回選單
-                          </button>
+                          <input type="text" className="flex-1 bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="輸入自訂姓名..." />
+                          <button type="button" onClick={() => { setIsCustomStaff(false); setFormData({...formData, name: ''}); }} className="px-6 bg-gray-800 text-gray-400 rounded-xl hover:text-white hover:bg-gray-700 transition-colors font-bold text-sm">返回選單</button>
                         </div>
                       )}
                     </div>
-                    
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">聯絡電話 (Phone)</label>
-                      <input 
-                        type="tel" 
-                        className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" 
-                        value={formData.phoneNumber} 
-                        onChange={e => setFormData({...formData, phoneNumber: e.target.value})} 
-                        required 
-                        placeholder="如: +85298765432" 
-                      />
+                      <input type="tel" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.phoneNumber} onChange={e => setFormData({...formData, phoneNumber: e.target.value})} required placeholder="如: +85298765432" />
                     </div>
-
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option>
-                        <option value="ALL">🌐 全線通用 (跨店支援)</option>
-                        {branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (跨店支援)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </div>
-
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">📥 載入預設抽成模板 (載入後可微調)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
-                        <option value="">-- 保持原數值或自訂比例 --</option>
-                        {templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        <option value="">-- 保持原數值或自訂比例 --</option>{templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
-                      {formData.templateName && (
-                        <p className="text-xs text-green-400 mt-2 bg-green-500/10 p-2 rounded-lg border border-green-500/20">
-                          ✅ <strong>目前已載入：{formData.templateName} 數值</strong> <br/>
-                          (確認無誤後，請務必點擊最下方「儲存」按鈕！)
-                        </p>
-                      )}
+                      {formData.templateName && <p className="text-xs text-green-400 mt-2 bg-green-500/10 p-2 rounded-lg border border-green-500/20">✅ <strong>目前已載入：{formData.templateName} 數值</strong> <br/>(確認無誤後，請務必點擊最下方「儲存」按鈕！)</p>}
                     </div>
-
                     {renderMatrixEditor()}
                   </>
                 )}
@@ -550,20 +509,9 @@ export default function AdminManagePage() {
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">累積充值門檻 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單折扣 (例: 0.8 = 8折)</label><input type="number" inputMode="decimal" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required /></div>
-                    
                     <div className="space-y-2 pt-4 border-t border-gray-800 col-span-2"><p className="text-xs font-bold text-purple-400"><i className="fa-solid fa-gift"></i> 達成此門檻的「升級自動派發獎勵」</p></div>
-                    
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">1. 額外贈送積分</label>
-                      <input type="number" inputMode="decimal" className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.upgradeBonus} onChange={e => setFormData({...formData, upgradeBonus: e.target.value})} placeholder="如不贈送請填 0" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">2. 自動派發套票/實體券</label>
-                      <select className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.giftPackageName} onChange={e => setFormData({...formData, giftPackageName: e.target.value})}>
-                        <option value="">無贈送套票</option>
-                        {packagesList.map(p => <option key={p.id} value={p.name}>{p.name} (含 {p.quantity} 格)</option>)}
-                      </select>
-                    </div>
+                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">1. 額外贈送積分</label><input type="number" inputMode="decimal" className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.upgradeBonus} onChange={e => setFormData({...formData, upgradeBonus: e.target.value})} placeholder="如不贈送請填 0" /></div>
+                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">2. 自動派發套票/實體券</label><select className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.giftPackageName} onChange={e => setFormData({...formData, giftPackageName: e.target.value})}><option value="">無贈送套票</option>{packagesList.map(p => <option key={p.id} value={p.name}>{p.name} (含 {p.quantity} 格)</option>)}</select></div>
                     <div className="space-y-2 col-span-2 text-[10px] text-gray-500 bg-black/50 p-4 rounded-xl border border-gray-800 mt-2">
                        <p>💡 <strong>說明：</strong> 當客人充值並首次跨越此門檻時，系統將自動派發設定的「積分」與「套票」至客人的帳戶中作為里程碑獎勵。</p>
                     </div>
@@ -582,70 +530,108 @@ export default function AdminManagePage() {
             )}
           </div>
 
-          {/* 列表區 */}
+          {/* 🟢 列表區：手風琴層級式分組渲染 */}
           {activeTab !== 'settings' && (!['staff', 'templates', 'branches'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
-              {list.map((item) => (
-                <div key={item.id} className="bg-gray-900/60 p-6 rounded-3xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
-                  <div className="flex items-center gap-5 w-full md:w-auto">
-                    <div className="w-12 h-12 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-2xl shrink-0">
-                        {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'branches' ? '📍' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3">
-                        <span className="font-bold text-xl text-white">{item.name || item.title}</span>
-                        {['services', 'packages'].includes(activeTab) && item.commissionCode && (
-                          <span className="text-[10px] bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">
-                            {item.commissionCode} 類
-                          </span>
-                        )}
-                        {/* 🟢 顯示真實套用的模板名稱 (如: A 級師傅)，若無則顯示自訂比例 */}
-                        {activeTab === 'staff' && (
-                          <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.templateName || item.templateId ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
-                            {item.templateName ? `📄 ${item.templateName}` : item.templateId ? '📄 已套用模板' : '⚙️ 自訂比例'}
-                          </span>
-                        )}
-                        {/* 🟢 顯示綁定的門店標籤 */}
-                        {['staff', 'services', 'packages'].includes(activeTab) && item.branch && (
-                          <span className={`text-[10px] px-2 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
-                            {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
-                          </span>
-                        )}
-                        {/* 🟢 顯示人員聯絡電話 */}
-                        {activeTab === 'staff' && item.phoneNumber && (
-                          <span className="text-[10px] bg-gray-800 text-gray-400 px-2 py-0.5 rounded border border-gray-700 font-mono tracking-widest">
-                            📞 {item.phoneNumber}
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="flex flex-wrap gap-4 mt-2 text-sm items-center">
-                        {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold text-base">${item.price}</span><span className="text-[#D4AF37] font-bold text-base bg-[#D4AF37]/10 px-2 py-0.5 rounded-md border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
-                        {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold text-base">${item.price}</span>}
-                        {activeTab === 'branches' && <span className="text-gray-400 text-xs italic">連鎖門店資料</span>}
-                        {activeTab === 'templates' && <span className="text-gray-400 text-xs italic">包含 W1-W3, R1-R3, P1-P5, SCALP 完整公式</span>}
-                        {activeTab === 'tiers' && (
-                          <>
-                            <span className="text-[#D4AF37] font-mono font-bold text-base">門檻: ${item.threshold}</span>
-                            <span className="text-green-400 font-bold text-base">折扣: {Number(item.discount) * 10} 折</span>
-                            {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold text-sm bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">🎁 送 {item.upgradeBonus} 分</span>}
-                            {item.giftPackageName && <span className="text-pink-400 font-bold text-sm bg-pink-500/20 px-2 py-0.5 rounded border border-pink-500/30">🎫 送套票: {item.giftPackageName}</span>}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+              
+              {(() => {
+                if (list.length === 0 && !loading) {
+                  return <div className="text-center py-20 text-gray-600 font-bold border border-dashed border-gray-800 rounded-3xl">此分類目前沒有資料</div>;
+                }
 
-                  <div className="flex items-center gap-3 w-full md:w-auto mt-2 md:mt-0">
-                    <button onClick={() => startEdit(item)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-900/30 text-blue-400 border border-blue-800/50 rounded-xl hover:bg-blue-600 hover:text-white transition">修改</button>
-                    <button onClick={() => handleDelete(item.id)} className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-red-900/30 text-red-400 border border-red-800/50 rounded-xl hover:bg-red-600 hover:text-white transition">刪除</button>
+                // 🟢 將 List 進行維度分組
+                const groupedList = list.reduce((acc, item) => {
+                  let key = '全部項目';
+                  if (['services', 'packages'].includes(activeTab)) key = item.category || '未分類 (Uncategorized)';
+                  else if (activeTab === 'staff') key = item.branch === 'ALL' ? '🌐 全線通用 (跨店)' : (item.branch || '未綁定門店');
+                  else if (activeTab === 'templates') key = '抽成模板列表';
+                  else if (activeTab === 'branches') key = '門店列表';
+                  else if (activeTab === 'tiers') key = '會員等級列表';
+                  else key = '項目列表';
+
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(item);
+                  return acc;
+                }, {});
+
+                return Object.entries(groupedList).map(([groupName, items]) => (
+                  <div key={groupName} className="mb-6">
+                    {groupName !== '項目列表' && groupName !== '全部項目' && (
+                      <div 
+                        onClick={() => toggleGroup(groupName)}
+                        className="flex justify-between items-center bg-[#1a1a1a] p-4 rounded-2xl cursor-pointer border border-gray-800 hover:border-[#D4AF37]/50 transition-colors mb-3 group"
+                      >
+                        <h4 className="font-bold text-white flex items-center gap-2">
+                          <i className="fa-solid fa-folder-open text-[#D4AF37]"></i> {groupName}
+                          <span className="text-[10px] bg-white/10 text-gray-400 px-2 py-0.5 rounded-full">{items.length} 項</span>
+                        </h4>
+                        <i className={`fa-solid fa-chevron-${expandedGroups[groupName] === false ? 'down' : 'up'} text-gray-500 group-hover:text-[#D4AF37] transition-colors`}></i>
+                      </div>
+                    )}
+                    
+                    {/* 預設為展開，只有設定為 false 才隱藏 */}
+                    {expandedGroups[groupName] !== false && (
+                      <div className={`space-y-3 ${groupName !== '項目列表' && groupName !== '全部項目' ? 'pl-2 md:pl-6 border-l-2 border-gray-800 ml-2' : ''}`}>
+                        {items.map(item => (
+                          <div key={item.id} className="bg-gray-900/60 p-5 rounded-2xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
+                            <div className="flex items-center gap-4 w-full md:w-auto">
+                              <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/10 flex items-center justify-center text-xl shrink-0">
+                                  {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'branches' ? '📍' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-lg text-white">{item.name || item.title}</span>
+                                  {['services', 'packages'].includes(activeTab) && item.commissionCode && (
+                                    <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">
+                                      {item.commissionCode} 類
+                                    </span>
+                                  )}
+                                  {activeTab === 'staff' && (
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.templateName || item.templateId ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-gray-500/20 text-gray-400 border-gray-500/30'}`}>
+                                      {item.templateName ? `📄 ${item.templateName}` : item.templateId ? '📄 已套用模板' : '⚙️ 自訂比例'}
+                                    </span>
+                                  )}
+                                  {['staff', 'services', 'packages'].includes(activeTab) && item.branch && (
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
+                                      {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
+                                    </span>
+                                  )}
+                                  {activeTab === 'staff' && item.phoneNumber && (
+                                    <span className="text-[9px] bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded border border-gray-700 font-mono tracking-widest">
+                                      📞 {item.phoneNumber}
+                                    </span>
+                                  )}
+                                </div>
+                                
+                                <div className="flex flex-wrap gap-3 mt-1.5 text-xs items-center">
+                                  {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold">${item.price}</span><span className="text-[#D4AF37] font-bold bg-[#D4AF37]/10 px-1.5 py-0.5 rounded border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
+                                  {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold">${item.price}</span>}
+                                  {activeTab === 'branches' && <span className="text-gray-500 italic">連鎖門店資料</span>}
+                                  {activeTab === 'templates' && <span className="text-gray-500 italic">包含 W1-W3, R1-R3, P1-P5, SCALP 公式</span>}
+                                  {activeTab === 'tiers' && (
+                                    <>
+                                      <span className="text-[#D4AF37] font-mono font-bold">門檻: ${item.threshold}</span>
+                                      <span className="text-green-400 font-bold">折扣: {Number(item.discount) * 10} 折</span>
+                                      {item.upgradeBonus > 0 && <span className="text-purple-400 font-bold bg-purple-500/20 px-1.5 py-0.5 rounded border border-purple-500/30">🎁 送 {item.upgradeBonus} 分</span>}
+                                      {item.giftPackageName && <span className="text-pink-400 font-bold bg-pink-500/20 px-1.5 py-0.5 rounded border border-pink-500/30">🎫 送套票: {item.giftPackageName}</span>}
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 w-full md:w-auto mt-2 md:mt-0">
+                              <button onClick={() => startEdit(item)} className="flex-1 md:flex-none px-4 py-2 bg-blue-900/30 text-blue-400 border border-blue-800/50 rounded-lg hover:bg-blue-600 hover:text-white transition text-xs font-bold">修改</button>
+                              <button onClick={() => handleDelete(item.id)} className="flex-1 md:flex-none px-4 py-2 bg-red-900/30 text-red-400 border border-red-800/50 rounded-lg hover:bg-red-600 hover:text-white transition text-xs font-bold">刪除</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
-              {list.length === 0 && !loading && (
-                 <div className="text-center py-20 text-gray-600 font-bold border border-dashed border-gray-800 rounded-3xl">此分類目前沒有資料</div>
-              )}
+                ));
+              })()}
             </div>
           )}
         </div>
