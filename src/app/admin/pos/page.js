@@ -34,8 +34,6 @@ export default function SmartPOS() {
   
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [newItemStylist, setNewItemStylist] = useState('');
-  const [newItemName, setNewItemName] = useState(''); // 用於套票扣除
-  const [newItemGrids, setNewItemGrids] = useState(1);
 
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('+852');
@@ -44,10 +42,8 @@ export default function SmartPOS() {
   const [topUpForm, setTopUpForm] = useState({ amount: '', paymentMethod: 'Cash', packageId: '' });
 
   const [numpadConfig, setNumpadConfig] = useState({ isOpen: false, title: '', value: '', onConfirm: null, isPhone: false });
-
-  // 🟢 新增：iPad 專屬智能觸控彈窗狀態
   const [selectorConfig, setSelectorConfig] = useState({ isOpen: false, type: '', title: '', onSelect: null });
-  const [serviceFilterTab, setServiceFilterTab] = useState('W'); // W, R, P, S
+  const [serviceFilterTab, setServiceFilterTab] = useState('W');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => { 
@@ -138,8 +134,14 @@ export default function SmartPOS() {
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
   )].filter(Boolean);
 
-  const displayServices = services.filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch);
-  const displayPackages = packages.filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch);
+  // 🟢 智能過濾與排序：抓出符合門市的項目，並依據 sortWeight 降冪排列
+  const displayServices = services
+    .filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch)
+    .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
+    
+  const displayPackages = packages
+    .filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch)
+    .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
 
   const availableCategories = ['全部', ...new Set(displayServices.map(s => s.category || '未分類'))];
 
@@ -348,7 +350,6 @@ export default function SmartPOS() {
     else { setState(stateValue + key); }
   };
 
-  // 🟢 呼叫智能選擇面板
   const openSmartSelector = (type, title, onSelect) => {
     setSelectorConfig({ isOpen: true, type, title, onSelect });
   };
@@ -357,7 +358,6 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
-      {/* 🟢 智能虛擬數字鍵盤 */}
       {numpadConfig.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.2)] flex flex-col animate-fade-in">
@@ -393,7 +393,6 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 iPad 極致觸控模組：大面積選擇面板 (取代下拉選單) */}
       {selectorConfig.isOpen && (
         <div className="fixed inset-0 z-[400] flex items-end sm:items-center justify-center bg-black/90 backdrop-blur-sm p-0 sm:p-6 transition-opacity">
           <div className="bg-[#121212] w-full max-w-3xl rounded-t-[40px] sm:rounded-[40px] p-8 border border-white/10 shadow-2xl flex flex-col max-h-[85vh] animate-slide-up">
@@ -405,7 +404,6 @@ export default function SmartPOS() {
               <button onClick={() => setSelectorConfig({...selectorConfig, isOpen: false})} className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/20 text-gray-400 hover:text-white transition-colors"><i className="fa-solid fa-xmark"></i></button>
             </div>
 
-            {/* 如果是選擇服務，顯示 W, R, P 智能分類卡片 */}
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
                  {['W', 'R', 'P', 'S'].map(prefix => {
@@ -555,7 +553,6 @@ export default function SmartPOS() {
                   </button>
                 </div>
 
-                {/* 🟢 淘汰下拉選單，改為觸控大按鈕呼叫彈窗 */}
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button 
                     type="button" 
@@ -821,7 +818,6 @@ export default function SmartPOS() {
                </div>
             </div>
 
-            {/* 🟢 現代化觸控加購區：完全淘汰下拉選單 */}
             <div className="bg-black border border-dashed border-gray-700 p-4 rounded-2xl mb-6">
               <div className="flex justify-between items-center mb-3">
                 <h4 className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">➕ 加購與自選項目</h4>
@@ -834,7 +830,6 @@ export default function SmartPOS() {
               </div>
 
               <div className="grid grid-cols-2 gap-3 mb-3">
-                {/* 服務選擇鈕 */}
                 <button 
                   type="button" 
                   onClick={() => {
@@ -850,7 +845,6 @@ export default function SmartPOS() {
                   <i className="fa-solid fa-chevron-right text-gray-600"></i>
                 </button>
                 
-                {/* 髮型師選擇鈕 */}
                 <button 
                   type="button" 
                   onClick={() => openSmartSelector('stylist', '指定髮型師', setNewItemStylist)}
