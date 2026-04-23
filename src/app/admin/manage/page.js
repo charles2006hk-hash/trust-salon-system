@@ -566,12 +566,12 @@ export default function AdminManagePage() {
                           <i className="fa-solid fa-folder-open text-[#D4AF37]"></i> {groupName}
                           <span className="text-[10px] bg-white/10 text-gray-400 px-2 py-0.5 rounded-full">{items.length} 項</span>
                         </h4>
-                        <i className={`fa-solid fa-chevron-${expandedGroups[groupName] === false ? 'down' : 'up'} text-gray-500 group-hover:text-[#D4AF37] transition-colors`}></i>
+                        <i className={`fa-solid fa-chevron-${expandedGroups[groupName] === true ? 'up' : 'down'} text-gray-500 group-hover:text-[#D4AF37] transition-colors`}></i>
                       </div>
                     )}
                     
-                    {/* 預設為展開，只有設定為 false 才隱藏 */}
-                    {expandedGroups[groupName] !== false && (
+                    {/* 🟢 修改：預設為隱藏，只有點擊展開時才顯示 (=== true) */}
+                    {expandedGroups[groupName] === true && (
                       <div className={`space-y-3 ${groupName !== '項目列表' && groupName !== '全部項目' ? 'pl-2 md:pl-6 border-l-2 border-gray-800 ml-2' : ''}`}>
                         {items.map(item => (
                           <div key={item.id} className="bg-gray-900/60 p-5 rounded-2xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
