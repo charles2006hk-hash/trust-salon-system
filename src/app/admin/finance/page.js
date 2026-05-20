@@ -27,7 +27,17 @@ export default function FinancePage() {
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
   
-  const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0 });
+  // 🟢 加入 R3 預設標籤與動態標籤狀態
+  const defaultLabels = {
+    W1: '洗剪吹 (需扣耗材)', W2: '洗剪吹 (純抽成)', W3: '洗剪吹 (高階)', 
+    R1: '染燙化學 (需扣耗材)', R2: '染燙化學 (純抽成)', R3: '染燙化學 (進階)', 
+    P1: '產品 (20%)', P2: '產品 (25%)', P3: '產品 (18%)', P4: '產品 (15%)', P5: '產品 (35%)', 
+    SCALP: '頭皮套票'
+  };
+  const [globalLabels, setGlobalLabels] = useState(defaultLabels);
+
+  // 🟢 擴充 metrics，加入跨店結算核心：tDollarDeducted
+  const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, tDollarDeducted: 0 });
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
   const [payrollReport, setPayrollReport] = useState([]);
@@ -57,7 +67,7 @@ export default function FinancePage() {
 
   useEffect(() => {
     if (transactions.length > 0) calculateData();
-  }, [selectedBranch, transactions, staffConfig, servicesData, packagesData]);
+  }, [selectedBranch, transactions, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
@@ -87,6 +97,12 @@ export default function FinancePage() {
 
       const bSnap = await getDocs(collection(db, 'branches'));
       setBranches(bSnap.docs.map(d => d.data().name));
+
+      // 🟢 抓取 CMS 自訂標籤
+      const settingsSnap = await getDoc(doc(db, 'settings', 'global_config'));
+      if (settingsSnap.exists() && settingsSnap.data().commissionLabels) {
+        setGlobalLabels(settingsSnap.data().commissionLabels);
+      }
       
     } catch (error) { toast.error("讀取財務數據失敗"); } 
     finally { setLoading(false); }
@@ -97,7 +113,7 @@ export default function FinancePage() {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
     
-    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; 
+    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
     staffConfig.forEach(staff => {
@@ -110,9 +126,9 @@ export default function FinancePage() {
     });
 
     filteredTx.forEach(tx => {
-      if (tx.type === 'topup') {
+      if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
-        givenPoints += Number(tx.pointsAdded || 0);
+        if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
       else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
         const stylistName = tx.stylist || '未指定';
@@ -128,6 +144,9 @@ export default function FinancePage() {
           const serviceItem = servicesData.find(s => s.name === tx.service);
           commCode = serviceItem ? serviceItem.commissionCode : null;
           services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
+          
+          // 🟢 跨店結算：如果這筆是用 T-Dollar 扣抵的 (deduct)，就累加到消耗總額中
+          if (tx.type === 'deduct') tDollarDeducted += revenue;
         } 
         else if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
@@ -141,11 +160,11 @@ export default function FinancePage() {
         let commission = 0;
         
         if (!commCode) {
-            formulaStr = "服務項目未綁定抽成標籤 (需至CMS設定)";
+            formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
         } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
-            formulaStr = "該設計師未儲存抽成參數 (需至CMS重新按儲存)";
+            formulaStr = "該設計師未儲存抽成參數";
         } else if (staff.commissionsRule[commCode] === undefined) {
-            formulaStr = `該設計師未設定 ${commCode} 類參數`;
+            formulaStr = `該設計師未設定 ${commCode} 參數`;
         } else {
             const rule = staff.commissionsRule[commCode];
             if (revenue > rule.deduct) {
@@ -172,7 +191,7 @@ export default function FinancePage() {
       }
     });
 
-    setMetrics({ totalCashIn: cashIn, totalServiceValue: serviceValue, totalGivenPoints: givenPoints, outstandingTDollar: selectedBranch === 'ALL' ? outstandingTDollar : 0 });
+    setMetrics({ totalCashIn: cashIn, totalServiceValue: serviceValue, totalGivenPoints: givenPoints, outstandingTDollar: selectedBranch === 'ALL' ? outstandingTDollar : 0, tDollarDeducted: tDollarDeducted });
     setStylistRanking(Object.entries(stylists).sort((a, b) => b[1] - a[1]));
     setServiceRanking(Object.entries(services).sort((a, b) => b[1] - a[1]));
 
@@ -185,38 +204,53 @@ export default function FinancePage() {
     const toastId = toast.loading("正在打包全系統原始資料...");
     try {
       const collectionsToBackup = ['users', 'transactions', 'staff', 'services', 'categories', 'tiers', 'appointments', 'packages', 'templates', 'settings', 'branches'];
-      let backupData = { metadata: { exportedAt: new Date().toISOString(), version: 'TRUST_OS_1.0' } };
+      let backupData = { metadata: { exportedAt: new Date().toISOString(), version: 'TRUST_OS_1.1' } };
+      
+      let hasError = false;
+      let errorTables = [];
+
       for (const colName of collectionsToBackup) {
-        const snap = await getDocs(collection(db, colName));
-        backupData[colName] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        try {
+          const snap = await getDocs(collection(db, colName));
+          backupData[colName] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        } catch (e) {
+          console.error(`讀取 ${colName} 失敗:`, e);
+          hasError = true;
+          errorTables.push(colName);
+          backupData[colName] = { error: "權限不足或資料表不存在" };
+        }
       }
+
       const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `TRUST_Database_Backup_${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-      toast.success("✅ 系統資料備份已成功下載！", { id: toastId });
-    } catch (error) { toast.error("備份失敗", { id: toastId }); }
+      
+      if (hasError) {
+        toast.success(`⚠️ 備份完成，但跳過了沒有權限的資料表：${errorTables.join(', ')}`, { id: toastId, duration: 6000 });
+      } else {
+        toast.success("✅ 系統資料備份已成功下載！", { id: toastId });
+      }
+    } catch (error) { 
+      toast.error(`備份失敗：${error.message}`, { id: toastId }); 
+    }
   };
 
-  // 🟢 全新功能：匯出財務報表至 Excel (CSV)
   const exportToCSV = () => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
     const toastId = toast.loading("正在產生 Excel 財務報表...");
     try {
-      let csvContent = '\uFEFF'; // 加入 BOM 讓 Excel 支援中文 UTF-8
-      
-      // 1. 報表檔頭
+      let csvContent = '\uFEFF'; 
       csvContent += `TRUST 沙龍財務報表\n`;
       csvContent += `報表月份,${selectedMonth}\n`;
       csvContent += `篩選門店,${selectedBranch === 'ALL' ? '全線總計' : selectedBranch}\n\n`;
 
-      // 2. 營收總覽
-      csvContent += `【營收總覽】\n`;
-      csvContent += `充值現金流,$${metrics.totalCashIn}\n`;
-      csvContent += `店鋪總產值 (扣T-Dollar),$${metrics.totalServiceValue}\n\n`;
+      csvContent += `【營收與跨店結算總覽】\n`;
+      csvContent += `充值與售票現金流,$${metrics.totalCashIn}\n`;
+      csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
+      csvContent += `使用 T-Dollar 扣抵總額 (總部應撥款),$${metrics.tDollarDeducted}\n\n`;
 
-      // 3. 薪資與抽成表
       const displayPayroll = payrollReport;
       const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
       csvContent += `【髮型師薪資與抽成結算】\n`;
@@ -226,23 +260,29 @@ export default function FinancePage() {
       });
       csvContent += `,,,總計發放佣金,$${totalCommissionPayout}\n\n`;
 
-      // 4. 交易明細清單
       csvContent += `【本月交易明細流水帳】\n`;
       csvContent += `交易時間,門店,交易類型,客戶電話,項目/髮型師,變動金額\n`;
       const filteredTx = transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'));
       filteredTx.forEach(tx => {
         const date = new Date(tx.timestamp).toLocaleString('zh-HK');
-        const type = tx.type === 'topup' ? '增值/TopUp' : tx.type === 'deduct_package' ? '扣抵套票' : '服務消費';
+        let type = '服務消費';
+        if (tx.type === 'topup') type = '增值/TopUp';
+        if (tx.type === 'buy_package') type = '購買套票';
+        if (tx.type === 'deduct_package') type = '扣抵套票';
+
         let itemDetail = '';
-        if (tx.type === 'topup') itemDetail = `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}`;
+        if (tx.type === 'topup' || tx.type === 'buy_package') itemDetail = `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}`;
         else itemDetail = `${tx.service || tx.packageName} (${tx.stylist})`;
-        const amount = tx.type === 'topup' ? `+$${tx.tDollarAdded}` : `-$${tx.amount || 0}`;
-        const safePhone = tx.phoneNumber ? `'${tx.phoneNumber}` : ''; // 加單引號避免 Excel 把電話變科學記號
+        
+        let amount = `-$${tx.amount || 0}`;
+        if (tx.type === 'topup') amount = `+$${tx.tDollarAdded}`;
+        if (tx.type === 'buy_package') amount = `+$${tx.amountPaidHKD}`;
+
+        const safePhone = tx.phoneNumber ? `'${tx.phoneNumber}` : ''; 
 
         csvContent += `${date},${tx.branch || '未指定'},${type},${safePhone},${itemDetail},${amount}\n`;
       });
 
-      // 觸發下載
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -280,7 +320,6 @@ export default function FinancePage() {
           </div>
           
           <div className="flex flex-wrap items-center gap-4">
-             {/* 🟢 新增：匯出報表 CSV 按鈕 */}
              {currentAdminRole === 'admin' && (
                 <>
                   <button onClick={exportToCSV} className="bg-green-900/30 text-green-400 border border-green-800/50 hover:bg-green-600 hover:text-white px-5 py-3 rounded-xl text-xs font-bold transition flex items-center gap-2">
@@ -322,11 +361,12 @@ export default function FinancePage() {
 
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+            {/* 🟢 第一排：核心數據 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">
-                  {selectedBranch === 'ALL' ? '全線' : selectedBranch}充值現金流 (HKD)
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  {selectedBranch === 'ALL' ? '全線' : selectedBranch} 現金流收入 (HKD) <i className="fa-solid fa-circle-info text-gray-600" title="包含增值與直接售出套票的實收現金"></i>
                 </p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
@@ -337,7 +377,7 @@ export default function FinancePage() {
               <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-8 rounded-[32px] border border-[#D4AF37]/30 relative overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.05)]">
                 <div className="absolute -right-5 -bottom-5 text-[#D4AF37] opacity-10 text-7xl -z-10"><i className="fa-solid fa-fire"></i></div>
                 <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">
-                  {selectedBranch === 'ALL' ? '店鋪總業績' : `${selectedBranch} 產值`} (扣 T-Dollar)
+                  {selectedBranch === 'ALL' ? '全線總產值' : `${selectedBranch} 產值`} (包含現金與扣餘額)
                 </p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
@@ -345,24 +385,40 @@ export default function FinancePage() {
                 </div>
               </div>
 
-              <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-blue-500/50 transition-colors">
-                 <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-[100px] -z-10 group-hover:bg-blue-500/20 transition-colors"></div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">預計發放總佣金</p>
+              <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-red-500/50 transition-colors">
+                 <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10 group-hover:bg-red-500/20 transition-colors"></div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">預計發放總佣金成本</p>
                 <div className="flex items-baseline gap-1 text-red-400">
                   <span className="text-2xl font-bold">$</span>
                   <p className="text-4xl font-black tracking-tighter">{totalCommissionPayout.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                 </div>
               </div>
+            </div>
 
-              <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5'}`}>
+            {/* 🟢 第二排：跨店結算與系統餘額 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+              {/* 跨店對帳專用數據 */}
+              <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
+                 <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
+                <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務消耗 (需跨店撥款)
+                </p>
+                <div className="flex items-baseline gap-1 text-purple-300">
+                  <span className="text-3xl font-bold">$</span>
+                  <p className="text-5xl font-black tracking-tighter">{metrics.tDollarDeducted.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                </div>
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若採獨立戶頭，總部/他店需將此金額撥款給該店。</p>}
+              </div>
+
+              <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5 opacity-50'}`}>
                  {selectedBranch === 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>}
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  系統未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
+                  系統總未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
                 </p>
-                <p className="text-3xl font-black text-gray-300 tracking-tighter">
+                <p className="text-4xl font-black text-gray-300 tracking-tighter">
                   {selectedBranch === 'ALL' ? `$${metrics.outstandingTDollar.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}` : '---'}
                 </p>
-                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-1">餘額屬全線通用，單店不計負債</p>}
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">請切換至「全線總計」以查看全系統總負債餘額</p>}
               </div>
             </div>
 
@@ -438,6 +494,7 @@ export default function FinancePage() {
                   <tbody className="text-sm font-light">
                     {transactions
                       .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
+                      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
                       .slice(0, 20).map((tx) => (
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
@@ -445,22 +502,24 @@ export default function FinancePage() {
                         <td className="py-4">
                           {tx.type === 'topup' ? (
                             <span className="text-[9px] bg-green-500/10 text-green-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Top Up</span>
+                          ) : tx.type === 'buy_package' ? (
+                            <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Buy Pkg</span>
                           ) : tx.type === 'deduct_package' ? (
-                            <span className="text-[9px] bg-purple-500/10 text-purple-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Package</span>
+                            <span className="text-[9px] bg-purple-500/10 text-purple-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Use Pkg</span>
                           ) : (
-                            <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
+                            <span className="text-[9px] bg-gray-500/10 text-gray-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
                           )}
                         </td>
                         <td className="py-4 text-white font-bold">{tx.phoneNumber}</td>
                         <td className="py-4 text-gray-400">
-                          {tx.type === 'topup' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
+                          {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
                             <span className="flex items-center gap-2">
                               {tx.service || tx.packageName} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
                         </td>
-                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' ? 'text-green-500' : 'text-white'}`}>
-                          {tx.type === 'topup' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : (tx.amount || 0)}
+                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : 'text-white'}`}>
+                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : (tx.amount || 0)}
                         </td>
                       </tr>
                     ))}
@@ -540,7 +599,8 @@ export default function FinancePage() {
                     <div className="flex-1 w-full">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-white font-bold text-sm md:text-base">{item.service}</span>
-                        <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-bold uppercase">{item.commCode} 類</span>
+                        {/* 🟢 動態顯示代碼與自訂標籤 */}
+                        <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-bold uppercase">{item.commCode} {globalLabels[item.commCode] ? `(${globalLabels[item.commCode]})` : ''}</span>
                         {item.type === 'deduct_package' && <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-bold">扣抵套票</span>}
                         <span className="text-[9px] border border-gray-600 text-gray-400 px-1.5 py-0.5 rounded font-bold uppercase">📍 {item.branch}</span>
                       </div>
