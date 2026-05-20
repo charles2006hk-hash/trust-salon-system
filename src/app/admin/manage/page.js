@@ -58,7 +58,8 @@ export default function AdminManagePage() {
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
-    phoneNumber: '+852', commissionLabels: defaultLabels
+    phoneNumber: '+852', commissionLabels: defaultLabels,
+    sortWeight: 0 // 🟢 補回排序權重欄位
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -112,7 +113,9 @@ export default function AdminManagePage() {
       const querySnapshot = await getDocs(collection(db, activeTab));
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
+      // 🟢 依據權重 (sortWeight) 進行排序顯示
       if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
+      if (['services', 'packages'].includes(activeTab)) data.sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
       
       if (activeTab === 'settings') {
         const settingsDoc = data.find(d => d.id === 'global_config');
@@ -199,7 +202,8 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
-    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions, phoneNumber: item.phoneNumber || '+852' });
+    // 🟢 確保編輯時帶入 sortWeight 預設值
+    setFormData({ ...initialForm, ...item, commissions: item.commissions || defaultCommissions, phoneNumber: item.phoneNumber || '+852', sortWeight: item.sortWeight || 0 });
     if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') { setIsCustomStaff(true); } 
     else { setIsCustomStaff(false); }
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -305,6 +309,7 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
+            {/* 🛡️ 機密防護 */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -326,7 +331,7 @@ export default function AdminManagePage() {
                     <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                       <div>
                         <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新包含 P1~P5 的 A~F 級師傅預設拆帳公式。</p>
+                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新預設拆帳公式。</p>
                       </div>
                       <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
                         強制更新預設模板
@@ -371,6 +376,13 @@ export default function AdminManagePage() {
                   <>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required /></div>
+                    
+                    {/* 🟢 加入：排序權重 (Sort Weight) */}
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
+                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                    </div>
+
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
@@ -383,7 +395,6 @@ export default function AdminManagePage() {
                         {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                       </select>
                     </div>
-                    {/* 🟢 加入 P1~P5 供服務選擇 */}
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
@@ -398,6 +409,13 @@ export default function AdminManagePage() {
                     <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="免費贈送用請填 0" /></div>
                     <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" /></div>
+                    
+                    {/* 🟢 加入：排序權重 (Sort Weight) */}
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
+                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                    </div>
+
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
                       <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
@@ -411,7 +429,6 @@ export default function AdminManagePage() {
                         {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                       </select>
                     </div>
-                    {/* 🟢 移除 P1~P5，僅供套票選擇 */}
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
@@ -526,7 +543,6 @@ export default function AdminManagePage() {
                       </div>
                     )}
                     
-                    {/* 🟢 修復：沒有資料夾標題的項目，強制直接展開顯示！ */}
                     {(groupName === '項目列表' || groupName === '全部項目' || expandedGroups[groupName] === true) && (
                       <div className={`space-y-3 ${groupName !== '項目列表' && groupName !== '全部項目' ? 'pl-2 md:pl-6 border-l-2 border-gray-800 ml-2' : ''}`}>
                         {items.map(item => (
@@ -551,6 +567,12 @@ export default function AdminManagePage() {
                                   {['staff', 'services', 'packages'].includes(activeTab) && item.branch && (
                                     <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.branch === 'ALL' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
                                       {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
+                                    </span>
+                                  )}
+                                  {/* 🟢 顯示排序權重 Badge */}
+                                  {['services', 'packages'].includes(activeTab) && (
+                                    <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 font-bold tracking-tighter">
+                                      ⭐ 權重: {item.sortWeight || 0}
                                     </span>
                                   )}
                                   {activeTab === 'staff' && item.phoneNumber && (
