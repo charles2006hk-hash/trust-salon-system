@@ -43,7 +43,9 @@ export default function SmartPOS() {
 
   const [numpadConfig, setNumpadConfig] = useState({ isOpen: false, title: '', value: '', onConfirm: null, isPhone: false });
   const [selectorConfig, setSelectorConfig] = useState({ isOpen: false, type: '', title: '', onSelect: null });
-  const [serviceFilterTab, setServiceFilterTab] = useState('W');
+  
+  // 🟢 將預設篩選改為「全部」，並動態接收後台分類
+  const [serviceFilterTab, setServiceFilterTab] = useState('全部');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => { 
@@ -134,7 +136,6 @@ export default function SmartPOS() {
     rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
   )].filter(Boolean);
 
-  // 🟢 智能過濾與排序：抓出符合門市的項目，並依據 sortWeight 降冪排列
   const displayServices = services
     .filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch)
     .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
@@ -143,6 +144,7 @@ export default function SmartPOS() {
     .filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch)
     .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
 
+  // 🟢 動態萃取所有 CMS 裡設定的分類
   const availableCategories = ['全部', ...new Set(displayServices.map(s => s.category || '未分類'))];
 
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
@@ -404,21 +406,18 @@ export default function SmartPOS() {
               <button onClick={() => setSelectorConfig({...selectorConfig, isOpen: false})} className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/20 text-gray-400 hover:text-white transition-colors"><i className="fa-solid fa-xmark"></i></button>
             </div>
 
+            {/* 🟢 完全綁定 CMS 自訂分類！(動態渲染) */}
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
-                 {['W', 'R', 'P', 'S'].map(prefix => {
-                  // 🟢 已經幫你把 W 改為「非指定」，R 改為「指定」
-                  const label = prefix === 'W' ? '非指定 (W)' : prefix === 'R' ? '指定 (R)' : prefix === 'P' ? '產品 (P)' : '套票/其他';
-                  return (
-                    <button
-                       key={prefix} 
-                       onClick={() => setServiceFilterTab(prefix)} 
-                       className={`shrink-0 px-6 py-2.5 rounded-full text-xs font-bold transition-colors border ${serviceFilterTab === prefix ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-400 border-white/10 hover:border-white/30'}`}
-                     >
-                       {label}
-                     </button>
-                   );
-                 })}
+                 {availableCategories.map(cat => (
+                   <button 
+                     key={cat} 
+                     onClick={() => setServiceFilterTab(cat)} 
+                     className={`shrink-0 px-6 py-2.5 rounded-full text-xs font-bold transition-colors border ${serviceFilterTab === cat ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-400 border-white/10 hover:border-white/30'}`}
+                   >
+                     {cat}
+                   </button>
+                 ))}
               </div>
             )}
 
@@ -435,8 +434,9 @@ export default function SmartPOS() {
                     </button>
                   ))}
 
+                  {/* 🟢 使用動態分類過濾 */}
                   {selectorConfig.type === 'service' && displayServices
-                    .filter(s => serviceFilterTab === 'S' ? !s.commissionCode?.match(/^[WRP]/) : s.commissionCode?.startsWith(serviceFilterTab))
+                    .filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab)
                     .map(s => (
                     <button 
                       key={s.id} 
@@ -463,7 +463,7 @@ export default function SmartPOS() {
                   ))}
                </div>
                
-               {selectorConfig.type === 'service' && displayServices.filter(s => serviceFilterTab === 'S' ? !s.commissionCode?.match(/^[WRP]/) : s.commissionCode?.startsWith(serviceFilterTab)).length === 0 && (
+               {selectorConfig.type === 'service' && displayServices.filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab).length === 0 && (
                  <div className="text-center py-10 text-gray-600 font-bold tracking-widest text-sm">此分類目前無服務項目</div>
                )}
             </div>
@@ -564,7 +564,8 @@ export default function SmartPOS() {
                   </button>
                   <button 
                     type="button" 
-                    onClick={() => { setServiceFilterTab('W'); openSmartSelector('service', '選擇服務項目', setWalkInService); }} 
+                    // 🟢 確保每次點開都預設顯示「全部」
+                    onClick={() => { setServiceFilterTab('全部'); openSmartSelector('service', '選擇服務項目', setWalkInService); }} 
                     className="w-full bg-black border border-white/10 hover:border-[#D4AF37] p-3 rounded-xl text-sm font-bold text-left outline-none transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
                   >
                     {walkInService ? <span className="text-[#D4AF37]">{walkInService}</span> : <span className="text-gray-500">💆 選擇項目</span>}
@@ -834,7 +835,7 @@ export default function SmartPOS() {
                 <button 
                   type="button" 
                   onClick={() => {
-                    setServiceFilterTab('W');
+                    setServiceFilterTab('全部');
                     openSmartSelector(addItemMode === 'pay' ? 'service' : 'package_deduct', addItemMode === 'pay' ? '選擇服務項目' : '選擇扣除套票', (val) => {
                       if (addItemMode === 'pay') handleQuickAddService(val.name, val.price);
                       else handleQuickAddDeduct(val);
