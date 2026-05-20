@@ -526,7 +526,8 @@ export default function AdminManagePage() {
                       </div>
                     )}
                     
-                    {expandedGroups[groupName] === true && (
+                    {/* 🟢 修復：沒有資料夾標題的項目，強制直接展開顯示！ */}
+                    {(groupName === '項目列表' || groupName === '全部項目' || expandedGroups[groupName] === true) && (
                       <div className={`space-y-3 ${groupName !== '項目列表' && groupName !== '全部項目' ? 'pl-2 md:pl-6 border-l-2 border-gray-800 ml-2' : ''}`}>
                         {items.map(item => (
                           <div key={item.id} className="bg-gray-900/60 p-5 rounded-2xl border border-gray-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition hover:bg-gray-900">
