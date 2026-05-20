@@ -407,9 +407,10 @@ export default function SmartPOS() {
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
                  {['W', 'R', 'P', 'S'].map(prefix => {
-                   const label = prefix === 'W' ? '洗剪吹 (W)' : prefix === 'R' ? '染燙 (R)' : prefix === 'P' ? '產品 (P)' : '套票/其他';
-                   return (
-                     <button 
+                  // 🟢 已經幫你把 W 改為「非指定」，R 改為「指定」
+                  const label = prefix === 'W' ? '非指定 (W)' : prefix === 'R' ? '指定 (R)' : prefix === 'P' ? '產品 (P)' : '套票/其他';
+                  return (
+                    <button
                        key={prefix} 
                        onClick={() => setServiceFilterTab(prefix)} 
                        className={`shrink-0 px-6 py-2.5 rounded-full text-xs font-bold transition-colors border ${serviceFilterTab === prefix ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-400 border-white/10 hover:border-white/30'}`}
