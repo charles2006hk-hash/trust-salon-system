@@ -44,7 +44,6 @@ export default function SmartPOS() {
   const [numpadConfig, setNumpadConfig] = useState({ isOpen: false, title: '', value: '', onConfirm: null, isPhone: false });
   const [selectorConfig, setSelectorConfig] = useState({ isOpen: false, type: '', title: '', onSelect: null });
   
-  // 🟢 將預設篩選改為「全部」，並動態接收後台分類
   const [serviceFilterTab, setServiceFilterTab] = useState('全部');
 
   useEffect(() => {
@@ -144,7 +143,6 @@ export default function SmartPOS() {
     .filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch)
     .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
 
-  // 🟢 動態萃取所有 CMS 裡設定的分類
   const availableCategories = ['全部', ...new Set(displayServices.map(s => s.category || '未分類'))];
 
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
@@ -250,12 +248,15 @@ export default function SmartPOS() {
           }
           if (Object.keys(deductMap).length > 0) tx.update(userRef, { packageBalances: newPackageBalances });
 
+          // 🟢 寫入各種類型的交易紀錄 (包含助手專屬獎金)
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: new Date().toISOString() });
-             } else {
+             } else if (item.type === 'deduct') {
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: new Date().toISOString() });
+             } else if (item.type === 'assistant') {
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: new Date().toISOString() });
              }
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
@@ -265,7 +266,11 @@ export default function SmartPOS() {
         await runTransaction(db, async (tx) => {
           cart.forEach(item => {
             const newTxRef = doc(collection(db, "transactions"));
-            tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: new Date().toISOString() });
+            if (item.type === 'pay') {
+              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: new Date().toISOString() });
+            } else if (item.type === 'assistant') {
+              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: new Date().toISOString() });
+            }
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
@@ -406,7 +411,6 @@ export default function SmartPOS() {
               <button onClick={() => setSelectorConfig({...selectorConfig, isOpen: false})} className="w-10 h-10 rounded-full bg-white/5 hover:bg-white/20 text-gray-400 hover:text-white transition-colors"><i className="fa-solid fa-xmark"></i></button>
             </div>
 
-            {/* 🟢 完全綁定 CMS 自訂分類！(動態渲染) */}
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
                  {availableCategories.map(cat => (
@@ -434,7 +438,6 @@ export default function SmartPOS() {
                     </button>
                   ))}
 
-                  {/* 🟢 使用動態分類過濾 */}
                   {selectorConfig.type === 'service' && displayServices
                     .filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab)
                     .map(s => (
@@ -564,7 +567,6 @@ export default function SmartPOS() {
                   </button>
                   <button 
                     type="button" 
-                    // 🟢 確保每次點開都預設顯示「全部」
                     onClick={() => { setServiceFilterTab('全部'); openSmartSelector('service', '選擇服務項目', setWalkInService); }} 
                     className="w-full bg-black border border-white/10 hover:border-[#D4AF37] p-3 rounded-xl text-sm font-bold text-left outline-none transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
                   >
@@ -785,23 +787,28 @@ export default function SmartPOS() {
                      <div className="flex items-center gap-2 mt-1">
                        <span className="text-[10px] text-gray-500 italic"><i className="fa-solid fa-scissors mr-1"></i>{item.stylist}</span>
                        {item.type === 'deduct' && <span className="text-[8px] bg-purple-500/20 text-purple-400 px-1.5 rounded uppercase">扣抵套票</span>}
+                       {/* 🟢 助手獎金的特殊視覺標籤 */}
+                       {item.type === 'assistant' && <span className="text-[8px] bg-green-500/20 text-green-400 px-1.5 rounded uppercase font-bold tracking-widest">助手獎金</span>}
                      </div>
                    </div>
                    <div className="flex items-center gap-4">
-                     <div className="text-right">
-                       {item.type === 'pay' ? (
-                          <div 
-                            onClick={() => openNumpad(`修改金額 - ${item.name}`, item.finalPrice, val => updateCartItemPrice(item.id, Number(val)))}
-                            className="flex items-center justify-end gap-1 cursor-pointer hover:bg-white/5 p-1 rounded-lg transition-colors border-b border-dashed border-[#D4AF37]/50"
-                            title="點擊修改金額給予額外折扣"
-                          >
-                            <span className="text-[#D4AF37] font-bold">$</span>
-                            <span className="text-[#D4AF37] font-bold text-lg">{item.finalPrice}</span>
-                          </div>
-                       ) : (
-                          <p className="text-purple-400 font-bold">-{item.grids} 格</p>
-                       )}
-                     </div>
+                     {item.type === 'assistant' ? (
+                        <div className="text-right">
+                          <p className="text-green-400 font-bold">+${item.bonus}</p>
+                          <p className="text-[8px] text-gray-500">店家發放 (不計客單)</p>
+                        </div>
+                     ) : item.type === 'pay' ? (
+                        <div 
+                          onClick={() => openNumpad(`修改金額 - ${item.name}`, item.finalPrice, val => updateCartItemPrice(item.id, Number(val)))}
+                          className="flex items-center justify-end gap-1 cursor-pointer hover:bg-white/5 p-1 rounded-lg transition-colors border-b border-dashed border-[#D4AF37]/50"
+                          title="點擊修改金額給予額外折扣"
+                        >
+                          <span className="text-[#D4AF37] font-bold">$</span>
+                          <span className="text-[#D4AF37] font-bold text-lg">{item.finalPrice}</span>
+                        </div>
+                     ) : (
+                        <p className="text-purple-400 font-bold">-{item.grids} 格</p>
+                     )}
                      <button type="button" onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-full bg-red-900/30 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex justify-center items-center ml-2">
                        <i className="fa-solid fa-trash text-xs"></i>
                      </button>
@@ -815,6 +822,7 @@ export default function SmartPOS() {
                  </div>
                  <div className="text-right">
                    <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">應付總額 (T-Dollar / Cash)</p>
+                   {/* 🟢 總付金額不包含助手獎金 */}
                    <p className="text-3xl font-black text-white">${cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0)}</p>
                  </div>
                </div>
@@ -828,33 +836,60 @@ export default function SmartPOS() {
                   {checkoutSession.userId && (
                     <button type="button" onClick={() => setAddItemMode('deduct')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'deduct' ? 'bg-purple-500/30 text-purple-300' : 'text-gray-500 hover:bg-white/5'}`}>🎫 扣抵套票</button>
                   )}
+                  {/* 🟢 新增：助手獎金模式 */}
+                  <button type="button" onClick={() => setAddItemMode('assistant')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'assistant' ? 'bg-green-500/30 text-green-300' : 'text-gray-500 hover:bg-white/5'}`}>🤝 助手獎金</button>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 mb-3">
-                <button 
-                  type="button" 
-                  onClick={() => {
-                    setServiceFilterTab('全部');
-                    openSmartSelector(addItemMode === 'pay' ? 'service' : 'package_deduct', addItemMode === 'pay' ? '選擇服務項目' : '選擇扣除套票', (val) => {
-                      if (addItemMode === 'pay') handleQuickAddService(val.name, val.price);
-                      else handleQuickAddDeduct(val);
-                    });
-                  }}
-                  className="col-span-2 w-full bg-[#121212] border border-white/10 hover:border-[#D4AF37] p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-gray-400 flex justify-between items-center"
-                >
-                  {addItemMode === 'pay' ? '➕ 點擊選擇加購服務...' : '🎫 點擊選擇扣除套票...'}
-                  <i className="fa-solid fa-chevron-right text-gray-600"></i>
-                </button>
-                
-                <button 
-                  type="button" 
-                  onClick={() => openSmartSelector('stylist', '指定髮型師', setNewItemStylist)}
-                  className="col-span-2 w-full bg-[#121212] border border-white/10 hover:border-[#D4AF37] p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-gray-400 flex justify-between items-center"
-                >
-                  {newItemStylist ? <span className="text-white">負責人: {newItemStylist}</span> : <span>選擇負責設計師 (預設: {checkoutSession.stylist})</span>}
-                  <i className="fa-solid fa-chevron-right text-gray-600"></i>
-                </button>
+                {addItemMode === 'assistant' ? (
+                   // 🟢 助手專屬觸控加購區
+                   <button 
+                     type="button" 
+                     onClick={() => {
+                        openSmartSelector('stylist', '選擇助手', (stylistName) => {
+                           openNumpad(`輸入 ${stylistName} 的獎金`, '', (amt) => {
+                              const bonus = Number(amt);
+                              if(bonus > 0) {
+                                  setCart(prev => [...prev, { id: Date.now().toString(), type: 'assistant', name: '助手服務', stylist: stylistName, finalPrice: 0, bonus: bonus }]);
+                                  toast.success(`✅ 已加入助手獎金：${stylistName} $${bonus}`);
+                                  setAddItemMode('pay'); 
+                              }
+                           })
+                        });
+                     }}
+                     className="col-span-2 w-full bg-[#121212] border border-green-500/30 hover:border-green-400 p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-green-400 flex justify-between items-center shadow-inner"
+                   >
+                     ➕ 點擊選擇助手並輸入手動獎金...
+                     <i className="fa-solid fa-chevron-right text-green-600"></i>
+                   </button>
+                ) : (
+                  <>
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setServiceFilterTab('全部');
+                        openSmartSelector(addItemMode === 'pay' ? 'service' : 'package_deduct', addItemMode === 'pay' ? '選擇服務項目' : '選擇扣除套票', (val) => {
+                          if (addItemMode === 'pay') handleQuickAddService(val.name, val.price);
+                          else handleQuickAddDeduct(val);
+                        });
+                      }}
+                      className="col-span-2 w-full bg-[#121212] border border-white/10 hover:border-[#D4AF37] p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-gray-400 flex justify-between items-center"
+                    >
+                      {addItemMode === 'pay' ? '➕ 點擊選擇加購服務...' : '🎫 點擊選擇扣除套票...'}
+                      <i className="fa-solid fa-chevron-right text-gray-600"></i>
+                    </button>
+                    
+                    <button 
+                      type="button" 
+                      onClick={() => openSmartSelector('stylist', '指定髮型師', setNewItemStylist)}
+                      className="col-span-2 w-full bg-[#121212] border border-white/10 hover:border-[#D4AF37] p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-gray-400 flex justify-between items-center"
+                    >
+                      {newItemStylist ? <span className="text-white">負責人: {newItemStylist}</span> : <span>選擇負責設計師 (預設: {checkoutSession.stylist})</span>}
+                      <i className="fa-solid fa-chevron-right text-gray-600"></i>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
