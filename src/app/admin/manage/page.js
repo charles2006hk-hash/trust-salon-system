@@ -56,7 +56,7 @@ export default function AdminManagePage() {
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
     phoneNumber: '+852', commissionLabels: defaultLabels,
-    sortWeight: 0 
+    sortWeight: 0, isAssistant: false // 🟢 加入專職助手 Tag 欄位
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -142,10 +142,7 @@ export default function AdminManagePage() {
   const fetchRegisteredStaff = async () => {
     try {
       const snap = await getDocs(collection(db, 'users'));
-      const staffNames = snap.docs
-        .map(doc => doc.data())
-        .filter(u => ['staff', 'manager'].includes(u.role) && u.name)
-        .map(u => u.name);
+      const staffNames = snap.docs.map(doc => doc.data()).filter(u => ['staff', 'manager'].includes(u.role) && u.name).map(u => u.name);
       setRegisteredStaff([...new Set(staffNames)]);
     } catch (e) { console.error(e); }
   };
@@ -172,14 +169,13 @@ export default function AdminManagePage() {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
 
-      // 🟢 霸氣洗白機制：強制攔截錯誤資料！
       let dataToSave = { ...formData };
       if (activeTab === 'packages') {
-        dataToSave.commissionCode = 'SCALP'; // 只要是套票，無腦轉成 SCALP
+        dataToSave.commissionCode = 'SCALP';
       } else if (activeTab === 'services') {
         const validCodes = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5'];
         if (!validCodes.includes(dataToSave.commissionCode)) {
-           dataToSave.commissionCode = 'W1'; // 服務不允許 SCALP 等其他詭異代碼
+           dataToSave.commissionCode = 'W1';
         }
       }
 
@@ -210,8 +206,6 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
-    
-    // 🟢 霸氣洗白第二關：讀取舊資料時強制導正
     let safeCode = item.commissionCode;
     if (activeTab === 'packages') safeCode = 'SCALP';
     
@@ -221,7 +215,8 @@ export default function AdminManagePage() {
       commissionCode: safeCode || (activeTab === 'packages' ? 'SCALP' : 'W1'),
       commissions: item.commissions || defaultCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
-      sortWeight: item.sortWeight || 0 
+      sortWeight: item.sortWeight || 0,
+      isAssistant: item.isAssistant || false // 🟢 載入專職助手 Tag
     });
     if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') { setIsCustomStaff(true); } 
     else { setIsCustomStaff(false); }
@@ -484,6 +479,16 @@ export default function AdminManagePage() {
                         <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (跨店支援)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                       </select>
                     </div>
+
+                    {/* 🟢 加入：專職助手 Tag 打勾選項 */}
+                    <div className="space-y-2 col-span-2 flex items-center gap-3 bg-gray-900 p-4 rounded-xl border border-white/5">
+                      <input type="checkbox" id="isAssistant" className="w-5 h-5 accent-[#D4AF37]" checked={formData.isAssistant} onChange={e => setFormData({...formData, isAssistant: e.target.checked})} />
+                      <div className="flex flex-col">
+                        <label htmlFor="isAssistant" className="text-sm font-bold text-yellow-500 cursor-pointer tracking-widest">標記為專職助手 (Assistant Tag)</label>
+                        <span className="text-[10px] text-gray-500">勾選後，該員工在 POS 收銀台的「選擇助手」名單中會自動置頂分類。</span>
+                      </div>
+                    </div>
+
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">📥 載入預設抽成模板 (載入後可微調)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
@@ -598,6 +603,12 @@ export default function AdminManagePage() {
                                   {activeTab === 'staff' && item.phoneNumber && (
                                     <span className="text-[9px] bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded border border-gray-700 font-mono tracking-widest">
                                       📞 {item.phoneNumber}
+                                    </span>
+                                  )}
+                                  {/* 🟢 加入：專職助手視覺標籤 */}
+                                  {activeTab === 'staff' && item.isAssistant && (
+                                    <span className="text-[9px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded border border-yellow-500/30 font-bold uppercase tracking-tighter">
+                                      🙋‍♂️ 專職助手
                                     </span>
                                   )}
                                 </div>
