@@ -27,7 +27,6 @@ export default function FinancePage() {
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
   
-  // 🟢 加入 R3 預設標籤與動態標籤狀態
   const defaultLabels = {
     W1: '洗剪吹 (需扣耗材)', W2: '洗剪吹 (純抽成)', W3: '洗剪吹 (高階)', 
     R1: '染燙化學 (需扣耗材)', R2: '染燙化學 (純抽成)', R3: '染燙化學 (進階)', 
@@ -36,7 +35,6 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  // 🟢 擴充 metrics，加入跨店結算核心：tDollarDeducted
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, tDollarDeducted: 0 });
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
@@ -98,7 +96,6 @@ export default function FinancePage() {
       const bSnap = await getDocs(collection(db, 'branches'));
       setBranches(bSnap.docs.map(d => d.data().name));
 
-      // 🟢 抓取 CMS 自訂標籤
       const settingsSnap = await getDoc(doc(db, 'settings', 'global_config'));
       if (settingsSnap.exists() && settingsSnap.data().commissionLabels) {
         setGlobalLabels(settingsSnap.data().commissionLabels);
@@ -130,22 +127,29 @@ export default function FinancePage() {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
+      // 🟢 加入對 'assistant_bonus' 的攔截
+      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
           stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [] };
         }
 
         const staff = stylistAggregator[stylistName];
-        let revenue = 0; let commCode = null; let formulaStr = "";
+        let revenue = 0; let commCode = null; let formulaStr = ""; let commission = 0;
 
-        if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
+        // 🟢 特殊處理：如果是助手定額獎金
+        if (tx.type === 'assistant_bonus') {
+          revenue = 0; // 不計入店鋪產值，因為錢已經含在主單裡了
+          commission = Number(tx.bonusAmount || 0);
+          formulaStr = `店家發放定額獎金 ($${commission})`;
+          commCode = 'BONUS';
+        } 
+        else if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
           revenue = Number(tx.amount || 0);
           const serviceItem = servicesData.find(s => s.name === tx.service);
           commCode = serviceItem ? serviceItem.commissionCode : null;
           services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
           
-          // 🟢 跨店結算：如果這筆是用 T-Dollar 扣抵的 (deduct)，就累加到消耗總額中
           if (tx.type === 'deduct') tDollarDeducted += revenue;
         } 
         else if (tx.type === 'deduct_package') {
@@ -157,22 +161,23 @@ export default function FinancePage() {
           }
         }
 
-        let commission = 0;
-        
-        if (!commCode) {
-            formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
-        } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
-            formulaStr = "該設計師未儲存抽成參數";
-        } else if (staff.commissionsRule[commCode] === undefined) {
-            formulaStr = `該設計師未設定 ${commCode} 參數`;
-        } else {
-            const rule = staff.commissionsRule[commCode];
-            if (revenue > rule.deduct) {
-              commission = (revenue - rule.deduct) * (rule.percent / 100);
-              formulaStr = `($${revenue.toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
-            } else {
-              formulaStr = `實收低於耗材扣款 ($${rule.deduct})`;
-            }
+        // 正常計算抽成 (如果不是定額獎金的話)
+        if (tx.type !== 'assistant_bonus') {
+          if (!commCode) {
+              formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
+          } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
+              formulaStr = "該設計師未儲存抽成參數";
+          } else if (staff.commissionsRule[commCode] === undefined) {
+              formulaStr = `該設計師未設定 ${commCode} 參數`;
+          } else {
+              const rule = staff.commissionsRule[commCode];
+              if (revenue > rule.deduct) {
+                commission = (revenue - rule.deduct) * (rule.percent / 100);
+                formulaStr = `($${revenue.toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
+              } else {
+                formulaStr = `實收低於耗材扣款 ($${rule.deduct})`;
+              }
+          }
         }
 
         serviceValue += revenue;
@@ -186,7 +191,12 @@ export default function FinancePage() {
           id: tx.id,
           date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
           service: tx.service || tx.packageName,
-          type: tx.type, commCode: commCode || 'N/A', revenue: revenue, commission: commission, formulaStr: formulaStr, branch: tx.branch || '未知門店'
+          type: tx.type, 
+          commCode: commCode || 'N/A', 
+          revenue: revenue, 
+          commission: commission, 
+          formulaStr: formulaStr, 
+          branch: tx.branch || '未知門店'
         });
       }
     });
@@ -254,7 +264,7 @@ export default function FinancePage() {
       const displayPayroll = payrollReport;
       const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
       csvContent += `【髮型師薪資與抽成結算】\n`;
-      csvContent += `髮型師,模板級別,服務客數,創造產值,實得佣金\n`;
+      csvContent += `髮型師,模板級別,參與客數,創造產值,實得佣金\n`;
       displayPayroll.forEach(staff => {
         csvContent += `${staff.name},${staff.grade},${staff.clientCount},$${staff.totalRevenue},$${staff.totalCommission}\n`;
       });
@@ -269,6 +279,7 @@ export default function FinancePage() {
         if (tx.type === 'topup') type = '增值/TopUp';
         if (tx.type === 'buy_package') type = '購買套票';
         if (tx.type === 'deduct_package') type = '扣抵套票';
+        if (tx.type === 'assistant_bonus') type = '助手獎金';
 
         let itemDetail = '';
         if (tx.type === 'topup' || tx.type === 'buy_package') itemDetail = `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}`;
@@ -277,6 +288,7 @@ export default function FinancePage() {
         let amount = `-$${tx.amount || 0}`;
         if (tx.type === 'topup') amount = `+$${tx.tDollarAdded}`;
         if (tx.type === 'buy_package') amount = `+$${tx.amountPaidHKD}`;
+        if (tx.type === 'assistant_bonus') amount = `(獎金) +$${tx.bonusAmount}`;
 
         const safePhone = tx.phoneNumber ? `'${tx.phoneNumber}` : ''; 
 
@@ -361,7 +373,6 @@ export default function FinancePage() {
 
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
-            {/* 🟢 第一排：核心數據 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
@@ -395,9 +406,7 @@ export default function FinancePage() {
               </div>
             </div>
 
-            {/* 🟢 第二排：跨店結算與系統餘額 */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-              {/* 跨店對帳專用數據 */}
               <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
                 <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-2 flex items-center gap-1">
@@ -506,6 +515,8 @@ export default function FinancePage() {
                             <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Buy Pkg</span>
                           ) : tx.type === 'deduct_package' ? (
                             <span className="text-[9px] bg-purple-500/10 text-purple-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Use Pkg</span>
+                          ) : tx.type === 'assistant_bonus' ? (
+                            <span className="text-[9px] bg-yellow-500/10 text-yellow-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Bonus</span>
                           ) : (
                             <span className="text-[9px] bg-gray-500/10 text-gray-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
                           )}
@@ -518,8 +529,8 @@ export default function FinancePage() {
                             </span>
                           )}
                         </td>
-                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : 'text-white'}`}>
-                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : (tx.amount || 0)}
+                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : tx.type === 'assistant_bonus' ? 'text-yellow-400' : 'text-white'}`}>
+                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                       </tr>
                     ))}
@@ -546,7 +557,7 @@ export default function FinancePage() {
                       <h4 className="text-xl font-bold text-white">{staff.name}</h4>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-widest ${staff.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-white/10 text-gray-300'}`}>{staff.grade}</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">本篩選共服務 <span className="text-white font-bold">{staff.clientCount}</span> 個項目</p>
+                    <p className="text-xs text-gray-500 mt-1">本篩選共參與 <span className="text-white font-bold">{staff.clientCount}</span> 個項目</p>
                   </div>
                 </div>
 
@@ -556,7 +567,7 @@ export default function FinancePage() {
                      <p className="text-xl font-mono text-white">${staff.totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6">
-                     <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">個人抽成 (Commission)</p>
+                     <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實得佣金與獎金</p>
                      <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${staff.totalCommission.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6 flex items-center">
@@ -585,7 +596,7 @@ export default function FinancePage() {
             <div className="mb-6 border-b border-white/10 pb-6 shrink-0">
               <h2 className="text-2xl md:text-3xl font-black text-white italic tracking-tighter">Commission <span className="text-[#D4AF37]">Details</span></h2>
               <div className="flex flex-col md:flex-row md:items-center gap-3 mt-2">
-                <span className="text-sm font-bold text-gray-300">髮型師：{selectedStaffDetail.name}</span>
+                <span className="text-sm font-bold text-gray-300">人員姓名：{selectedStaffDetail.name}</span>
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
             </div>
@@ -599,8 +610,12 @@ export default function FinancePage() {
                     <div className="flex-1 w-full">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-white font-bold text-sm md:text-base">{item.service}</span>
-                        {/* 🟢 動態顯示代碼與自訂標籤 */}
-                        <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-bold uppercase">{item.commCode} {globalLabels[item.commCode] ? `(${globalLabels[item.commCode]})` : ''}</span>
+                        {/* 🟢 動態顯示標籤與特殊徽章 */}
+                        {item.type === 'assistant_bonus' ? (
+                          <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-widest">💰 助手獎金</span>
+                        ) : (
+                          <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded font-bold uppercase">{item.commCode} {globalLabels[item.commCode] ? `(${globalLabels[item.commCode]})` : ''}</span>
+                        )}
                         {item.type === 'deduct_package' && <span className="text-[9px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-bold">扣抵套票</span>}
                         <span className="text-[9px] border border-gray-600 text-gray-400 px-1.5 py-0.5 rounded font-bold uppercase">📍 {item.branch}</span>
                       </div>
@@ -615,7 +630,7 @@ export default function FinancePage() {
                     </div>
 
                     <div className="w-full md:w-32 text-right shrink-0">
-                      <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得佣金</p>
+                      <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得金額</p>
                       <p className="text-lg font-black text-[#D4AF37] font-mono">
                         ${item.commission.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}
                       </p>
