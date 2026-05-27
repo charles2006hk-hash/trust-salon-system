@@ -23,7 +23,6 @@ export default function AdminManagePage() {
   const [currentUserRole, setCurrentUserRole] = useState(null); 
 
   const [editingId, setEditingId] = useState(null);
-  
   const [expandedGroups, setExpandedGroups] = useState({});
   const router = useRouter();
 
@@ -57,7 +56,7 @@ export default function AdminManagePage() {
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
     phoneNumber: '+852', commissionLabels: defaultLabels,
-    sortWeight: 0
+    sortWeight: 0 
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -173,24 +172,34 @@ export default function AdminManagePage() {
          throw new Error("權限不足：僅老闆可修改此設定");
       }
 
+      // 🟢 霸氣洗白機制：強制攔截錯誤資料！
+      let dataToSave = { ...formData };
+      if (activeTab === 'packages') {
+        dataToSave.commissionCode = 'SCALP'; // 只要是套票，無腦轉成 SCALP
+      } else if (activeTab === 'services') {
+        const validCodes = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5'];
+        if (!validCodes.includes(dataToSave.commissionCode)) {
+           dataToSave.commissionCode = 'W1'; // 服務不允許 SCALP 等其他詭異代碼
+        }
+      }
+
       if (activeTab === 'settings') {
          await setDoc(doc(db, 'settings', 'global_config'), { 
-           validityDays: Number(formData.validityDays), 
-           commissionLabels: formData.commissionLabels, 
+           validityDays: Number(dataToSave.validityDays), 
+           commissionLabels: dataToSave.commissionLabels, 
            updatedAt: new Date().toISOString() 
          }, { merge: true });
-         setGlobalLabels(formData.commissionLabels);
+         setGlobalLabels(dataToSave.commissionLabels);
          toast.success("系統參數與自訂標籤更新成功！");
       } else {
         if (editingId) {
-          await setDoc(doc(db, activeTab, editingId), { ...formData, updatedAt: new Date().toISOString() }, { merge: true });
+          await setDoc(doc(db, activeTab, editingId), { ...dataToSave, updatedAt: new Date().toISOString() }, { merge: true });
           toast.success("更新成功！");
         } else {
-          await addDoc(collection(db, activeTab), { ...formData, createdAt: new Date().toISOString() });
+          await addDoc(collection(db, activeTab), { ...dataToSave, createdAt: new Date().toISOString() });
           toast.success("新增成功！");
         }
       }
-      // 🟢 修復點：儲存後清空表單，同時確保依據當下 Tab 給予正確的 commissionCode 預設值
       setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); 
       setEditingId(null); setIsCustomStaff(false); fetchData();
       if (activeTab === 'categories') fetchCategories();
@@ -201,10 +210,15 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
+    
+    // 🟢 霸氣洗白第二關：讀取舊資料時強制導正
+    let safeCode = item.commissionCode;
+    if (activeTab === 'packages') safeCode = 'SCALP';
+    
     setFormData({ 
       ...initialForm, 
       ...item, 
-      commissionCode: item.commissionCode || (activeTab === 'packages' ? 'SCALP' : 'W1'), // 🟢 防呆：確保編輯時有正確的 code
+      commissionCode: safeCode || (activeTab === 'packages' ? 'SCALP' : 'W1'),
       commissions: item.commissions || defaultCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0 
@@ -301,7 +315,6 @@ export default function AdminManagePage() {
                    <button key={tab.id} onClick={() => { 
                      setActiveTab(tab.id); 
                      setEditingId(null); 
-                     // 🟢 修復點：切換分頁時，動態給予正確的拆帳代碼預設值！
                      setFormData({...initialForm, commissionCode: tab.id === 'packages' ? 'SCALP' : 'W1'}); 
                      setIsCustomStaff(false); 
                    }} 
@@ -506,7 +519,7 @@ export default function AdminManagePage() {
                     {activeTab === 'settings' ? '💾 儲存全局設定' : editingId ? '💾 儲存修改內容' : '➕ 確認新增資料'}
                   </button>
                   {editingId && (
-                    <button type="button" onClick={() => {setEditingId(null); setFormData(initialForm); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
+                    <button type="button" onClick={() => {setEditingId(null); setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
                   )}
                 </div>
               </form>
