@@ -16,6 +16,8 @@ export default function SmartPOS() {
 
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
+  
+  // 🟢 使用更詳細的 rawStaff 狀態來判斷是不是助手
   const [rawStaff, setRawStaff] = useState([]); 
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
@@ -131,9 +133,10 @@ export default function SmartPOS() {
     toast.success(`已切換至 ${branchName} 收銀模式`);
   };
 
-  const displayStaff = [...new Set(
-    rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name)
-  )].filter(Boolean);
+  // 🟢 智能助手分流計算區
+  const displayStaff = [...new Set(rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name))].filter(Boolean);
+  const dedicatedAssistants = [...new Set(rawStaff.filter(s => (s.branch === currentBranch || s.branch === 'ALL') && s.isAssistant).map(s => s.name))].filter(Boolean);
+  const otherStylists = displayStaff.filter(name => !dedicatedAssistants.includes(name));
 
   const displayServices = services
     .filter(s => !s.branch || s.branch === 'ALL' || s.branch === currentBranch)
@@ -248,7 +251,6 @@ export default function SmartPOS() {
           }
           if (Object.keys(deductMap).length > 0) tx.update(userRef, { packageBalances: newPackageBalances });
 
-          // 🟢 寫入各種類型的交易紀錄 (包含助手專屬獎金)
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
@@ -426,18 +428,40 @@ export default function SmartPOS() {
             )}
 
             <div className="overflow-y-auto custom-scrollbar flex-1 pr-2">
-               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pb-8">
-                  {selectorConfig.type === 'stylist' && displayStaff.map(s => (
-                    <button 
-                      key={s} 
-                      onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }}
-                      className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group"
-                    >
-                      <div className="w-12 h-12 mx-auto bg-gray-800 text-gray-300 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-[#D4AF37] group-hover:text-black transition-colors">{s.charAt(0)}</div>
-                      <span className="text-white font-bold tracking-widest">{s}</span>
-                    </button>
-                  ))}
+               {/* 🟢 智能助手名單分流 */}
+               {selectorConfig.type === 'stylist' && (
+                 <div className="col-span-2 md:col-span-3 space-y-6 pb-8">
+                   {dedicatedAssistants.length > 0 && (
+                     <div>
+                       <h4 className="text-[10px] text-yellow-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">⭐ 專職助手</h4>
+                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                         {dedicatedAssistants.map(s => (
+                           <button key={s} onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }} className="bg-[#1a1a1a] border border-yellow-500/30 hover:border-yellow-400 p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group">
+                             <div className="w-12 h-12 mx-auto bg-yellow-500/10 text-yellow-500 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-yellow-500 group-hover:text-black transition-colors">{s.charAt(0)}</div>
+                             <span className="text-white font-bold tracking-widest">{s}</span>
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+                   
+                   {otherStylists.length > 0 && (
+                     <div>
+                       <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">💇‍♂️ 其他設計師</h4>
+                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                         {otherStylists.map(s => (
+                           <button key={s} onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }} className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group">
+                             <div className="w-12 h-12 mx-auto bg-gray-800 text-gray-300 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-[#D4AF37] group-hover:text-black transition-colors">{s.charAt(0)}</div>
+                             <span className="text-white font-bold tracking-widest">{s}</span>
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+                 </div>
+               )}
 
+               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pb-8">
                   {selectorConfig.type === 'service' && displayServices
                     .filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab)
                     .map(s => (
@@ -787,7 +811,6 @@ export default function SmartPOS() {
                      <div className="flex items-center gap-2 mt-1">
                        <span className="text-[10px] text-gray-500 italic"><i className="fa-solid fa-scissors mr-1"></i>{item.stylist}</span>
                        {item.type === 'deduct' && <span className="text-[8px] bg-purple-500/20 text-purple-400 px-1.5 rounded uppercase">扣抵套票</span>}
-                       {/* 🟢 助手獎金的特殊視覺標籤 */}
                        {item.type === 'assistant' && <span className="text-[8px] bg-green-500/20 text-green-400 px-1.5 rounded uppercase font-bold tracking-widest">助手獎金</span>}
                      </div>
                    </div>
@@ -822,7 +845,6 @@ export default function SmartPOS() {
                  </div>
                  <div className="text-right">
                    <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">應付總額 (T-Dollar / Cash)</p>
-                   {/* 🟢 總付金額不包含助手獎金 */}
                    <p className="text-3xl font-black text-white">${cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0)}</p>
                  </div>
                </div>
@@ -836,14 +858,12 @@ export default function SmartPOS() {
                   {checkoutSession.userId && (
                     <button type="button" onClick={() => setAddItemMode('deduct')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'deduct' ? 'bg-purple-500/30 text-purple-300' : 'text-gray-500 hover:bg-white/5'}`}>🎫 扣抵套票</button>
                   )}
-                  {/* 🟢 新增：助手獎金模式 */}
                   <button type="button" onClick={() => setAddItemMode('assistant')} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${addItemMode === 'assistant' ? 'bg-green-500/30 text-green-300' : 'text-gray-500 hover:bg-white/5'}`}>🤝 助手獎金</button>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 mb-3">
                 {addItemMode === 'assistant' ? (
-                   // 🟢 助手專屬觸控加購區
                    <button 
                      type="button" 
                      onClick={() => {
