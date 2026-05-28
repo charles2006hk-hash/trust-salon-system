@@ -592,7 +592,7 @@ export default function SmartPOS() {
                   </button>
                   <button 
                     type="button" 
-                    onClick={() => { setServiceFilterTab('全部'); openSmartSelector('service', '選擇服務項目', setWalkInService); }} 
+                    onClick={() => { setServiceFilterTab('全部'); openSmartSelector('service', '選擇服務項目', (val) => setWalkInService(val.name)); }} 
                     className="w-full bg-black border border-white/10 hover:border-[#D4AF37] p-3 rounded-xl text-sm font-bold text-left outline-none transition-colors overflow-hidden text-ellipsis whitespace-nowrap"
                   >
                     {walkInService ? <span className="text-[#D4AF37]">{walkInService}</span> : <span className="text-gray-500">💆 選擇項目</span>}
