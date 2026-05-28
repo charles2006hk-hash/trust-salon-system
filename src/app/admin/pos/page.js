@@ -462,14 +462,15 @@ export default function SmartPOS() {
                )}
 
                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pb-8">
-                  {selectorConfig.type === 'service' && displayServices
-                    .filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab)
-                    .map(s => (
-                    <button 
-                      key={s.id} 
-                      onClick={() => { selectorConfig.onSelect(s.name); setSelectorConfig({...selectorConfig, isOpen: false}); }}
-                      className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-5 rounded-2xl text-left transition-all active:scale-95 shadow-lg flex flex-col justify-between min-h-[100px] group"
-                    >
+                 {selectorConfig.type === 'service' && displayServices
+                      .filter(s => serviceFilterTab === '全部' || (s.category || '未分類') === serviceFilterTab)
+                      .map(s => (
+                      <button 
+                        key={s.id} 
+                        // 👇 找到這一行，把原本的 s.name 改成 s 👇
+                        onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }}
+                        className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-5 rounded-2xl text-left transition-all active:scale-95 shadow-lg flex flex-col justify-between min-h-[100px] group"
+                      >
                       <span className="text-sm font-bold text-white leading-snug group-hover:text-[#D4AF37]">{s.name}</span>
                       <div className="mt-3 flex justify-between items-end">
                          <span className="text-[10px] bg-white/5 px-2 py-0.5 rounded text-gray-400 font-mono">{s.commissionCode}</span>
