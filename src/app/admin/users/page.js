@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; // 🟢 補上 runTransaction
+import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { Toaster, toast } from 'react-hot-toast';
 
@@ -10,8 +10,10 @@ export default function UserManagementPage() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterRole, setFilterRole] = useState('all');
+  
+  // 🟢 新增：搜尋關鍵字狀態
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // 🟢 儲存當前操作者的 權限 與 UID
   const [currentAdminRole, setCurrentAdminRole] = useState('reception'); 
   const [currentUid, setCurrentUid] = useState(null);
 
@@ -23,13 +25,15 @@ export default function UserManagementPage() {
   const [staffStats, setStaffStats] = useState({ clientCount: 0, revenue: 0 });
   const [isSaving, setIsSaving] = useState(false);
 
-  // 🟢 新增：手動調整資產的表單狀態
   const [adjustForm, setAdjustForm] = useState({ points: '', tDollar: '', note: '' });
+  
+  // 🟢 新增：老闆強制重設密碼的狀態
+  const [newPasswordForm, setNewPasswordForm] = useState('');
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
   useEffect(() => {
-    // 🟢 取得當前操作者的角色身分與 UID
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUid(user.uid);
@@ -93,7 +97,7 @@ export default function UserManagementPage() {
         role: newUser.role,
         tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
-        packageBalances: {}, // 🟢 確保新註冊的客人也能無縫支援套票系統
+        packageBalances: {},
         createdAt: new Date().toISOString(),
         status: 'active',
         notes: ''
@@ -121,7 +125,8 @@ export default function UserManagementPage() {
 
   const openDetails = async (user) => {
     setSelectedUser(user);
-    setAdjustForm({ points: '', tDollar: '', note: '' }); // 🟢 打開詳細視窗時，重置調整表單
+    setAdjustForm({ points: '', tDollar: '', note: '' }); 
+    setNewPasswordForm(''); // 🟢 重置密碼輸入框
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -166,7 +171,50 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 核心功能：手動派發/扣除資產 (僅限老闆)
+  // 🟢 核心功能：老闆強制重設指定員工的 Auth 密碼
+  const handleForcePasswordReset = async (e) => {
+    e.preventDefault();
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
+    if (!newPasswordForm || newPasswordForm.length < 6) return toast.error("密碼長度必須至少 6 個字元");
+    if (!selectedUser.id) return toast.error("無法識別的帳戶 (可能是早期建立的純會員檔案)");
+
+    if (!window.confirm(`確定要將【${selectedUser.name || selectedUser.phoneNumber}】的登入密碼強制更改為「${newPasswordForm}」嗎？`)) return;
+
+    setIsResettingPassword(true);
+    const toastId = toast.loading("正在聯絡伺服器強制更改密碼...");
+
+    try {
+      // 調用 Firebase Admin API 的 REST 接口來更改指定 UID 的密碼
+      const apiKey = auth.app.options.apiKey;
+      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idToken: await auth.currentUser.getIdToken(), // 老闆的 Token (用來證明權限)
+          localId: selectedUser.id, // 要被改密碼的人的 UID
+          password: newPasswordForm, // 新密碼
+          returnSecureToken: false
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        // 如果這個 UID 不是 Auth 帳號 (例如他只是一般會員)，Firebase 會報錯
+        if (data.error && data.error.message.includes('USER_NOT_FOUND')) {
+           throw new Error("此檔案尚未開通系統登入權限，無法設定密碼。");
+        }
+        throw new Error(data.error.message || "密碼更新失敗");
+      }
+
+      toast.success(`✅ 密碼已強制重設成功！請通知該員工使用新密碼登入。`, { id: toastId, duration: 6000 });
+      setNewPasswordForm('');
+    } catch (error) {
+      toast.error(error.message, { id: toastId });
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
+
   const handleAssetAdjustment = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作此功能");
@@ -192,7 +240,6 @@ export default function UserManagementPage() {
 
         tx.update(userRef, { points: newPoints, tDollarBalance: newTDollar });
         
-        // 寫入交易流水帳，確保財務與發放紀錄有跡可循
         tx.set(doc(collection(db, "transactions")), {
           userId: selectedUser.id, phoneNumber: selectedUser.phoneNumber, type: "admin_adjustment",
           pointsAdded: pts, tDollarAdded: td, adminId: currentUid, note: adjustForm.note || '老闆手動調整', timestamp: new Date().toISOString()
@@ -237,33 +284,26 @@ export default function UserManagementPage() {
     } catch(e) { toast.error("刪除失敗"); }
   };
 
-  // ==========================================
-  // 🟢 終極嚴格：階級視角邏輯 (Visibility Logic)
-  // ==========================================
   const hierarchicalUsers = users.filter(u => {
-    // 1. 老闆 (Admin)：看全部
     if (currentAdminRole === 'admin') return true;
-
-    // 2. 永遠可以看到「自己」的檔案
     if (u.id === currentUid) return true;
-
-    // 3. 經理 (Manager)：看所有下屬與客人 (不包含其他 Manager 與 Admin)
-    if (currentAdminRole === 'manager') {
-      return ['staff', 'reception', 'member'].includes(u.role);
-    }
-
-    // 4. 櫃台 / 員工：只能看客人 (不包含同級同事、Manager、Admin)
-    if (['staff', 'reception'].includes(currentAdminRole)) {
-      return ['member'].includes(u.role);
-    }
-
+    if (currentAdminRole === 'manager') return ['staff', 'reception', 'member'].includes(u.role);
+    if (['staff', 'reception'].includes(currentAdminRole)) return ['member'].includes(u.role);
     return false;
   });
 
-  // 根據上方的「篩選按鈕」進行二次過濾
-  const filteredUsers = filterRole === 'all' ? hierarchicalUsers : hierarchicalUsers.filter(u => u.role === filterRole);
+  // 🟢 根據 Role 篩選按鈕過濾
+  const roleFilteredUsers = filterRole === 'all' ? hierarchicalUsers : hierarchicalUsers.filter(u => u.role === filterRole);
 
-  // 決定畫面上要顯示哪些篩選按鈕 (不能篩選自己沒權限看的角色)
+  // 🟢 根據「搜尋關鍵字」進行最終雙重過濾 (同時比對名字與電話)
+  const finalFilteredUsers = roleFilteredUsers.filter(u => {
+    if (!searchQuery) return true;
+    const lowerQuery = searchQuery.toLowerCase();
+    const nameMatch = u.name ? u.name.toLowerCase().includes(lowerQuery) : false;
+    const phoneMatch = u.phoneNumber ? u.phoneNumber.includes(lowerQuery) : false;
+    return nameMatch || phoneMatch;
+  });
+
   const getVisibleRoleButtons = () => {
     if (currentAdminRole === 'admin') return ['all', 'member', 'reception', 'staff', 'manager', 'admin'];
     if (currentAdminRole === 'manager') return ['all', 'member', 'reception', 'staff'];
@@ -291,14 +331,35 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      {/* 動態顯示篩選按鈕 */}
-      <div className="flex flex-wrap gap-3 mb-8">
-        {getVisibleRoleButtons().map(role => (
-          <button key={role} onClick={() => setFilterRole(role)}
-            className={`px-5 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all border ${filterRole === role ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-500 border-gray-800 hover:border-gray-500'}`}>
-            {role === 'all' ? '全部' : role}
-          </button>
-        ))}
+      {/* 🟢 新增：智能搜尋列與角色篩選按鈕區塊 */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+        <div className="flex flex-wrap gap-2">
+          {getVisibleRoleButtons().map(role => (
+            <button key={role} onClick={() => setFilterRole(role)}
+              className={`px-5 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all border ${filterRole === role ? 'bg-[#D4AF37] text-black border-[#D4AF37]' : 'bg-transparent text-gray-500 border-gray-800 hover:border-gray-500'}`}>
+              {role === 'all' ? '全部' : role}
+            </button>
+          ))}
+        </div>
+        
+        {/* 智能搜尋框 */}
+        <div className="w-full md:w-72 relative">
+          <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none">
+             <i className="fa-solid fa-magnifying-glass text-gray-500"></i>
+          </div>
+          <input 
+            type="text" 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#121212] border border-white/10 p-3 pl-10 rounded-full text-white outline-none focus:border-[#D4AF37] text-sm transition-colors shadow-inner" 
+            placeholder="搜尋姓名或電話號碼..." 
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-0 flex items-center pr-4 text-gray-500 hover:text-white transition-colors">
+              <i className="fa-solid fa-circle-xmark"></i>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="bg-[#121212] rounded-[32px] border border-white/5 overflow-hidden shadow-2xl">
@@ -314,7 +375,7 @@ export default function UserManagementPage() {
               </tr>
             </thead>
             <tbody className="text-sm">
-              {filteredUsers.map(u => (
+              {finalFilteredUsers.map(u => (
                 <tr key={u.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                   <td className="p-6">
                     <p className="text-white font-bold text-base mb-1 flex items-center gap-2">
@@ -322,7 +383,6 @@ export default function UserManagementPage() {
                       {u.role === 'admin' && <i className="fa-solid fa-crown text-[#D4AF37] text-xs"></i>}
                       {['staff', 'manager'].includes(u.role) && <i className="fa-solid fa-scissors text-[#D4AF37] text-xs"></i>}
                       {u.role === 'reception' && <i className="fa-solid fa-desktop text-blue-400 text-xs"></i>}
-                      {/* 標示「自己」 */}
                       {u.id === currentUid && <span className="ml-2 text-[8px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full uppercase tracking-widest border border-blue-500/30">You</span>}
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
@@ -343,7 +403,6 @@ export default function UserManagementPage() {
                     </div>
                   </td>
                   <td className="p-6">
-                    {/* 鎖死：如果不是 Admin，這個下拉選單直接變灰且無法點擊 */}
                     <select 
                       value={u.role || 'member'} 
                       onChange={(e) => handleRoleChange(u.id, e.target.value)}
@@ -366,7 +425,6 @@ export default function UserManagementPage() {
                     </select>
                   </td>
                   <td className="p-6 text-right flex justify-end gap-2 items-center">
-                     {/* 防護：只有老闆可以停用和刪除帳號 */}
                      {currentAdminRole === 'admin' && (
                        <>
                          <button onClick={() => toggleUserStatus(u)} className={`text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition ${u.status === 'suspended' ? 'bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white'}`}>
@@ -383,6 +441,13 @@ export default function UserManagementPage() {
                   </td>
                 </tr>
               ))}
+              {finalFilteredUsers.length === 0 && (
+                <tr>
+                  <td colSpan="5" className="p-10 text-center text-gray-500 font-bold tracking-widest border border-dashed border-white/5">
+                    {searchQuery ? `找不到符合「${searchQuery}」的用戶資料` : '此分類目前沒有用戶資料'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -397,7 +462,6 @@ export default function UserManagementPage() {
             <form onSubmit={handleCreateUser} className="space-y-4">
               <div className="space-y-1">
                 <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">身分權限</label>
-                {/* 防護：如果不是老闆，下拉選單強迫鎖定在 Member */}
                 <select 
                   value={newUser.role} 
                   onChange={e => setNewUser({...newUser, role: e.target.value})} 
@@ -452,7 +516,6 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 權限對照矩陣 Modal */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
@@ -555,7 +618,6 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 用戶詳情 Modal */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
@@ -575,7 +637,6 @@ export default function UserManagementPage() {
 
             <div className="p-10 space-y-8">
               
-              {/* 🟢 系統資產手動調整區塊 (僅限老闆) */}
               {currentAdminRole === 'admin' && (
                 <div className="bg-gradient-to-r from-red-900/20 to-black p-6 rounded-3xl border border-red-500/30 shadow-lg">
                   <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
@@ -643,12 +704,41 @@ export default function UserManagementPage() {
                 </div>
               </div>
 
-              <div className="flex gap-4 pt-4 border-t border-white/5">
+              <div className="flex gap-4 pt-4 border-t border-white/5 pb-8">
                 <button onClick={() => setIsDetailOpen(false)} className="flex-1 bg-white/5 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-white/10 transition-all">取消</button>
                 <button onClick={saveUserDetails} disabled={isSaving} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:scale-105 transition-transform disabled:opacity-50">
                   {isSaving ? '儲存中...' : '💾 儲存修改'}
                 </button>
               </div>
+
+              {/* 🟢 新增：老闆專屬強制重設密碼區塊 */}
+              {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (
+                <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
+                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
+                    <i className="fa-solid fa-lock"></i> 強制重設登入密碼 (Admin Only)
+                  </h3>
+                  <form onSubmit={handleForcePasswordReset} className="flex flex-col md:flex-row gap-3">
+                    <input 
+                      type="text" 
+                      required 
+                      minLength={6}
+                      value={newPasswordForm} 
+                      onChange={e => setNewPasswordForm(e.target.value)} 
+                      className="flex-1 bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono placeholder:text-gray-600" 
+                      placeholder="輸入新密碼 (至少6碼)..." 
+                    />
+                    <button 
+                      type="submit" 
+                      disabled={isResettingPassword}
+                      className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors shadow-lg disabled:opacity-50"
+                    >
+                      {isResettingPassword ? '處理中...' : '強制覆蓋密碼'}
+                    </button>
+                  </form>
+                  <p className="text-[9px] text-gray-500 mt-3">⚠️ 覆蓋後立即生效，請手動通知該員工使用新密碼登入。</p>
+                </div>
+              )}
+
             </div>
           </div>
         </div>
