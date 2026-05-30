@@ -35,6 +35,7 @@ export default function LoginPage() {
           
           if (docSnap.exists()) {
             const role = docSnap.data().role;
+            // 🟢 如果是內部管理人員，自動導向大後台首頁
             if (['admin', 'manager', 'staff', 'reception'].includes(role)) {
               router.push('/admin'); 
             } else {
@@ -42,7 +43,7 @@ export default function LoginPage() {
             }
           } else {
             setStep('register');
-            setLoading(false); // 🟢 修復 1：切換到註冊畫面時，強制解除按鈕的 Loading 鎖定狀態
+            setLoading(false); 
             setPageLoading(false);
           }
         } catch (error) {
@@ -97,7 +98,7 @@ export default function LoginPage() {
     try {
       await confirmationResult.confirm(otp);
       toast.success("手機驗證成功！", { id: toastId });
-      setLoading(false); // 🟢 修復 2：OTP 驗證成功後，解除 Loading 狀態
+      setLoading(false); 
     } catch (error) {
       toast.error("驗證碼錯誤", { id: toastId });
       setLoading(false);
@@ -131,14 +132,14 @@ export default function LoginPage() {
     } catch (error) {
       toast.error("註冊失敗，請重試", { id: toastId });
     } finally {
-      setLoading(false); // 🟢 確保最後無論如何都會解除 Loading
+      setLoading(false); 
     }
   };
 
   if (pageLoading) return <div className="min-h-screen flex items-center justify-center bg-[#080808] text-[#D4AF37] tracking-widest text-xs uppercase">Connecting...</div>;
 
   return (
-    <div className="bg-[#080808] min-h-screen flex items-center justify-center p-6 font-sans selection:bg-[#D4AF37] selection:text-black">
+    <div className="bg-[#080808] min-h-screen text-gray-100 flex items-center justify-center p-6 font-sans selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
       <Toaster position="top-right" />
       <div id="recaptcha-container"></div>
@@ -245,7 +246,7 @@ export default function LoginPage() {
         </div>
         
         <div className="text-center mt-8">
-           {/* 🟢 修復 3：使用 Link 元件正確跳轉到大後台登入頁 */}
+           {/* 🟢 這裡精準重定向到「內部員工登入頁」路徑 */}
            <Link href="/admin/login" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-[#D4AF37] transition-colors border-b border-white/5 pb-1">內部員工通道 (Staff Only)</Link>
         </div>
       </div>
