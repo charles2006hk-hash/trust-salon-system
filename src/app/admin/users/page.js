@@ -31,6 +31,10 @@ export default function UserManagementPage() {
 
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
+  // 🟢 新增：舊帳號數據遷移專用狀態
+  const [migratePhone, setMigratePhone] = useState('');
+  const [migratePassword, setMigratePassword] = useState('');
+
   // 🟢 系統母信箱設定
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
@@ -73,7 +77,7 @@ export default function UserManagementPage() {
            return toast.error("權限不足：只有老闆 (Admin) 可以建立內部員工帳號", { id: toastId });
         }
         
-        // 🟢 員工帳號建立邏輯：電話智能打包影子信箱
+        // 員工帳號建立邏輯：電話智能打包影子信箱
         const cleanPhone = newUser.phone.replace(/[^0-9]/g, '');
         if (!cleanPhone || cleanPhone.length < 8) {
           return toast.error("建立員工帳號必須填寫有效的電話號碼 (至少 8 碼) 作為登入憑證！", { id: toastId });
@@ -82,7 +86,7 @@ export default function UserManagementPage() {
           return toast.error("初始密碼必須至少 6 個字元", { id: toastId });
         }
         
-        // 🟢 打包影子信箱
+        // 打包影子信箱
         loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
         
         const apiKey = auth.app.options.apiKey;
@@ -111,7 +115,8 @@ export default function UserManagementPage() {
         packageBalances: {},
         createdAt: new Date().toISOString(),
         status: 'active',
-        notes: ''
+        notes: '',
+        isFirstLogin: true // 🟢 新開通的員工預設開啟首次登入修改提示
       };
 
       if (finalUid) {
@@ -136,6 +141,8 @@ export default function UserManagementPage() {
   const openDetails = async (user) => {
     setSelectedUser(user);
     setAdjustForm({ points: '', tDollar: '', note: '' }); 
+    setMigratePhone(user.phoneNumber || ''); // 🟢 開啟詳情時，初始化遷移手機號碼
+    setMigratePassword(''); // 🟢 初始化遷移密碼
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -156,6 +163,55 @@ export default function UserManagementPage() {
       } catch (error) {
         console.error("結算業績失敗", error);
       }
+    }
+  };
+
+  // 🟢 核心黑科技功能：一鍵將舊資料文檔全數完美遷移至新手機影子信箱格式
+  const handleMigrateOldUser = async (e) => {
+    e.preventDefault();
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限最高管理員老闆操作");
+    
+    const cleanPhone = migratePhone.replace(/[^0-9]/g, '');
+    if (!cleanPhone || cleanPhone.length < 8) return toast.error("請輸入有效的 8 位數手機號碼作為登入帳號");
+    if (!migratePassword || migratePassword.length < 6) return toast.error("初始密碼長度至少需要 6 個字元");
+
+    const toastId = toast.loading(`正在將【${selectedUser.name}】的業績、套票與資產轉移至新電話憑證...`);
+    try {
+      const loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
+
+      // 1. 調用 Firebase Auth REST API 註冊全新的影子認證憑證
+      const apiKey = auth.app.options.apiKey;
+      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: loginEmail, password: migratePassword, returnSecureToken: false })
+      });
+      const authData = await response.json();
+      if (!response.ok) throw new Error(authData.error.message || "建立新認證憑證失敗");
+      const newUid = authData.localId;
+
+      // 2. 完美複製舊文檔中的所有核心字段與營業數據，並寫入新手機和新信箱
+      const { id, ...oldDataWithoutId } = selectedUser; 
+      const migratedData = {
+        ...oldDataWithoutId,
+        phoneNumber: migratePhone,
+        email: loginEmail,
+        isFirstLogin: true // 確保他們用新手機初次登入時會跳出改密碼提示
+      };
+
+      // 3. 在 Firestore 內以全新的 UID 作為 Document ID 建立新文檔
+      await setDoc(doc(db, "users", newUid), migratedData);
+
+      // 4. 安全銷毀原本舊 UID 的 Firestore 髒數據文檔，確保資料乾淨不重疊
+      await deleteDoc(doc(db, "users", selectedUser.id));
+
+      toast.success(`🎉 舊帳號【${selectedUser.name}】手機格式升級成功！\n歷史業績與資產已 100% 完美遷移。`, { id: toastId, duration: 6000 });
+      setIsDetailOpen(false);
+      fetchUsers();
+    } catch (error) {
+      let errMsg = error.message;
+      if (errMsg.includes("EMAIL_EXISTS")) errMsg = "此手機號碼已被系統內的其他員工佔用了！";
+      toast.error(errMsg, { id: toastId });
     }
   };
 
@@ -498,6 +554,152 @@ export default function UserManagementPage() {
         </div>
       )}
 
+      {isDetailOpen && selectedUser && (
+        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
+          <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
+            
+            <div className="sticky top-0 bg-[#121212]/90 backdrop-blur px-10 py-8 border-b border-white/5 flex justify-between items-start z-10">
+              <div className="flex items-center gap-6">
+                <div className="w-16 h-16 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-3xl text-[#D4AF37]">
+                  {['staff', 'manager'].includes(selectedUser.role) ? '✂️' : selectedUser.role === 'admin' ? '👑' : '👤'}
+                </div>
+                <div>
+                  <h2 className="text-2xl font-black text-white">{selectedUser.name || '未設定姓名'}</h2>
+                  <p className="text-[10px] font-mono text-gray-500 mt-1">{selectedUser.id}</p>
+                </div>
+              </div>
+              <button onClick={() => setIsDetailOpen(false)} className="w-10 h-10 bg-white/5 rounded-full text-gray-400 hover:text-white transition flex items-center justify-center"><i className="fa-solid fa-xmark"></i></button>
+            </div>
+
+            <div className="p-10 space-y-8">
+              
+              {/* 🟢 舊帳號手機升級器 UI 區塊 (僅在點擊「無電話號碼、或非影子信箱」的舊內部員工時顯示) */}
+              {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (!selectedUser.phoneNumber || (selectedUser.email && !selectedUser.email.includes('+'))) && (
+                <div className="bg-blue-950/40 p-6 rounded-3xl border border-blue-500/40 shadow-lg animate-fade-in">
+                  <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.4em] mb-3 flex items-center gap-2">
+                    <i className="fa-solid fa-rocket animate-pulse"></i> 舊帳號手機升級器 (One-Click Migration)
+                  </h3>
+                  <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                    系統偵測到此檔案為舊版本格式。請在下方輸入該員工的<strong>「真實電話號碼」</strong>並設定初始密碼，系統會自動開通電話影子登入，並將她原本的<strong>所有服務客數、業績產值、套票餘額、T-Dollar、Points 所有數據完美移轉</strong>！
+                  </p>
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">員工真實電話號碼</label>
+                      <input type="tel" value={migratePhone} onChange={e => setMigratePhone(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm font-mono placeholder:text-gray-700" placeholder="如: 98765432" />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">設定臨時密碼</label>
+                      <input type="text" value={migratePassword} onChange={e => setMigratePassword(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm placeholder:text-gray-700" placeholder="如: 123456" />
+                    </div>
+                  </div>
+                  <button type="button" onClick={handleMigrateOldUser} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-md active:scale-95">
+                    執行一鍵數據移轉 ＆ 升級手機憑證
+                  </button>
+                </div>
+              )}
+
+              {currentAdminRole === 'admin' && (
+                <div className="bg-gradient-to-r from-red-900/20 to-black p-6 rounded-3xl border border-red-500/30 shadow-lg">
+                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
+                    <i className="fa-solid fa-wand-magic-sparkles"></i> 系統資產手動調整 (Admin Only)
+                  </h3>
+                  <form onSubmit={handleAssetAdjustment} className="space-y-4">
+                     <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 積分 (正/負數)</label>
+                          <input type="number" value={adjustForm.points} onChange={e => setAdjustForm({...adjustForm, points: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+500 或 -100" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 T-Dollar (正/負數)</label>
+                          <input type="number" value={adjustForm.tDollar} onChange={e => setAdjustForm({...adjustForm, tDollar: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+1000 或 -500" />
+                        </div>
+                     </div>
+                     <div className="space-y-1">
+                        <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">調整備註 (必填，將顯示於報表)</label>
+                        <input type="text" required value={adjustForm.note} onChange={e => setAdjustForm({...adjustForm, note: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm" placeholder="如：註冊大禮包發放、客訴補償餘額..." />
+                     </div>
+                     <button type="submit" className="w-full bg-red-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest hover:bg-red-600 transition-colors shadow-lg">
+                        執行調整並寫入交易紀錄
+                     </button>
+                  </form>
+                </div>
+              )}
+
+              {['staff', 'manager', 'admin'].includes(selectedUser.role) && (
+                <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-6 rounded-3xl border border-[#D4AF37]/30 shadow-lg">
+                  <h3 className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-[0.4em] mb-6 flex items-center gap-2">
+                    <i className="fa-solid fa-chart-simple"></i> Staff Performance
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white/5 p-4 rounded-2xl">
+                      <p className="text-[10px] text-gray-400 uppercase tracking-widest mb-1">服務客數 (Clients)</p>
+                      <p className="text-3xl font-black text-white">{staffStats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
+                    </div>
+                    <div className="bg-[#D4AF37]/10 p-4 rounded-2xl border border-[#D4AF37]/20">
+                      <p className="text-[10px] text-[#D4AF37] uppercase tracking-widest mb-1">創造總業績 (Revenue)</p>
+                      <p className="text-3xl font-black text-[#D4AF37]"><span className="text-sm mr-1">$</span>{staffStats.revenue.toLocaleString()}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4 bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl">
+                     <p className="text-[10px] text-blue-400 leading-relaxed">
+                       💡 <strong>溫馨提示：</strong>此處僅顯示基礎服務客數與總產值。<br/>如需查看詳細的<strong>「實得抽成與獎金明細」</strong>，請前往左側選單的<strong>「財務報表」</strong>查看個人薪資單。
+                     </p>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.4em] mb-4">Profile Details</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">顯示姓名</label>
+                    <input type="text" value={selectedUser.name || ''} onChange={e => setSelectedUser({...selectedUser, name: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm" placeholder="輸入姓名" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">聯絡電話</label>
+                    <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
+                  </div>
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">系統認證信箱 (登入憑證)</label>
+                    <input type="email" disabled value={selectedUser.email || '早期未綁定憑證之帳號'} className="w-full bg-black border border-white/5 p-4 rounded-xl text-gray-500 outline-none text-sm font-mono opacity-50 cursor-not-allowed" />
+                  </div>
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">管理員備註 (Notes)</label>
+                    <textarea value={selectedUser.notes || ''} onChange={e => setSelectedUser({...selectedUser, notes: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm h-24" placeholder="例如：VIP 客戶喜好、員工入職日期..." />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-4 pt-4 border-t border-white/5 pb-4">
+                <button onClick={() => setIsDetailOpen(false)} className="flex-1 bg-white/5 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-white/10 transition-all">取消</button>
+                <button onClick={saveUserDetails} disabled={isSaving} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:scale-105 transition-transform disabled:opacity-50">
+                  {isSaving ? '儲存中...' : '💾 儲存修改'}
+                </button>
+              </div>
+
+              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 (僅針對完成升級的影子信箱帳號開放) */}
+              {currentAdminRole === 'admin' && selectedUser.role !== 'member' && selectedUser.email && selectedUser.email.includes('+') && (
+                <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
+                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
+                    <i className="fa-solid fa-lock"></i> 密碼安全性設定 (Admin Only)
+                  </h3>
+                  <button 
+                    onClick={handleSendResetEmail}
+                    disabled={isResettingPassword || !selectedUser.email}
+                    className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors shadow-lg disabled:opacity-50 w-full"
+                  >
+                    {isResettingPassword ? '發送中...' : '✉️ 發送密碼重設信件至系統母信箱'}
+                  </button>
+                  <p className="text-[9px] text-gray-500 mt-3 leading-relaxed">💡 點擊後，重設密碼信件將直接寄送至 <strong>{MASTER_EMAIL}</strong>。<br/>請老闆前往該信箱收信，點擊連結後即可代為設定該員工的新密碼。</p>
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+      )}
+
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
@@ -595,127 +797,6 @@ export default function UserManagementPage() {
                 <strong>安全性隔離機制：</strong> <br/>
                 系統已自動阻擋越權行為。同級別員工無法互相查閱薪資；櫃台人員無法修改設定；唯有使用老闆 (Admin) 帳號登入，方可解鎖紅色底色的所有機密級操作。
               </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {isDetailOpen && selectedUser && (
-        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
-          <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
-            
-            <div className="sticky top-0 bg-[#121212]/90 backdrop-blur px-10 py-8 border-b border-white/5 flex justify-between items-start z-10">
-              <div className="flex items-center gap-6">
-                <div className="w-16 h-16 rounded-2xl bg-[#D4AF37]/10 flex items-center justify-center text-3xl text-[#D4AF37]">
-                  {['staff', 'manager'].includes(selectedUser.role) ? '✂️' : selectedUser.role === 'admin' ? '👑' : '👤'}
-                </div>
-                <div>
-                  <h2 className="text-2xl font-black text-white">{selectedUser.name || '未設定姓名'}</h2>
-                  <p className="text-[10px] font-mono text-gray-500 mt-1">{selectedUser.id}</p>
-                </div>
-              </div>
-              <button onClick={() => setIsDetailOpen(false)} className="w-10 h-10 bg-white/5 rounded-full text-gray-400 hover:text-white transition flex items-center justify-center"><i className="fa-solid fa-xmark"></i></button>
-            </div>
-
-            <div className="p-10 space-y-8">
-              
-              {currentAdminRole === 'admin' && (
-                <div className="bg-gradient-to-r from-red-900/20 to-black p-6 rounded-3xl border border-red-500/30 shadow-lg">
-                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
-                    <i className="fa-solid fa-wand-magic-sparkles"></i> 系統資產手動調整 (Admin Only)
-                  </h3>
-                  <form onSubmit={handleAssetAdjustment} className="space-y-4">
-                     <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-1">
-                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 積分 (正/負數)</label>
-                          <input type="number" value={adjustForm.points} onChange={e => setAdjustForm({...adjustForm, points: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+500 或 -100" />
-                        </div>
-                        <div className="space-y-1">
-                          <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">發放/扣除 T-Dollar (正/負數)</label>
-                          <input type="number" value={adjustForm.tDollar} onChange={e => setAdjustForm({...adjustForm, tDollar: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono" placeholder="如：+1000 或 -500" />
-                        </div>
-                     </div>
-                     <div className="space-y-1">
-                        <label className="text-[10px] text-gray-400 uppercase tracking-widest ml-1">調整備註 (必填，將顯示於報表)</label>
-                        <input type="text" required value={adjustForm.note} onChange={e => setAdjustForm({...adjustForm, note: e.target.value})} className="w-full bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm" placeholder="如：註冊大禮包發放、客訴補償餘額..." />
-                     </div>
-                     <button type="submit" className="w-full bg-red-500 text-white font-bold py-3 rounded-xl text-xs uppercase tracking-widest hover:bg-red-600 transition-colors shadow-lg">
-                        執行調整並寫入交易紀錄
-                     </button>
-                  </form>
-                </div>
-              )}
-
-              {['staff', 'manager', 'admin'].includes(selectedUser.role) && (
-                <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-6 rounded-3xl border border-[#D4AF37]/30 shadow-lg">
-                  <h3 className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-[0.4em] mb-6 flex items-center gap-2">
-                    <i className="fa-solid fa-chart-simple"></i> Staff Performance
-                  </h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-white/5 p-4 rounded-2xl">
-                      <p className="text-[10px] text-gray-400 uppercase tracking-widest mb-1">服務客數 (Clients)</p>
-                      <p className="text-3xl font-black text-white">{staffStats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
-                    </div>
-                    <div className="bg-[#D4AF37]/10 p-4 rounded-2xl border border-[#D4AF37]/20">
-                      <p className="text-[10px] text-[#D4AF37] uppercase tracking-widest mb-1">創造總業績 (Revenue)</p>
-                      <p className="text-3xl font-black text-[#D4AF37]"><span className="text-sm mr-1">$</span>{staffStats.revenue.toLocaleString()}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-4 bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl">
-                     <p className="text-[10px] text-blue-400 leading-relaxed">
-                       💡 <strong>溫馨提示：</strong>此處僅顯示基礎服務客數與總產值。<br/>如需查看詳細的<strong>「實得抽成與獎金明細」</strong>，請前往左側選單的<strong>「財務報表」</strong>查看個人薪資單。
-                     </p>
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-[0.4em] mb-4">Profile Details</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">顯示姓名</label>
-                    <input type="text" value={selectedUser.name || ''} onChange={e => setSelectedUser({...selectedUser, name: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm" placeholder="輸入姓名" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">聯絡電話</label>
-                    <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
-                  </div>
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">系統認證信箱 (登入憑證)</label>
-                    <input type="email" disabled value={selectedUser.email || '早期未綁定憑證之帳號'} className="w-full bg-black border border-white/5 p-4 rounded-xl text-gray-500 outline-none text-sm font-mono opacity-50 cursor-not-allowed" />
-                  </div>
-                  <div className="space-y-1 md:col-span-2">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">管理員備註 (Notes)</label>
-                    <textarea value={selectedUser.notes || ''} onChange={e => setSelectedUser({...selectedUser, notes: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm h-24" placeholder="例如：VIP 客戶喜好、員工入職日期..." />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-4 pt-4 border-t border-white/5 pb-4">
-                <button onClick={() => setIsDetailOpen(false)} className="flex-1 bg-white/5 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-white/10 transition-all">取消</button>
-                <button onClick={saveUserDetails} disabled={isSaving} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:scale-105 transition-transform disabled:opacity-50">
-                  {isSaving ? '儲存中...' : '💾 儲存修改'}
-                </button>
-              </div>
-
-              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 */}
-              {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (
-                <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
-                  <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
-                    <i className="fa-solid fa-lock"></i> 密碼安全性設定 (Admin Only)
-                  </h3>
-                  <button 
-                    onClick={handleSendResetEmail}
-                    disabled={isResettingPassword || !selectedUser.email}
-                    className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors shadow-lg disabled:opacity-50 w-full"
-                  >
-                    {isResettingPassword ? '發送中...' : '✉️ 發送密碼重設信件至系統母信箱'}
-                  </button>
-                  <p className="text-[9px] text-gray-500 mt-3 leading-relaxed">💡 點擊後，重設密碼信件將直接寄送至 <strong>{MASTER_EMAIL}</strong>。<br/>請老闆前往該信箱收信，點擊連結後即可代為設定該員工的新密碼。</p>
-                </div>
-              )}
-
             </div>
           </div>
         </div>
