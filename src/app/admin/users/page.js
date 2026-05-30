@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; 
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; // 🟢 換成發送重設信的官方模組
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function UserManagementPage() {
@@ -11,7 +11,6 @@ export default function UserManagementPage() {
   const [loading, setLoading] = useState(true);
   const [filterRole, setFilterRole] = useState('all');
   
-  // 🟢 新增：搜尋關鍵字狀態
   const [searchQuery, setSearchQuery] = useState('');
 
   const [currentAdminRole, setCurrentAdminRole] = useState('reception'); 
@@ -27,11 +26,13 @@ export default function UserManagementPage() {
 
   const [adjustForm, setAdjustForm] = useState({ points: '', tDollar: '', note: '' });
   
-  // 🟢 新增：老闆強制重設密碼的狀態
-  const [newPasswordForm, setNewPasswordForm] = useState('');
+  // 🟢 密碼重設的狀態
   const [isResettingPassword, setIsResettingPassword] = useState(false);
 
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
+
+  // 🟢 系統母信箱設定
+  const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -65,21 +66,31 @@ export default function UserManagementPage() {
     
     try {
       let finalUid = null;
+      let loginEmail = newUser.email; // 預設給會員用的普通 Email
 
       if (newUser.role !== 'member') {
         if (currentAdminRole !== 'admin') {
            return toast.error("權限不足：只有老闆 (Admin) 可以建立內部員工帳號", { id: toastId });
         }
-        if (!newUser.email || !newUser.password) {
-          return toast.error("建立內部員工帳號必須填寫 Email 與 初始密碼", { id: toastId });
+        
+        // 🟢 員工帳號建立邏輯：電話智能打包影子信箱
+        const cleanPhone = newUser.phone.replace(/[^0-9]/g, '');
+        if (!cleanPhone || cleanPhone.length < 8) {
+          return toast.error("建立員工帳號必須填寫有效的電話號碼 (至少 8 碼) 作為登入憑證！", { id: toastId });
         }
+        if (!newUser.password || newUser.password.length < 6) {
+          return toast.error("初始密碼必須至少 6 個字元", { id: toastId });
+        }
+        
+        // 🟢 打包影子信箱
+        loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
         
         const apiKey = auth.app.options.apiKey;
         const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            email: newUser.email,
+            email: loginEmail,
             password: newUser.password,
             returnSecureToken: false
           })
@@ -93,7 +104,7 @@ export default function UserManagementPage() {
       const userData = {
         name: newUser.name,
         phoneNumber: newUser.phone,
-        email: newUser.email || '',
+        email: loginEmail || '', // 儲存生成的影子信箱或客人的信箱
         role: newUser.role,
         tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
@@ -105,7 +116,7 @@ export default function UserManagementPage() {
 
       if (finalUid) {
         await setDoc(doc(db, "users", finalUid), userData);
-        toast.success(`員工帳號建立成功！\n登入密碼：${newUser.password}`, { id: toastId, duration: 5000 });
+        toast.success(`員工帳號建立成功！\n登入電話：${newUser.phone}\n登入密碼：${newUser.password}`, { id: toastId, duration: 6000 });
       } else {
         await addDoc(collection(db, "users"), userData);
         toast.success("客戶檔案建立成功！可進入 Details 派發註冊禮積分。", { id: toastId });
@@ -117,8 +128,7 @@ export default function UserManagementPage() {
       
     } catch (error) {
       let errMsg = "建立失敗";
-      if (error.message.includes('EMAIL_EXISTS')) errMsg = "此 Email 已經被註冊過了";
-      if (error.message.includes('WEAK_PASSWORD')) errMsg = "密碼太弱，請至少輸入 6 個字元";
+      if (error.message.includes('EMAIL_EXISTS')) errMsg = "此電話號碼已經被註冊過系統帳號了";
       toast.error(errMsg, { id: toastId });
     }
   };
@@ -126,7 +136,6 @@ export default function UserManagementPage() {
   const openDetails = async (user) => {
     setSelectedUser(user);
     setAdjustForm({ points: '', tDollar: '', note: '' }); 
-    setNewPasswordForm(''); // 🟢 重置密碼輸入框
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -171,45 +180,22 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 核心功能：老闆強制重設指定員工的 Auth 密碼
-  const handleForcePasswordReset = async (e) => {
+  // 🟢 影子信箱：完美發送重設信件至老闆母信箱
+  const handleSendResetEmail = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
-    if (!newPasswordForm || newPasswordForm.length < 6) return toast.error("密碼長度必須至少 6 個字元");
-    if (!selectedUser.id) return toast.error("無法識別的帳戶 (可能是早期建立的純會員檔案)");
+    if (!selectedUser.email) return toast.error("此帳號沒有綁定登入憑證，無法發送重設信件！");
 
-    if (!window.confirm(`確定要將【${selectedUser.name || selectedUser.phoneNumber}】的登入密碼強制更改為「${newPasswordForm}」嗎？`)) return;
+    if (!window.confirm(`確定要發送密碼重設信嗎？\n(信件將發送至母信箱：${MASTER_EMAIL}，由老闆代為修改)`)) return;
 
     setIsResettingPassword(true);
-    const toastId = toast.loading("正在聯絡伺服器強制更改密碼...");
+    const toastId = toast.loading("正在發送安全重設信件...");
 
     try {
-      // 調用 Firebase Admin API 的 REST 接口來更改指定 UID 的密碼
-      const apiKey = auth.app.options.apiKey;
-      const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          idToken: await auth.currentUser.getIdToken(), // 老闆的 Token (用來證明權限)
-          localId: selectedUser.id, // 要被改密碼的人的 UID
-          password: newPasswordForm, // 新密碼
-          returnSecureToken: false
-        })
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        // 如果這個 UID 不是 Auth 帳號 (例如他只是一般會員)，Firebase 會報錯
-        if (data.error && data.error.message.includes('USER_NOT_FOUND')) {
-           throw new Error("此檔案尚未開通系統登入權限，無法設定密碼。");
-        }
-        throw new Error(data.error.message || "密碼更新失敗");
-      }
-
-      toast.success(`✅ 密碼已強制重設成功！請通知該員工使用新密碼登入。`, { id: toastId, duration: 6000 });
-      setNewPasswordForm('');
+      await sendPasswordResetEmail(auth, selectedUser.email);
+      toast.success(`✅ 重設信已成功發送至母信箱：\n${MASTER_EMAIL}\n請前往信箱點擊連結並輸入新密碼。`, { id: toastId, duration: 8000 });
     } catch (error) {
-      toast.error(error.message, { id: toastId });
+      toast.error("發送失敗，請確認該帳號是否已開通系統登入權限。", { id: toastId });
     } finally {
       setIsResettingPassword(false);
     }
@@ -292,10 +278,8 @@ export default function UserManagementPage() {
     return false;
   });
 
-  // 🟢 根據 Role 篩選按鈕過濾
   const roleFilteredUsers = filterRole === 'all' ? hierarchicalUsers : hierarchicalUsers.filter(u => u.role === filterRole);
 
-  // 🟢 根據「搜尋關鍵字」進行最終雙重過濾 (同時比對名字與電話)
   const finalFilteredUsers = roleFilteredUsers.filter(u => {
     if (!searchQuery) return true;
     const lowerQuery = searchQuery.toLowerCase();
@@ -331,7 +315,6 @@ export default function UserManagementPage() {
         </div>
       </header>
 
-      {/* 🟢 新增：智能搜尋列與角色篩選按鈕區塊 */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
         <div className="flex flex-wrap gap-2">
           {getVisibleRoleButtons().map(role => (
@@ -342,7 +325,6 @@ export default function UserManagementPage() {
           ))}
         </div>
         
-        {/* 智能搜尋框 */}
         <div className="w-full md:w-72 relative">
           <div className="absolute inset-y-0 left-0 flex items-center pl-4 pointer-events-none">
              <i className="fa-solid fa-magnifying-glass text-gray-500"></i>
@@ -487,23 +469,23 @@ export default function UserManagementPage() {
                   <input type="text" required value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: 陳大文 / Ivan" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">電話號碼</label>
-                  <input type="text" value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="+852..." />
+                  <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">{newUser.role !== 'member' ? '登入電話號碼 (必填)' : '電話號碼'}</label>
+                  <input type="tel" required={newUser.role !== 'member'} value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} className={`w-full bg-black border p-3 rounded-xl text-white outline-none focus:border-[#D4AF37] ${newUser.role !== 'member' ? 'border-[#D4AF37]/50' : 'border-white/10'}`} placeholder="輸入完整號碼..." />
                 </div>
               </div>
 
               {newUser.role !== 'member' && (
-                <div className="grid grid-cols-2 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
-                  <div className="space-y-1 col-span-2">
+                <div className="grid grid-cols-1 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
+                  <div className="space-y-1">
                     <p className="text-xs text-[#D4AF37] mb-2 font-bold"><i className="fa-solid fa-lock"></i> 內部人員登入憑證設定</p>
+                    <p className="text-[10px] text-gray-400 bg-white/5 p-2 rounded-lg leading-relaxed">
+                      💡 系統將自動綁定<strong>「電話號碼」</strong>作為該員工的登入帳號。<br/>
+                      請在下方設定初始密碼，建立後請員工以<strong>「電話號碼 + 密碼」</strong>登入系統即可。
+                    </p>
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">登入 Email (必填)</label>
-                    <input type="email" required={newUser.role !== 'member'} value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="w-full bg-black border border-white/10 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="ivan@trust.com" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">初始密碼 (最少6碼)</label>
-                    <input type="text" required={newUser.role !== 'member'} minLength={6} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="設定預設密碼" />
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">初始登入密碼 (最少6碼)</label>
+                    <input type="text" required={newUser.role !== 'member'} minLength={6} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: 123456" />
                   </div>
                 </div>
               )}
@@ -675,9 +657,15 @@ export default function UserManagementPage() {
                       <p className="text-3xl font-black text-white">{staffStats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
                     </div>
                     <div className="bg-[#D4AF37]/10 p-4 rounded-2xl border border-[#D4AF37]/20">
-                      <p className="text-[10px] text-[#D4AF37] uppercase tracking-widest mb-1">創造業績 (Revenue)</p>
+                      <p className="text-[10px] text-[#D4AF37] uppercase tracking-widest mb-1">創造總業績 (Revenue)</p>
                       <p className="text-3xl font-black text-[#D4AF37]"><span className="text-sm mr-1">$</span>{staffStats.revenue.toLocaleString()}</p>
                     </div>
+                  </div>
+                  
+                  <div className="mt-4 bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl">
+                     <p className="text-[10px] text-blue-400 leading-relaxed">
+                       💡 <strong>溫馨提示：</strong>此處僅顯示基礎服務客數與總產值。<br/>如需查看詳細的<strong>「實得抽成與獎金明細」</strong>，請前往左側選單的<strong>「財務報表」</strong>查看個人薪資單。
+                     </p>
                   </div>
                 </div>
               )}
@@ -694,8 +682,8 @@ export default function UserManagementPage() {
                     <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
                   </div>
                   <div className="space-y-1 md:col-span-2">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">Email 信箱</label>
-                    <input type="email" value={selectedUser.email || ''} onChange={e => setSelectedUser({...selectedUser, email: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
+                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">系統認證信箱 (登入憑證)</label>
+                    <input type="email" disabled value={selectedUser.email || '早期未綁定憑證之帳號'} className="w-full bg-black border border-white/5 p-4 rounded-xl text-gray-500 outline-none text-sm font-mono opacity-50 cursor-not-allowed" />
                   </div>
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">管理員備註 (Notes)</label>
@@ -704,38 +692,27 @@ export default function UserManagementPage() {
                 </div>
               </div>
 
-              <div className="flex gap-4 pt-4 border-t border-white/5 pb-8">
+              <div className="flex gap-4 pt-4 border-t border-white/5 pb-4">
                 <button onClick={() => setIsDetailOpen(false)} className="flex-1 bg-white/5 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-white/10 transition-all">取消</button>
                 <button onClick={saveUserDetails} disabled={isSaving} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:scale-105 transition-transform disabled:opacity-50">
                   {isSaving ? '儲存中...' : '💾 儲存修改'}
                 </button>
               </div>
 
-              {/* 🟢 新增：老闆專屬強制重設密碼區塊 */}
+              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 */}
               {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (
                 <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
                   <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
-                    <i className="fa-solid fa-lock"></i> 強制重設登入密碼 (Admin Only)
+                    <i className="fa-solid fa-lock"></i> 密碼安全性設定 (Admin Only)
                   </h3>
-                  <form onSubmit={handleForcePasswordReset} className="flex flex-col md:flex-row gap-3">
-                    <input 
-                      type="text" 
-                      required 
-                      minLength={6}
-                      value={newPasswordForm} 
-                      onChange={e => setNewPasswordForm(e.target.value)} 
-                      className="flex-1 bg-black border border-red-500/30 p-3 rounded-xl text-white outline-none focus:border-red-500 text-sm font-mono placeholder:text-gray-600" 
-                      placeholder="輸入新密碼 (至少6碼)..." 
-                    />
-                    <button 
-                      type="submit" 
-                      disabled={isResettingPassword}
-                      className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors shadow-lg disabled:opacity-50"
-                    >
-                      {isResettingPassword ? '處理中...' : '強制覆蓋密碼'}
-                    </button>
-                  </form>
-                  <p className="text-[9px] text-gray-500 mt-3">⚠️ 覆蓋後立即生效，請手動通知該員工使用新密碼登入。</p>
+                  <button 
+                    onClick={handleSendResetEmail}
+                    disabled={isResettingPassword || !selectedUser.email}
+                    className="bg-red-500 hover:bg-red-600 text-white font-bold px-6 py-3 rounded-xl text-xs uppercase tracking-widest transition-colors shadow-lg disabled:opacity-50 w-full"
+                  >
+                    {isResettingPassword ? '發送中...' : '✉️ 發送密碼重設信件至系統母信箱'}
+                  </button>
+                  <p className="text-[9px] text-gray-500 mt-3 leading-relaxed">💡 點擊後，重設密碼信件將直接寄送至 <strong>{MASTER_EMAIL}</strong>。<br/>請老闆前往該信箱收信，點擊連結後即可代為設定該員工的新密碼。</p>
                 </div>
               )}
 
