@@ -283,8 +283,15 @@ export default function UserManagementPage() {
         tx.update(userRef, { points: newPoints, tDollarBalance: newTDollar });
         
         tx.set(doc(collection(db, "transactions")), {
-          userId: selectedUser.id, phoneNumber: selectedUser.phoneNumber, type: "admin_adjustment",
-          pointsAdded: pts, tDollarAdded: td, adminId: currentUid, note: adjustForm.note || '老闆手動調整', timestamp: new Date().toISOString()
+          userId: selectedUser.id, 
+          // 🟢 防呆機制：如果舊帳號沒電話，就不會報錯
+          phoneNumber: selectedUser.phoneNumber || '未提供號碼', 
+          type: "admin_adjustment",
+          pointsAdded: pts, 
+          tDollarAdded: td, 
+          adminId: currentUid, 
+          note: adjustForm.note || '老闆手動調整', 
+          timestamp: new Date().toISOString()
         });
       });
 
