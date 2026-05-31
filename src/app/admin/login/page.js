@@ -112,7 +112,6 @@ export default function AdminLoginPage() {
     }
   };
 
-  // 🟢 處理員工在提示下修改新密碼 (已加入安全超時防呆機制)
   const handleForceChangeSubmit = async (e) => {
     e.preventDefault();
     const cleanNewPassword = newPassword.trim();
@@ -127,10 +126,8 @@ export default function AdminLoginPage() {
     try {
       const currentUser = pendingUserCredential?.user || auth.currentUser;
       if (currentUser) {
-        // 更新 Firebase Auth 密碼
         await updatePassword(currentUser, cleanNewPassword);
         
-        // 同步在 Firestore 資料庫關閉首次登入提醒標籤
         await updateDoc(doc(db, "users", currentUser.uid), {
           isFirstLogin: false
         });
@@ -140,13 +137,11 @@ export default function AdminLoginPage() {
       }
     } catch (err) {
       console.error(err);
-      
-      // 🟢 捕捉 Firebase 的「登入過期/不夠新鮮」安全限制
       if (err.code === 'auth/requires-recent-login') {
         toast.error('【安全防護】登入憑證已逾時！請重新登入後再修改密碼。', { id: toastId, duration: 6000 });
         await auth.signOut();
-        setIsForcingChange(false); // 退回登入畫面
-        setPassword(''); // 清空密碼讓他重打
+        setIsForcingChange(false);
+        setPassword(''); 
       } else {
         toast.error('密碼更新失敗，請重新嘗試或聯繫系統管理員。', { id: toastId });
       }
@@ -169,6 +164,16 @@ export default function AdminLoginPage() {
     } catch (err) {
       router.push('/admin');
     }
+  };
+
+  // 🟢 專屬按鈕：讓卡在修改密碼頁面（例如重整過網頁）的員工，能安全登出並重新輸入密碼
+  const handleReLogin = async () => {
+    await auth.signOut();
+    setIsForcingChange(false);
+    setPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    toast.success("已重置安全狀態，請重新輸入密碼登入");
   };
 
   if (pageChecking) return <div className="min-h-screen flex items-center justify-center bg-[#080808] text-[#D4AF37] tracking-widest text-xs uppercase">Initializing OS...</div>;
@@ -261,12 +266,19 @@ export default function AdminLoginPage() {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-2">
-                 <button type="button" onClick={handleSkipChange} disabled={loading} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white py-4 rounded-2xl font-bold text-xs transition-colors">
-                   暫不修改
-                 </button>
-                 <button type="submit" disabled={loading} className="flex-[2] bg-[#D4AF37] text-black font-black py-4 rounded-2xl text-xs flex items-center justify-center transition-all shadow-xl">
-                    {loading ? "更新中..." : "確認修改並登入"}
+              <div className="flex flex-col gap-4 pt-2">
+                 <div className="flex gap-3">
+                   <button type="button" onClick={handleSkipChange} disabled={loading} className="flex-1 bg-white/5 hover:bg-white/10 border border-white/10 text-gray-400 hover:text-white py-4 rounded-2xl font-bold text-xs transition-colors">
+                     暫不修改
+                   </button>
+                   <button type="submit" disabled={loading} className="flex-[2] bg-[#D4AF37] text-black font-black py-4 rounded-2xl text-xs flex items-center justify-center transition-all shadow-xl">
+                      {loading ? "更新中..." : "確認修改並登入"}
+                   </button>
+                 </div>
+                 
+                 {/* 🟢 重新登入按鈕 */}
+                 <button type="button" onClick={handleReLogin} disabled={loading} className="text-[10px] text-gray-500 hover:text-[#D4AF37] transition-colors underline underline-offset-4 mt-2">
+                   <i className="fa-solid fa-rotate-right mr-1"></i> 憑證過期或卡住？點此重新登入
                  </button>
               </div>
             </form>
