@@ -20,16 +20,18 @@ export default function AdminLayout({ children }) {
   const ALL_MODULES = [
     { id: 'pos', name: '前台收銀 (POS)', icon: 'fa-cash-register', path: '/admin/pos' },
     { id: 'manage', name: '資料管理 (CMS)', icon: 'fa-sliders', path: '/admin/manage' },
-    { id: 'finance', name: '財務報表', icon: 'fa-chart-pie', path: '/admin/finance' },
-    { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' }
+    { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' },
+    { id: 'finance', name: '全店財務報表', icon: 'fa-chart-pie', path: '/admin/finance' },
+    // 🟢 新增：員工專屬的個人業績模組
+    { id: 'performance', name: '我的業績抽成', icon: 'fa-chart-simple', path: '/admin/my-performance' } 
   ];
 
-  // 🟢 更新：開放 users 模組給經理與櫃台
+  // 🟢 更新：嚴格劃分隱私權限
   const ROLE_PERMISSIONS = {
-    admin: ['pos', 'manage', 'finance', 'users'], // 老闆：全開
-    manager: ['pos', 'manage', 'finance', 'users'], // 經理：全開 (但在 users 頁面會限制刪除權限)
-    staff: ['pos', 'manage'],                     // 員工：結帳、修改商品庫
-    reception: ['pos', 'users']                   // 櫃台：結帳、管理客入檔案
+    admin: ['pos', 'manage', 'users', 'finance', 'performance'], // 老闆：全開
+    manager: ['pos', 'manage', 'users', 'finance', 'performance'], // 經理：全開
+    staff: ['pos', 'manage', 'performance'],                     // 員工：結帳、修改價目表、看【個人】業績 (無權看全店 finance)
+    reception: ['pos', 'users']                                  // 櫃台：結帳、管理客人檔案
   };
   // ==========================================
 
@@ -111,7 +113,6 @@ export default function AdminLayout({ children }) {
         </button>
 
         <div className="p-8 border-b border-white/5 flex items-center justify-center">
-          {/* 🟢 這裡已經替換為你的新 Logo */}
           <img src="/images/logo-royal.png" alt="TRUST OS Logo" className="h-10 w-auto" />
         </div>
         
