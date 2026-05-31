@@ -15,23 +15,21 @@ export default function AdminLayout({ children }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // ==========================================
-  // 👑 系統權限與模組定義區 (Role & Module Config)
+  // 👑 系統權限與模組定義區
   // ==========================================
   const ALL_MODULES = [
     { id: 'pos', name: '前台收銀 (POS)', icon: 'fa-cash-register', path: '/admin/pos' },
     { id: 'manage', name: '資料管理 (CMS)', icon: 'fa-sliders', path: '/admin/manage' },
     { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' },
     { id: 'finance', name: '全店財務報表', icon: 'fa-chart-pie', path: '/admin/finance' },
-    // 🟢 新增：員工專屬的個人業績模組
     { id: 'performance', name: '我的業績抽成', icon: 'fa-chart-simple', path: '/admin/my-performance' } 
   ];
 
-  // 🟢 更新：嚴格劃分隱私權限
   const ROLE_PERMISSIONS = {
     admin: ['pos', 'manage', 'users', 'finance', 'performance'], 
     manager: ['pos', 'manage', 'users', 'finance', 'performance'], 
-    staff: ['pos', 'performance'], // 🔴 已經把 'manage' 拿掉，髮型師看不見 CMS 了
-    reception: ['pos', 'users']                   
+    staff: ['pos', 'performance'],                     
+    reception: ['pos', 'users']                                  
   };
   // ==========================================
 
@@ -74,7 +72,7 @@ export default function AdminLayout({ children }) {
 
   if (pathname === '/admin/login') return children;
   
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">驗證系統權限中...</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808] tracking-widest text-sm font-bold">驗證系統權限中...</div>;
   if (!userData) return null;
 
   const allowedModuleIds = ROLE_PERMISSIONS[userData.role] || [];
@@ -112,8 +110,16 @@ export default function AdminLayout({ children }) {
            <i className="fa-solid fa-xmark text-xl"></i>
         </button>
 
-        <div className="p-8 border-b border-white/5 flex items-center justify-center">
-          <img src="/images/logo-royal.png" alt="TRUST OS Logo" className="h-10 w-auto" />
+        {/* ✨ 升級版 Sidebar Header：Logo + 系統名稱 */}
+        <div className="p-6 border-b border-white/5 flex items-center gap-4 mt-2 md:mt-0">
+          <div className="w-12 h-12 rounded-xl bg-black border border-[#D4AF37]/30 flex items-center justify-center p-1.5 shadow-[0_0_15px_rgba(212,175,55,0.15)] shrink-0">
+            {/* 🛑 請確認這張圖片存在於 public/images/logo-royal.png */}
+            <img src="/images/logo-royal.png" alt="TRUST Logo" className="w-full h-full object-contain" />
+          </div>
+          <div className="flex flex-col overflow-hidden">
+            <h2 className="text-lg font-black text-white tracking-widest italic truncate">TRUST<span className="text-[#D4AF37] not-italic">.</span>OS</h2>
+            <p className="text-[9px] text-[#D4AF37] uppercase tracking-[0.3em] font-bold truncate">Salon System</p>
+          </div>
         </div>
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
@@ -148,14 +154,20 @@ export default function AdminLayout({ children }) {
       </aside>
 
       <main className="flex-1 h-screen overflow-y-auto relative bg-[#080808]">
-         <div className="md:hidden bg-[#121212]/90 backdrop-blur-md p-5 flex justify-between items-center border-b border-white/5 sticky top-0 z-30">
+         {/* ✨ 升級版 Mobile Sticky Header */}
+         <div className="md:hidden bg-[#121212]/95 backdrop-blur-md p-4 flex justify-between items-center border-b border-white/5 sticky top-0 z-30 shadow-lg">
             <div className="flex items-center gap-4">
-              <button onClick={() => setIsSidebarOpen(true)} className="text-gray-400 hover:text-white text-xl">
+              <button onClick={() => setIsSidebarOpen(true)} className="text-gray-400 hover:text-[#D4AF37] text-xl transition-colors">
                 <i className="fa-solid fa-bars"></i>
               </button>
-              <img src="/images/logo-royal.png" alt="TRUST OS Logo" className="h-6 w-auto" />
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 bg-black rounded flex items-center justify-center p-0.5 border border-[#D4AF37]/30">
+                  <img src="/images/logo-royal.png" alt="Logo" className="w-full h-full object-contain" />
+                </div>
+                <span className="text-sm font-black text-white italic tracking-widest">TRUST<span className="text-[#D4AF37] not-italic">.</span>OS</span>
+              </div>
             </div>
-            <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white font-bold uppercase">
+            <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] text-white font-bold uppercase border border-white/5">
                {userData.role.substring(0, 1)}
             </div>
          </div>
