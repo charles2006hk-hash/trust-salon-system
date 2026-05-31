@@ -17,8 +17,8 @@ export default function UserManagementPage() {
   const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  // 🟢 新增用戶狀態：加入預設店鋪 branch: 'all'
-  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'all' });
+  // 🟢 預設全域通為 ALL
+  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL' });
 
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -30,10 +30,13 @@ export default function UserManagementPage() {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
-  // 🟢 舊帳號數據遷移專用狀態
+  // 舊帳號數據遷移專用狀態
   const [migratePhone, setMigratePhone] = useState('');
   const [migratePassword, setMigratePassword] = useState('');
-  const [migrateBranch, setMigrateBranch] = useState('all');
+  const [migrateBranch, setMigrateBranch] = useState('ALL');
+
+  // 🟢 動態分店清單狀態
+  const [branchesList, setBranchesList] = useState([]);
 
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
@@ -46,6 +49,7 @@ export default function UserManagementPage() {
       }
     });
     fetchUsers();
+    fetchBranches(); // 🟢 載入頁面時同步抓取最新的分店清單
     return () => unsubscribe();
   }, []);
 
@@ -60,6 +64,16 @@ export default function UserManagementPage() {
       toast.error("讀取用戶資料失敗");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 🟢 從 Firestore 動態抓取系統所有分店
+  const fetchBranches = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'branches'));
+      setBranchesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) {
+      console.error("讀取分店清單失敗", e);
     }
   };
 
@@ -113,8 +127,8 @@ export default function UserManagementPage() {
         createdAt: new Date().toISOString(),
         status: 'active',
         notes: '',
-        isFirstLogin: true, // 🟢 確保新帳號觸發攔截
-        branch: newUser.branch || 'all' // 🟢 寫入所屬店鋪
+        isFirstLogin: true, 
+        branch: newUser.branch || 'ALL' // 🟢 寫入動態選擇的店鋪
       };
 
       if (finalUid) {
@@ -126,7 +140,7 @@ export default function UserManagementPage() {
       }
 
       setIsCreateOpen(false);
-      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'all' });
+      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL' });
       fetchUsers();
       
     } catch (error) {
@@ -141,7 +155,7 @@ export default function UserManagementPage() {
     setAdjustForm({ points: '', tDollar: '', note: '' }); 
     setMigratePhone(user.phoneNumber || ''); 
     setMigratePassword(''); 
-    setMigrateBranch(user.branch || 'all');
+    setMigrateBranch(user.branch || 'ALL');
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -159,9 +173,7 @@ export default function UserManagementPage() {
           }
         });
         setStaffStats({ clientCount: count, revenue: rev });
-      } catch (error) {
-        console.error("結算業績失敗", error);
-      }
+      } catch (error) {}
     }
   };
 
@@ -193,7 +205,7 @@ export default function UserManagementPage() {
         phoneNumber: migratePhone,
         email: loginEmail,
         isFirstLogin: true, 
-        branch: migrateBranch // 🟢 同步遷移店鋪資料
+        branch: migrateBranch 
       };
 
       await setDoc(doc(db, "users", newUid), migratedData);
@@ -217,7 +229,7 @@ export default function UserManagementPage() {
         name: selectedUser.name || '',
         phoneNumber: selectedUser.phoneNumber || '',
         email: selectedUser.email || '',
-        branch: selectedUser.branch || 'all', // 🟢 儲存店鋪設定
+        branch: selectedUser.branch || 'ALL', 
         ...(currentAdminRole === 'admin' ? { role: selectedUser.role } : {}),
         notes: selectedUser.notes || ''
       });
@@ -243,14 +255,8 @@ export default function UserManagementPage() {
 
     try {
       await sendPasswordResetEmail(auth, selectedUser.email);
-      
-      // 🟢 神級防護：重設密碼的同時，自動把「首次登入」標籤貼回去！
-      await updateDoc(doc(db, "users", selectedUser.id), {
-        isFirstLogin: true
-      });
-
-      toast.success(`✅ 重設信已發送至母信箱：\n${MASTER_EMAIL}\n員工下次登入將被強制要求設定私人密碼。`, { id: toastId, duration: 8000 });
-      fetchUsers(); // 刷新列表
+      await updateDoc(doc(db, "users", selectedUser.id), { isFirstLogin: true });
+      toast.success(`✅ 重設信已成功發送至母信箱：\n${MASTER_EMAIL}\n該員工下次登入將被強制要求重設密碼。`, { id: toastId, duration: 8000 });
     } catch (error) {
       toast.error("發送失敗，請確認該帳號是否已開通系統登入權限。", { id: toastId });
     } finally {
@@ -432,10 +438,10 @@ export default function UserManagementPage() {
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
-                  {/* 🟢 列表清爽顯示所屬分店標籤 */}
+                  {/* 🟢 動態讀取並清爽顯示所屬分店標籤 */}
                   <td className="p-6">
-                    <span className={`text-[9px] px-2 py-1 rounded font-bold tracking-widest uppercase ${u.branch === 'taipo' ? 'bg-orange-500/20 text-orange-400' : u.branch === 'lokfu' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
-                      {u.branch === 'taipo' ? '大埔店' : u.branch === 'lokfu' ? '樂富店' : '全域管理'}
+                    <span className={`text-[9px] px-2 py-1 rounded font-bold tracking-widest uppercase ${['ALL', 'all'].includes(u.branch) ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                      {['ALL', 'all'].includes(u.branch) ? '全域通' : u.branch || '未設定'}
                     </span>
                   </td>
                   <td className="p-6">
@@ -517,20 +523,19 @@ export default function UserManagementPage() {
                     disabled={currentAdminRole !== 'admin'}
                     className={`w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-[#D4AF37] font-bold outline-none ${currentAdminRole !== 'admin' ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
-                    <option value="member">一般會員 (Member) - 無需密碼</option>
+                    <option value="member">一般會員 (Member)</option>
                     {currentAdminRole === 'admin' && (
                       <>
                         <option value="reception">櫃台人員 (Reception)</option>
-                        <option value="staff">店內員工 / 髮型師 (Staff)</option>
+                        <option value="staff">店內員工 (Staff)</option>
                         <option value="manager">店鋪經理 (Manager)</option>
                         <option value="admin">系統管理員 (Admin)</option>
                       </>
                     )}
                   </select>
-                  {currentAdminRole !== 'admin' && <p className="text-[9px] text-red-400 mt-1">您僅有權限建立客戶檔案。</p>}
                 </div>
 
-                {/* 🟢 選擇所屬分店 */}
+                {/* 🟢 動態讀取所屬分店 */}
                 <div className="space-y-1">
                   <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">所屬分店 (Branch)</label>
                   <select 
@@ -538,9 +543,10 @@ export default function UserManagementPage() {
                     onChange={e => setNewUser({...newUser, branch: e.target.value})} 
                     className="w-full bg-black border border-[#D4AF37]/40 p-3 rounded-xl text-[#D4AF37] text-sm font-bold outline-none"
                   >
-                    <option value="all">🌐 全域通 (All)</option>
-                    <option value="taipo">✂️ 大埔店 (Tai Po)</option>
-                    <option value="lokfu">🎨 樂富店 (Lok Fu)</option>
+                    <option value="ALL">🌐 全域通 (All)</option>
+                    {branchesList.map(b => (
+                      <option key={b.id} value={b.name}>📍 {b.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -560,14 +566,10 @@ export default function UserManagementPage() {
                 <div className="grid grid-cols-1 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
                   <div className="space-y-1">
                     <p className="text-xs text-[#D4AF37] mb-2 font-bold"><i className="fa-solid fa-lock"></i> 內部人員登入憑證設定</p>
-                    <p className="text-[10px] text-gray-400 bg-white/5 p-2 rounded-lg leading-relaxed">
-                      💡 系統將自動綁定<strong>「電話號碼」</strong>作為該員工的登入帳號。<br/>
-                      請在下方設定初始密碼，建立後請員工以<strong>「電話號碼 + 密碼」</strong>登入系統即可。
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">初始登入密碼 (最少6碼)</label>
-                    <input type="text" required={newUser.role !== 'member'} minLength={6} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: 123456" />
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">初始登入密碼 (最少6碼)</label>
+                      <input type="text" required={newUser.role !== 'member'} minLength={6} value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-white outline-none focus:border-[#D4AF37]" placeholder="如: 123456" />
+                    </div>
                   </div>
                 </div>
               )}
@@ -600,35 +602,36 @@ export default function UserManagementPage() {
 
             <div className="p-10 space-y-8">
               
-              {/* 🟢 舊帳號手機升級器：加入所屬分店選擇 */}
               {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (!selectedUser.phoneNumber || (selectedUser.email && !selectedUser.email.includes('+'))) && (
                 <div className="bg-blue-950/40 p-6 rounded-3xl border border-blue-500/40 shadow-lg animate-fade-in">
                   <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.4em] mb-3 flex items-center gap-2">
-                    <i className="fa-solid fa-rocket animate-pulse"></i> 舊帳號手機升級器 (One-Click Migration)
+                    <i className="fa-solid fa-rocket animate-pulse"></i> 舊帳號手機升級器
                   </h3>
-                  <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-                    系統偵測到此檔案為舊版本格式。請在下方輸入該員工的<strong>「真實電話號碼」</strong>並設定初始密碼，系統會自動開通電話影子登入，並將她原本的<strong>所有服務客數、業績產值、套票餘額、T-Dollar、Points 所有數據完美移轉</strong>！
-                  </p>
                   <div className="grid grid-cols-3 gap-4 mb-4">
                     <div className="space-y-1">
-                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">員工真實電話號碼</label>
-                      <input type="tel" value={migratePhone} onChange={e => setMigratePhone(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm font-mono placeholder:text-gray-700" placeholder="如: 98765432" />
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">真實電話號碼</label>
+                      <input type="tel" value={migratePhone} onChange={e => setMigratePhone(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm font-mono" placeholder="如: 98765432" />
                     </div>
                     <div className="space-y-1">
                       <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">設定臨時密碼</label>
-                      <input type="text" value={migratePassword} onChange={e => setMigratePassword(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm placeholder:text-gray-700" placeholder="如: 123456" />
+                      <input type="text" value={migratePassword} onChange={e => setMigratePassword(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm" placeholder="如: 123456" />
                     </div>
-                    {/* 🟢 遷移時指定分店 */}
+                    {/* 🟢 動態讀取遷移分店 */}
                     <div className="space-y-1">
                       <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">指定所屬分店</label>
-                      <select value={migrateBranch} onChange={e => setMigrateBranch(e.target.value)} className="w-full bg-black border border-[#D4AF37]/30 p-3 rounded-xl text-[#D4AF37] text-sm font-bold outline-none">
-                        <option value="all">全域通</option>
-                        <option value="taipo">大埔店</option>
-                        <option value="lokfu">樂富店</option>
+                      <select 
+                        value={migrateBranch} 
+                        onChange={e => setMigrateBranch(e.target.value)} 
+                        className="w-full bg-black border border-[#D4AF37]/30 p-3 rounded-xl text-[#D4AF37] text-sm font-bold outline-none"
+                      >
+                        <option value="ALL">🌐 全域通</option>
+                        {branchesList.map(b => (
+                          <option key={b.id} value={b.name}>📍 {b.name}</option>
+                        ))}
                       </select>
                     </div>
                   </div>
-                  <button type="button" onClick={handleMigrateOldUser} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-md active:scale-95">
+                  <button type="button" onClick={handleMigrateOldUser} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-md">
                     執行一鍵數據移轉 ＆ 升級手機憑證
                   </button>
                 </div>
@@ -676,12 +679,6 @@ export default function UserManagementPage() {
                       <p className="text-3xl font-black text-[#D4AF37]"><span className="text-sm mr-1">$</span>{staffStats.revenue.toLocaleString()}</p>
                     </div>
                   </div>
-                  
-                  <div className="mt-4 bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl">
-                     <p className="text-[10px] text-blue-400 leading-relaxed">
-                       💡 <strong>溫馨提示：</strong>此處僅顯示基礎服務客數與總產值。<br/>如需查看詳細的<strong>「實得抽成與獎金明細」</strong>，請前往左側選單的<strong>「財務報表」</strong>查看個人薪資單。
-                     </p>
-                  </div>
                 </div>
               )}
 
@@ -697,17 +694,18 @@ export default function UserManagementPage() {
                     <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
                   </div>
                   
-                  {/* 🟢 詳情頁：老闆可隨時修改員工所屬分店 */}
+                  {/* 🟢 動態讀取修改分店 */}
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest ml-1">修改所屬店鋪 (Branch)</label>
                     <select 
-                      value={selectedUser.branch || 'all'} 
+                      value={selectedUser.branch || 'ALL'} 
                       onChange={e => setSelectedUser({...selectedUser, branch: e.target.value})} 
                       className="w-full bg-black border border-white/5 p-4 rounded-xl text-[#D4AF37] font-bold text-sm outline-none focus:border-[#D4AF37]"
                     >
-                      <option value="all">🌐 全域管理 (All Branches)</option>
-                      <option value="taipo">✂️ 大埔店 (Tai Po Salon)</option>
-                      <option value="lokfu">🎨 樂富店 (Lok Fu Salon)</option>
+                      <option value="ALL">🌐 全域管理 (All Branches)</option>
+                      {branchesList.map(b => (
+                        <option key={b.id} value={b.name}>📍 {b.name}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -725,11 +723,10 @@ export default function UserManagementPage() {
               <div className="flex gap-4 pt-4 border-t border-white/5 pb-4">
                 <button onClick={() => setIsDetailOpen(false)} className="flex-1 bg-white/5 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-white/10 transition-all">取消</button>
                 <button onClick={saveUserDetails} disabled={isSaving} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:scale-105 transition-transform disabled:opacity-50">
-                  {isSaving ? '儲存中...' : '💾 儲存修改'}
+                  💾 儲存修改
                 </button>
               </div>
 
-              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 */}
               {currentAdminRole === 'admin' && selectedUser.role !== 'member' && selectedUser.email && selectedUser.email.includes('+') && (
                 <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
                   <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
@@ -742,7 +739,6 @@ export default function UserManagementPage() {
                   >
                     {isResettingPassword ? '發送中...' : '✉️ 發送密碼重設信件至系統母信箱'}
                   </button>
-                  <p className="text-[9px] text-gray-500 mt-3 leading-relaxed">💡 點擊後，重設密碼信件將直接寄送至 <strong>{MASTER_EMAIL}</strong>。<br/>請老闆前往該信箱收信，點擊連結後即可代為設定該員工的新密碼。</p>
                 </div>
               )}
 
@@ -751,19 +747,16 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 🟢 毫不保留：完整還原你的權限矩陣表 (Role Matrix Modal) */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
             <button onClick={() => setIsRoleMatrixOpen(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition-colors">
               <i className="fa-solid fa-xmark text-2xl"></i>
             </button>
-            
             <div className="mb-8 border-b border-white/10 pb-6">
               <h2 className="text-3xl font-black text-white italic tracking-tighter">Role <span className="text-[#D4AF37]">Permissions</span></h2>
               <p className="text-xs text-gray-400 mt-2 tracking-widest">各級職務系統存取權限對照表 (嚴格階級隔離)</p>
             </div>
-            
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -841,14 +834,6 @@ export default function UserManagementPage() {
                   </tr>
                 </tbody>
               </table>
-            </div>
-
-            <div className="mt-8 bg-red-500/10 border border-red-500/20 p-4 rounded-xl flex items-start gap-3">
-              <i className="fa-solid fa-shield-halved text-red-400 mt-0.5"></i> 
-              <p className="text-xs text-red-400 tracking-widest leading-relaxed">
-                <strong>安全性隔離機制：</strong> <br/>
-                系統已自動阻擋越權行為。同級別員工無法互相查閱薪資；櫃台人員無法修改設定；唯有使用老闆 (Admin) 帳號登入，方可解鎖紅色底色的所有機密級操作。
-              </p>
             </div>
           </div>
         </div>
