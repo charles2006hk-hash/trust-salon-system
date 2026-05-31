@@ -243,7 +243,14 @@ export default function UserManagementPage() {
 
     try {
       await sendPasswordResetEmail(auth, selectedUser.email);
-      toast.success(`✅ 重設信已成功發送至母信箱：\n${MASTER_EMAIL}\n請前往信箱點擊連結並輸入新密碼。`, { id: toastId, duration: 8000 });
+      
+      // 🟢 神級防護：重設密碼的同時，自動把「首次登入」標籤貼回去！
+      await updateDoc(doc(db, "users", selectedUser.id), {
+        isFirstLogin: true
+      });
+
+      toast.success(`✅ 重設信已發送至母信箱：\n${MASTER_EMAIL}\n員工下次登入將被強制要求設定私人密碼。`, { id: toastId, duration: 8000 });
+      fetchUsers(); // 刷新列表
     } catch (error) {
       toast.error("發送失敗，請確認該帳號是否已開通系統登入權限。", { id: toastId });
     } finally {
