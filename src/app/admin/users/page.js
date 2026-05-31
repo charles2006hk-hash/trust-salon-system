@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; 
-import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; // 🟢 換成發送重設信的官方模組
+import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function UserManagementPage() {
@@ -17,7 +17,8 @@ export default function UserManagementPage() {
   const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0 });
+  // 🟢 新增用戶狀態：加入預設店鋪 branch: 'all'
+  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'all' });
 
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -26,16 +27,14 @@ export default function UserManagementPage() {
 
   const [adjustForm, setAdjustForm] = useState({ points: '', tDollar: '', note: '' });
   
-  // 🟢 密碼重設的狀態
   const [isResettingPassword, setIsResettingPassword] = useState(false);
-
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
-  // 🟢 新增：舊帳號數據遷移專用狀態
+  // 🟢 舊帳號數據遷移專用狀態
   const [migratePhone, setMigratePhone] = useState('');
   const [migratePassword, setMigratePassword] = useState('');
+  const [migrateBranch, setMigrateBranch] = useState('all');
 
-  // 🟢 系統母信箱設定
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
   useEffect(() => {
@@ -70,14 +69,13 @@ export default function UserManagementPage() {
     
     try {
       let finalUid = null;
-      let loginEmail = newUser.email; // 預設給會員用的普通 Email
+      let loginEmail = newUser.email; 
 
       if (newUser.role !== 'member') {
         if (currentAdminRole !== 'admin') {
            return toast.error("權限不足：只有老闆 (Admin) 可以建立內部員工帳號", { id: toastId });
         }
         
-        // 員工帳號建立邏輯：電話智能打包影子信箱
         const cleanPhone = newUser.phone.replace(/[^0-9]/g, '');
         if (!cleanPhone || cleanPhone.length < 8) {
           return toast.error("建立員工帳號必須填寫有效的電話號碼 (至少 8 碼) 作為登入憑證！", { id: toastId });
@@ -86,7 +84,6 @@ export default function UserManagementPage() {
           return toast.error("初始密碼必須至少 6 個字元", { id: toastId });
         }
         
-        // 打包影子信箱
         loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
         
         const apiKey = auth.app.options.apiKey;
@@ -108,7 +105,7 @@ export default function UserManagementPage() {
       const userData = {
         name: newUser.name,
         phoneNumber: newUser.phone,
-        email: loginEmail || '', // 儲存生成的影子信箱或客人的信箱
+        email: loginEmail || '', 
         role: newUser.role,
         tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
@@ -116,7 +113,8 @@ export default function UserManagementPage() {
         createdAt: new Date().toISOString(),
         status: 'active',
         notes: '',
-        isFirstLogin: true // 🟢 新開通的員工預設開啟首次登入修改提示
+        isFirstLogin: true, // 🟢 確保新帳號觸發攔截
+        branch: newUser.branch || 'all' // 🟢 寫入所屬店鋪
       };
 
       if (finalUid) {
@@ -128,7 +126,7 @@ export default function UserManagementPage() {
       }
 
       setIsCreateOpen(false);
-      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0 });
+      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'all' });
       fetchUsers();
       
     } catch (error) {
@@ -141,8 +139,9 @@ export default function UserManagementPage() {
   const openDetails = async (user) => {
     setSelectedUser(user);
     setAdjustForm({ points: '', tDollar: '', note: '' }); 
-    setMigratePhone(user.phoneNumber || ''); // 🟢 開啟詳情時，初始化遷移手機號碼
-    setMigratePassword(''); // 🟢 初始化遷移密碼
+    setMigratePhone(user.phoneNumber || ''); 
+    setMigratePassword(''); 
+    setMigrateBranch(user.branch || 'all');
     setIsDetailOpen(true);
 
     if (['staff', 'manager', 'admin'].includes(user.role)) {
@@ -166,7 +165,6 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 核心黑科技功能：一鍵將舊資料文檔全數完美遷移至新手機影子信箱格式
   const handleMigrateOldUser = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限最高管理員老闆操作");
@@ -179,7 +177,6 @@ export default function UserManagementPage() {
     try {
       const loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
 
-      // 1. 調用 Firebase Auth REST API 註冊全新的影子認證憑證
       const apiKey = auth.app.options.apiKey;
       const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
         method: 'POST',
@@ -190,19 +187,16 @@ export default function UserManagementPage() {
       if (!response.ok) throw new Error(authData.error.message || "建立新認證憑證失敗");
       const newUid = authData.localId;
 
-      // 2. 完美複製舊文檔中的所有核心字段與營業數據，並寫入新手機和新信箱
       const { id, ...oldDataWithoutId } = selectedUser; 
       const migratedData = {
         ...oldDataWithoutId,
         phoneNumber: migratePhone,
         email: loginEmail,
-        isFirstLogin: true // 確保他們用新手機初次登入時會跳出改密碼提示
+        isFirstLogin: true, 
+        branch: migrateBranch // 🟢 同步遷移店鋪資料
       };
 
-      // 3. 在 Firestore 內以全新的 UID 作為 Document ID 建立新文檔
       await setDoc(doc(db, "users", newUid), migratedData);
-
-      // 4. 安全銷毀原本舊 UID 的 Firestore 髒數據文檔，確保資料乾淨不重疊
       await deleteDoc(doc(db, "users", selectedUser.id));
 
       toast.success(`🎉 舊帳號【${selectedUser.name}】手機格式升級成功！\n歷史業績與資產已 100% 完美遷移。`, { id: toastId, duration: 6000 });
@@ -223,6 +217,7 @@ export default function UserManagementPage() {
         name: selectedUser.name || '',
         phoneNumber: selectedUser.phoneNumber || '',
         email: selectedUser.email || '',
+        branch: selectedUser.branch || 'all', // 🟢 儲存店鋪設定
         ...(currentAdminRole === 'admin' ? { role: selectedUser.role } : {}),
         notes: selectedUser.notes || ''
       });
@@ -236,7 +231,6 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 影子信箱：完美發送重設信件至老闆母信箱
   const handleSendResetEmail = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
@@ -284,7 +278,6 @@ export default function UserManagementPage() {
         
         tx.set(doc(collection(db, "transactions")), {
           userId: selectedUser.id, 
-          // 🟢 防呆機制：如果舊帳號沒電話，就不會報錯
           phoneNumber: selectedUser.phoneNumber || '未提供號碼', 
           type: "admin_adjustment",
           pointsAdded: pts, 
@@ -413,7 +406,7 @@ export default function UserManagementPage() {
             <thead>
               <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/5 bg-black/20">
                 <th className="p-6 font-bold">姓名與識別資訊</th>
-                <th className="p-6 font-bold">註冊時間</th>
+                <th className="p-6 font-bold">所屬店鋪</th>
                 <th className="p-6 font-bold">資產狀態</th>
                 <th className="p-6 font-bold">系統權限 (Role)</th>
                 <th className="p-6 font-bold text-right">操作</th>
@@ -432,8 +425,11 @@ export default function UserManagementPage() {
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
-                  <td className="p-6 text-xs text-gray-400 font-mono">
-                    {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '早期帳號'}
+                  {/* 🟢 列表清爽顯示所屬分店標籤 */}
+                  <td className="p-6">
+                    <span className={`text-[9px] px-2 py-1 rounded font-bold tracking-widest uppercase ${u.branch === 'taipo' ? 'bg-orange-500/20 text-orange-400' : u.branch === 'lokfu' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
+                      {u.branch === 'taipo' ? '大埔店' : u.branch === 'lokfu' ? '樂富店' : '全域管理'}
+                    </span>
                   </td>
                   <td className="p-6">
                     <div className="flex items-center gap-4">
@@ -505,25 +501,41 @@ export default function UserManagementPage() {
             <h2 className="text-2xl font-black text-white italic mb-8">Create <span className="text-[#D4AF37]">User</span></h2>
             
             <form onSubmit={handleCreateUser} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">身分權限</label>
-                <select 
-                  value={newUser.role} 
-                  onChange={e => setNewUser({...newUser, role: e.target.value})} 
-                  disabled={currentAdminRole !== 'admin'}
-                  className={`w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-[#D4AF37] font-bold outline-none ${currentAdminRole !== 'admin' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <option value="member">一般會員 (Member) - 無需密碼</option>
-                  {currentAdminRole === 'admin' && (
-                    <>
-                      <option value="reception">櫃台人員 (Reception)</option>
-                      <option value="staff">店內員工 / 髮型師 (Staff)</option>
-                      <option value="manager">店鋪經理 (Manager)</option>
-                      <option value="admin">系統管理員 (Admin)</option>
-                    </>
-                  )}
-                </select>
-                {currentAdminRole !== 'admin' && <p className="text-[9px] text-red-400 mt-1">您僅有權限建立客戶檔案。如需開通員工帳號，請聯繫老闆。</p>}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">身分權限</label>
+                  <select 
+                    value={newUser.role} 
+                    onChange={e => setNewUser({...newUser, role: e.target.value})} 
+                    disabled={currentAdminRole !== 'admin'}
+                    className={`w-full bg-black border border-[#D4AF37]/50 p-3 rounded-xl text-[#D4AF37] font-bold outline-none ${currentAdminRole !== 'admin' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    <option value="member">一般會員 (Member) - 無需密碼</option>
+                    {currentAdminRole === 'admin' && (
+                      <>
+                        <option value="reception">櫃台人員 (Reception)</option>
+                        <option value="staff">店內員工 / 髮型師 (Staff)</option>
+                        <option value="manager">店鋪經理 (Manager)</option>
+                        <option value="admin">系統管理員 (Admin)</option>
+                      </>
+                    )}
+                  </select>
+                  {currentAdminRole !== 'admin' && <p className="text-[9px] text-red-400 mt-1">您僅有權限建立客戶檔案。</p>}
+                </div>
+
+                {/* 🟢 選擇所屬分店 */}
+                <div className="space-y-1">
+                  <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">所屬分店 (Branch)</label>
+                  <select 
+                    value={newUser.branch} 
+                    onChange={e => setNewUser({...newUser, branch: e.target.value})} 
+                    className="w-full bg-black border border-[#D4AF37]/40 p-3 rounded-xl text-[#D4AF37] text-sm font-bold outline-none"
+                  >
+                    <option value="all">🌐 全域通 (All)</option>
+                    <option value="taipo">✂️ 大埔店 (Tai Po)</option>
+                    <option value="lokfu">🎨 樂富店 (Lok Fu)</option>
+                  </select>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -561,6 +573,7 @@ export default function UserManagementPage() {
         </div>
       )}
 
+      {/* 🟢 用戶細節彈窗 */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
@@ -580,7 +593,7 @@ export default function UserManagementPage() {
 
             <div className="p-10 space-y-8">
               
-              {/* 🟢 舊帳號手機升級器 UI 區塊 (僅在點擊「無電話號碼、或非影子信箱」的舊內部員工時顯示) */}
+              {/* 🟢 舊帳號手機升級器：加入所屬分店選擇 */}
               {currentAdminRole === 'admin' && selectedUser.role !== 'member' && (!selectedUser.phoneNumber || (selectedUser.email && !selectedUser.email.includes('+'))) && (
                 <div className="bg-blue-950/40 p-6 rounded-3xl border border-blue-500/40 shadow-lg animate-fade-in">
                   <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-[0.4em] mb-3 flex items-center gap-2">
@@ -589,7 +602,7 @@ export default function UserManagementPage() {
                   <p className="text-xs text-gray-400 mb-4 leading-relaxed">
                     系統偵測到此檔案為舊版本格式。請在下方輸入該員工的<strong>「真實電話號碼」</strong>並設定初始密碼，系統會自動開通電話影子登入，並將她原本的<strong>所有服務客數、業績產值、套票餘額、T-Dollar、Points 所有數據完美移轉</strong>！
                   </p>
-                  <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="grid grid-cols-3 gap-4 mb-4">
                     <div className="space-y-1">
                       <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">員工真實電話號碼</label>
                       <input type="tel" value={migratePhone} onChange={e => setMigratePhone(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm font-mono placeholder:text-gray-700" placeholder="如: 98765432" />
@@ -597,6 +610,15 @@ export default function UserManagementPage() {
                     <div className="space-y-1">
                       <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">設定臨時密碼</label>
                       <input type="text" value={migratePassword} onChange={e => setMigratePassword(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm placeholder:text-gray-700" placeholder="如: 123456" />
+                    </div>
+                    {/* 🟢 遷移時指定分店 */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">指定所屬分店</label>
+                      <select value={migrateBranch} onChange={e => setMigrateBranch(e.target.value)} className="w-full bg-black border border-[#D4AF37]/30 p-3 rounded-xl text-[#D4AF37] text-sm font-bold outline-none">
+                        <option value="all">全域通</option>
+                        <option value="taipo">大埔店</option>
+                        <option value="lokfu">樂富店</option>
+                      </select>
                     </div>
                   </div>
                   <button type="button" onClick={handleMigrateOldUser} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest transition-all shadow-md active:scale-95">
@@ -667,6 +689,21 @@ export default function UserManagementPage() {
                     <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">聯絡電話</label>
                     <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
                   </div>
+                  
+                  {/* 🟢 詳情頁：老闆可隨時修改員工所屬分店 */}
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest ml-1">修改所屬店鋪 (Branch)</label>
+                    <select 
+                      value={selectedUser.branch || 'all'} 
+                      onChange={e => setSelectedUser({...selectedUser, branch: e.target.value})} 
+                      className="w-full bg-black border border-white/5 p-4 rounded-xl text-[#D4AF37] font-bold text-sm outline-none focus:border-[#D4AF37]"
+                    >
+                      <option value="all">🌐 全域管理 (All Branches)</option>
+                      <option value="taipo">✂️ 大埔店 (Tai Po Salon)</option>
+                      <option value="lokfu">🎨 樂富店 (Lok Fu Salon)</option>
+                    </select>
+                  </div>
+
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">系統認證信箱 (登入憑證)</label>
                     <input type="email" disabled value={selectedUser.email || '早期未綁定憑證之帳號'} className="w-full bg-black border border-white/5 p-4 rounded-xl text-gray-500 outline-none text-sm font-mono opacity-50 cursor-not-allowed" />
@@ -685,7 +722,7 @@ export default function UserManagementPage() {
                 </button>
               </div>
 
-              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 (僅針對完成升級的影子信箱帳號開放) */}
+              {/* 🟢 影子信箱：完美發送重設信件至老闆母信箱 */}
               {currentAdminRole === 'admin' && selectedUser.role !== 'member' && selectedUser.email && selectedUser.email.includes('+') && (
                 <div className="bg-red-900/10 p-6 rounded-3xl border border-red-500/30">
                   <h3 className="text-[10px] font-bold text-red-400 uppercase tracking-[0.4em] mb-4 flex items-center gap-2">
@@ -707,6 +744,7 @@ export default function UserManagementPage() {
         </div>
       )}
 
+      {/* 🟢 毫不保留：完整還原你的權限矩陣表 (Role Matrix Modal) */}
       {isRoleMatrixOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-4xl rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.1)] relative max-h-[90vh] overflow-y-auto custom-scrollbar">
