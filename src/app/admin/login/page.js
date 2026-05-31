@@ -1,33 +1,32 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { signInWithEmailAndPassword, onAuthStateChanged, updatePassword } from 'firebase/auth'; // 🟢 補上 updatePassword
-import { doc, getDoc, updateDoc } from 'firebase/firestore'; // 🟢 補上 updateDoc
+import { signInWithEmailAndPassword, onAuthStateChanged, updatePassword } from 'firebase/auth'; 
+import { doc, getDoc, updateDoc } from 'firebase/firestore'; 
 import { auth, db } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { toast, Toaster } from 'react-hot-toast';
 import Link from 'next/link';
 
 export default function AdminLoginPage() {
-  // 🟢 將原本的 email 狀態改為 phone 狀態
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [pageChecking, setPageChecking] = useState(true);
   const router = useRouter();
 
-  // 🟢 密碼眼睛控制狀態
+  // 密碼眼睛控制狀態
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // 🟢 首次登入智能攔截與強制改密碼狀態
+  // 首次登入智能攔截與強制改密碼狀態
   const [isForcingChange, setIsForcingChange] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pendingUserCredential, setPendingUserCredential] = useState(null);
 
-  // 🟢 系統母信箱設定
+  // 系統母信箱設定
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
   // 智慧檢查：如果他已經登入了，直接把他送進大後台
@@ -86,8 +85,8 @@ export default function AdminLoginPage() {
           return;
         }
         
-        // 4. 智能攔截：如果是初始密碼 123456 且尚未被標記為 false，開啟強改密碼彈窗
-        if (cleanPassword === '123456' && userData.isFirstLogin !== false) {
+        // 🟢 核心攔截升級：不再檢查密碼是否為 123456，只要資料庫的 isFirstLogin 欄位不為 false（即為 true 或剛遷移完），一律強制攔截改密碼
+        if (userData.isFirstLogin !== false) {
           setPendingUserCredential(userCredential);
           setIsForcingChange(true);
           toast.dismiss(toastId);
@@ -115,14 +114,13 @@ export default function AdminLoginPage() {
 
     if (cleanNewPassword.length < 6) return toast.error('密碼長度必須至少為 6 個字元。');
     if (cleanNewPassword !== cleanConfirmPassword) return toast.error('兩次輸入的新密碼不一致。');
-    if (cleanNewPassword === '123456') return toast.error('新密碼不能與初始預設密碼相同。');
 
     setLoading(true);
     const toastId = toast.loading("正在安全加密並更新您的個人密碼...");
 
     try {
       if (pendingUserCredential && pendingUserCredential.user) {
-        // 更新 Firebase Auth 帳密
+        // 更新 Firebase Auth 密碼
         await updatePassword(pendingUserCredential.user, cleanNewPassword);
         
         // 同步在 Firestore 資料庫關閉首次登入提醒標籤
@@ -178,7 +176,6 @@ export default function AdminLoginPage() {
 
         <div className="bg-[#121212] p-10 rounded-[40px] border border-white/5 shadow-2xl relative animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
           
-          {/* 🟢 條件渲染：常規登入介面 VS 強制改密碼引導視窗 */}
           {!isForcingChange ? (
             <form onSubmit={handleLogin} className="space-y-6">
               <div>
@@ -226,11 +223,11 @@ export default function AdminLoginPage() {
               </button>
             </form>
           ) : (
-            // 🟢 強制修改個人專屬密碼視窗 (沿用黑金尊爵風格與原汁原味提示邏輯)
+            // 🟢 強制修改個人專屬密碼視窗 (文案微調為首次登入提示)
             <form onSubmit={handleForceChangeSubmit} className="space-y-6">
               <div className="bg-[#D4AF37]/10 border border-[#D4AF37]/20 p-4 rounded-2xl text-[#D4AF37] text-xs font-bold leading-relaxed flex items-start gap-3">
                  <div className="mt-0.5"><i className="fa-solid fa-triangle-exclamation text-base"></i></div>
-                 <p>系統偵測到您正在使用初始預設密碼。<br/>為保障您個人帳號資產與發佣安全，建議立即變更密碼。</p>
+                 <p>系統偵測到您是<strong>首次登入系統</strong>。<br/>為保障您個人帳號資產與發佣安全，建議立即變更密碼。</p>
               </div>
 
               <div className="space-y-4">
@@ -253,7 +250,7 @@ export default function AdminLoginPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">確認新密碼 (Confirm Password)</label>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-2">確認新密碼 (Confirm Password)</label>
                   <div className="relative flex items-center">
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i className="fa-solid fa-lock text-gray-500 text-sm"></i>
@@ -284,7 +281,6 @@ export default function AdminLoginPage() {
 
         </div>
         
-        {/* 返回客戶前台通道 */}
         <div className="text-center mt-8 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
            <Link href="/login" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-white transition-colors flex items-center justify-center gap-2">
               <i className="fa-solid fa-arrow-left"></i> 返回客戶專屬入口
