@@ -26,10 +26,9 @@ export default function AdminLoginPage() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pendingUserCredential, setPendingUserCredential] = useState(null);
 
-  // 系統母信箱設定
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
-  // 🟢 終極防卡死檢查：如果他已經登入，且是第一次登入，死死鎖在原地！
+  // 智慧檢查：如果他已經登入了，直接把他送進大後台
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -40,7 +39,7 @@ export default function AdminLoginPage() {
           if (docSnap.exists()) {
             const userData = docSnap.data();
             
-            // 🌟 核心防禦：如果這帳號是第一次登入，直接開啟強改視窗，並【中斷】跳轉後台！
+            // 🌟 如果這帳號是第一次登入，直接開啟強改視窗，並【中斷】跳轉後台！
             if (userData.isFirstLogin !== false) {
               setPendingUserCredential({ user });
               setIsForcingChange(true);
@@ -48,7 +47,6 @@ export default function AdminLoginPage() {
               return; 
             }
             
-            // 如果已經洗白，且是員工，才放行進入後台
             if (userData.role !== 'member') {
               router.replace('/admin'); 
               return;
@@ -93,7 +91,7 @@ export default function AdminLoginPage() {
           return;
         }
         
-        // 🌟 登入按鈕的防禦：發現是首次登入，立刻拉起視窗，絕對不執行 router.push
+        // 🌟 發現是首次登入，立刻拉起視窗，絕對不執行 router.push
         if (userData.isFirstLogin !== false) {
           setPendingUserCredential(userCredential);
           setIsForcingChange(true);
@@ -114,6 +112,7 @@ export default function AdminLoginPage() {
     }
   };
 
+  // 🟢 處理員工在提示下修改新密碼 (已加入安全超時防呆機制)
   const handleForceChangeSubmit = async (e) => {
     e.preventDefault();
     const cleanNewPassword = newPassword.trim();
@@ -126,9 +125,13 @@ export default function AdminLoginPage() {
     const toastId = toast.loading("正在安全加密並更新您的個人密碼...");
 
     try {
-      if (pendingUserCredential && pendingUserCredential.user) {
-        await updatePassword(pendingUserCredential.user, cleanNewPassword);
-        await updateDoc(doc(db, "users", pendingUserCredential.user.uid), {
+      const currentUser = pendingUserCredential?.user || auth.currentUser;
+      if (currentUser) {
+        // 更新 Firebase Auth 密碼
+        await updatePassword(currentUser, cleanNewPassword);
+        
+        // 同步在 Firestore 資料庫關閉首次登入提醒標籤
+        await updateDoc(doc(db, "users", currentUser.uid), {
           isFirstLogin: false
         });
 
@@ -137,7 +140,16 @@ export default function AdminLoginPage() {
       }
     } catch (err) {
       console.error(err);
-      toast.error('密碼更新失敗，請重新嘗試或聯繫系統管理員。', { id: toastId });
+      
+      // 🟢 捕捉 Firebase 的「登入過期/不夠新鮮」安全限制
+      if (err.code === 'auth/requires-recent-login') {
+        toast.error('【安全防護】登入憑證已逾時！請重新登入後再修改密碼。', { id: toastId, duration: 6000 });
+        await auth.signOut();
+        setIsForcingChange(false); // 退回登入畫面
+        setPassword(''); // 清空密碼讓他重打
+      } else {
+        toast.error('密碼更新失敗，請重新嘗試或聯繫系統管理員。', { id: toastId });
+      }
       setLoading(false);
     }
   };
@@ -146,8 +158,9 @@ export default function AdminLoginPage() {
     setLoading(true);
     const toastId = toast.loading("正在加載系統資料...");
     try {
-      if (pendingUserCredential && pendingUserCredential.user) {
-        await updateDoc(doc(db, "users", pendingUserCredential.user.uid), {
+      const currentUser = pendingUserCredential?.user || auth.currentUser;
+      if (currentUser) {
+        await updateDoc(doc(db, "users", currentUser.uid), {
           isFirstLogin: false
         });
         toast.success('已為您登入系統。', { id: toastId });
@@ -191,12 +204,7 @@ export default function AdminLoginPage() {
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i className="fa-solid fa-phone text-gray-500 text-sm"></i>
                     </div>
-                    <input 
-                      type="tel" required 
-                      value={phone} onChange={e => setPhone(e.target.value)} 
-                      className="w-full bg-black border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors text-sm font-mono tracking-widest" 
-                      placeholder="98765432" 
-                    />
+                    <input type="tel" required value={phone} onChange={e => setPhone(e.target.value)} className="w-full bg-black border border-white/10 p-4 pl-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors text-sm font-mono tracking-widest" placeholder="98765432" />
                   </div>
                 </div>
 
@@ -206,12 +214,7 @@ export default function AdminLoginPage() {
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i className="fa-solid fa-lock text-gray-500 text-sm"></i>
                     </div>
-                    <input 
-                      type={showPassword ? "text" : "password"} required 
-                      value={password} onChange={e => setPassword(e.target.value)} 
-                      className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors text-sm font-mono tracking-widest" 
-                      placeholder="••••••••" 
-                    />
+                    <input type={showPassword ? "text" : "password"} required value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors text-sm font-mono tracking-widest" placeholder="••••••••" />
                     <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 text-gray-500 hover:text-white transition-colors">
                       {showPassword ? <i className="fa-solid fa-eye-slash text-sm"></i> : <i className="fa-solid fa-eye text-sm"></i>}
                     </button>
@@ -237,12 +240,7 @@ export default function AdminLoginPage() {
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i className="fa-solid fa-key text-gray-500 text-sm"></i>
                     </div>
-                    <input 
-                      type={showNewPassword ? "text" : "password"} required minLength={6}
-                      className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] text-sm" 
-                      placeholder="輸入至少 6 位數新密碼" 
-                      value={newPassword} onChange={e => setNewPassword(e.target.value)} 
-                    />
+                    <input type={showNewPassword ? "text" : "password"} required minLength={6} className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] text-sm" placeholder="輸入至少 6 位數新密碼" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
                     <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-4 text-gray-500 hover:text-white transition-colors">
                       {showNewPassword ? <i className="fa-solid fa-eye-slash text-sm"></i> : <i className="fa-solid fa-eye text-sm"></i>}
                     </button>
@@ -255,12 +253,7 @@ export default function AdminLoginPage() {
                     <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                       <i className="fa-solid fa-lock text-gray-500 text-sm"></i>
                     </div>
-                    <input 
-                      type={showConfirmPassword ? "text" : "password"} required minLength={6}
-                      className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] text-sm" 
-                      placeholder="再次輸入新密碼" 
-                      value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} 
-                    />
+                    <input type={showConfirmPassword ? "text" : "password"} required minLength={6} className="w-full bg-black border border-white/10 p-4 pl-12 pr-12 rounded-2xl text-white outline-none focus:border-[#D4AF37] text-sm" placeholder="再次輸入新密碼" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} />
                     <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 text-gray-500 hover:text-white transition-colors">
                       {showConfirmPassword ? <i className="fa-solid fa-eye-slash text-sm"></i> : <i className="fa-solid fa-eye text-sm"></i>}
                     </button>
