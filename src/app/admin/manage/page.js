@@ -56,7 +56,7 @@ export default function AdminManagePage() {
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
     phoneNumber: '+852', commissionLabels: defaultLabels,
-    sortWeight: 0, isAssistant: false // 🟢 加入專職助手 Tag 欄位
+    sortWeight: 0, isAssistant: false
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -75,10 +75,13 @@ export default function AdminManagePage() {
       try {
         const docSnap = await getDoc(doc(db, 'users', user.uid));
         if (docSnap.exists()) {
-          const role = docSnap.data().role;
+          // 🟢 智慧現形：抓取並確保小寫，防止大小寫造成的判定錯誤
+          const role = String(docSnap.data().role || 'member').toLowerCase();
           setCurrentUserRole(role);
+          
           if (['member', 'reception', 'staff'].includes(role)) {
-            toast.error("⛔ 權限不足：您無法進入 CMS 管理中心");
+            // 如果你看到這個錯誤，代表測試帳號真的不是 manager
+            toast.error(`⛔ 權限不足：您的身分 (${role}) 無法進入 CMS 管理中心`);
             router.push(role === 'member' ? '/dashboard' : '/admin/pos');
             return;
           }
@@ -216,7 +219,7 @@ export default function AdminManagePage() {
       commissions: item.commissions || defaultCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0,
-      isAssistant: item.isAssistant || false // 🟢 載入專職助手 Tag
+      isAssistant: item.isAssistant || false
     });
     if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') { setIsCustomStaff(true); } 
     else { setIsCustomStaff(false); }
@@ -281,6 +284,7 @@ export default function AdminManagePage() {
     </div>
   );
 
+  // 🟢 核心過濾機制：經理只會看到「營運定價」和「行銷模組」，完全看不到「全局設定」
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches'].includes(item.id)) };
     return group;
@@ -328,6 +332,7 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
+            {/* 🟢 權限顯示機制：經理若點到不該點的地方，會顯示這個畫面 (雖然按鈕已隱藏) */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -480,7 +485,6 @@ export default function AdminManagePage() {
                       </select>
                     </div>
 
-                    {/* 🟢 加入：專職助手 Tag 打勾選項 */}
                     <div className="space-y-2 col-span-2 flex items-center gap-3 bg-gray-900 p-4 rounded-xl border border-white/5">
                       <input type="checkbox" id="isAssistant" className="w-5 h-5 accent-[#D4AF37]" checked={formData.isAssistant} onChange={e => setFormData({...formData, isAssistant: e.target.checked})} />
                       <div className="flex flex-col">
@@ -605,7 +609,6 @@ export default function AdminManagePage() {
                                       📞 {item.phoneNumber}
                                     </span>
                                   )}
-                                  {/* 🟢 加入：專職助手視覺標籤 */}
                                   {activeTab === 'staff' && item.isAssistant && (
                                     <span className="text-[9px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded border border-yellow-500/30 font-bold uppercase tracking-tighter">
                                       🙋‍♂️ 專職助手
