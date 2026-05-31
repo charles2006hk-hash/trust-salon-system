@@ -138,15 +138,15 @@ export default function AdminHub() {
             </div>
           )}
 
-          {/* 模組 5：全店財務報表 (僅限 Admin, Manager 高層可見) */}
+          {/* 模組 3：CMS 管理 (Admin, Manager 可見) */}
           {['admin', 'manager'].includes(userData.role) && (
-            <div onClick={() => router.push('/admin/finance')} className="bg-[#121212] p-8 rounded-[32px] border border-red-500/20 hover:border-red-500/50 cursor-pointer transition-all group shadow-xl flex flex-col justify-between h-full">
+            <div onClick={() => router.push('/admin/manage')} className="bg-[#121212] p-8 rounded-[32px] border border-white/5 hover:border-white/30 cursor-pointer transition-all group shadow-xl flex flex-col justify-between h-full">
               <div>
-                <div className="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <i className="fa-solid fa-file-invoice-dollar text-2xl text-red-400"></i>
+                <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                  <i className="fa-solid fa-sliders text-2xl text-gray-300"></i>
                 </div>
-                <h3 className="text-lg font-bold text-white mb-2">全店財務報表</h3>
-                <p className="text-xs text-gray-500 leading-relaxed">查看全店營業額、未消耗總負債，與髮型師抽成排行。</p>
+                <h3 className="text-lg font-bold text-white mb-2">CMS 資料引擎</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">服務定價、髮型師設定、全局參數與官網行銷活動上架。</p>
               </div>
             </div>
           )}
