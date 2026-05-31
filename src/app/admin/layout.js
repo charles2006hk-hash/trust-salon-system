@@ -28,10 +28,10 @@ export default function AdminLayout({ children }) {
 
   // 🟢 更新：嚴格劃分隱私權限
   const ROLE_PERMISSIONS = {
-    admin: ['pos', 'manage', 'users', 'finance', 'performance'], // 老闆：全開
-    manager: ['pos', 'manage', 'users', 'finance', 'performance'], // 經理：全開
-    staff: ['pos', 'manage', 'performance'],                     // 員工：結帳、修改價目表、看【個人】業績 (無權看全店 finance)
-    reception: ['pos', 'users']                                  // 櫃台：結帳、管理客人檔案
+    admin: ['pos', 'manage', 'users', 'finance', 'performance'], 
+    manager: ['pos', 'manage', 'users', 'finance', 'performance'], 
+    staff: ['pos', 'performance'], // 🔴 已經把 'manage' 拿掉，髮型師看不見 CMS 了
+    reception: ['pos', 'users']                   
   };
   // ==========================================
 
