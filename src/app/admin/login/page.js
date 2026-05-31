@@ -29,25 +29,38 @@ export default function AdminLoginPage() {
   // 系統母信箱設定
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
-  // 智慧檢查：如果他已經登入了，直接把他送進大後台
+  // 🟢 終極防卡死檢查：如果他已經登入，且是第一次登入，死死鎖在原地！
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user && !isForcingChange) {
+      if (user) {
         try {
           const docRef = doc(db, 'users', user.uid);
           const docSnap = await getDoc(docRef);
-          if (docSnap.exists() && docSnap.data().role !== 'member') {
-            router.replace('/admin'); 
-            return;
+          
+          if (docSnap.exists()) {
+            const userData = docSnap.data();
+            
+            // 🌟 核心防禦：如果這帳號是第一次登入，直接開啟強改視窗，並【中斷】跳轉後台！
+            if (userData.isFirstLogin !== false) {
+              setPendingUserCredential({ user });
+              setIsForcingChange(true);
+              setPageChecking(false);
+              return; 
+            }
+            
+            // 如果已經洗白，且是員工，才放行進入後台
+            if (userData.role !== 'member') {
+              router.replace('/admin'); 
+              return;
+            }
           }
         } catch (e) { console.error(e); }
       }
       setPageChecking(false);
     });
     return () => unsubscribe();
-  }, [router, isForcingChange]);
+  }, [router]);
 
-  // 🟢 步驟一：處理常規電話密碼登入提交
   const handleLogin = async (e) => {
     e.preventDefault();
     if (!phone || !password) return toast.error("請輸入完整登入資訊");
@@ -56,7 +69,6 @@ export default function AdminLoginPage() {
     const toastId = toast.loading("正在驗證安全憑證...");
 
     try {
-      // 1. 萃取純數字，自動組合影子信箱
       const cleanPhone = phone.replace(/[^0-9]/g, '');
       const cleanPassword = password.trim();
       
@@ -66,18 +78,14 @@ export default function AdminLoginPage() {
       }
 
       const loginEmail = MASTER_EMAIL.replace('@', `+${cleanPhone}@`);
-
-      // 2. 執行影子信箱與密碼驗證
       const userCredential = await signInWithEmailAndPassword(auth, loginEmail, cleanPassword);
       
-      // 3. 檢查 Firestore 權限
       const docRef = doc(db, 'users', userCredential.user.uid);
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
         const userData = docSnap.data();
         
-        // 防呆攔截客人跑錯入口
         if (!userData.role || userData.role === 'member') {
           toast.error("權限不足：此入口僅限內部員工使用", { id: toastId });
           await auth.signOut();
@@ -85,7 +93,7 @@ export default function AdminLoginPage() {
           return;
         }
         
-        // 🟢 核心攔截升級：不再檢查密碼是否為 123456，只要資料庫的 isFirstLogin 欄位不為 false（即為 true 或剛遷移完），一律強制攔截改密碼
+        // 🌟 登入按鈕的防禦：發現是首次登入，立刻拉起視窗，絕對不執行 router.push
         if (userData.isFirstLogin !== false) {
           setPendingUserCredential(userCredential);
           setIsForcingChange(true);
@@ -106,7 +114,6 @@ export default function AdminLoginPage() {
     }
   };
 
-  // 🟢 步驟二：處理員工在提示下修改新密碼
   const handleForceChangeSubmit = async (e) => {
     e.preventDefault();
     const cleanNewPassword = newPassword.trim();
@@ -120,10 +127,7 @@ export default function AdminLoginPage() {
 
     try {
       if (pendingUserCredential && pendingUserCredential.user) {
-        // 更新 Firebase Auth 密碼
         await updatePassword(pendingUserCredential.user, cleanNewPassword);
-        
-        // 同步在 Firestore 資料庫關閉首次登入提醒標籤
         await updateDoc(doc(db, "users", pendingUserCredential.user.uid), {
           isFirstLogin: false
         });
@@ -138,7 +142,6 @@ export default function AdminLoginPage() {
     }
   };
 
-  // 🟢 步驟三：員工選擇「暫不修改」直接登入 (撕除標籤，第二次再也不會跳出)
   const handleSkipChange = async () => {
     setLoading(true);
     const toastId = toast.loading("正在加載系統資料...");
@@ -166,7 +169,6 @@ export default function AdminLoginPage() {
       <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-white opacity-5 rounded-full blur-[100px] pointer-events-none"></div>
 
       <div className="w-full max-w-md relative z-10">
-        
         <div className="text-center mb-10 flex flex-col items-center animate-fade-in-up">
            <h1 className="text-4xl font-black tracking-widest text-white italic mb-2">TRUST<span className="text-[#D4AF37] not-italic">.</span> OS</h1>
            <p className="text-[10px] text-[#D4AF37] uppercase tracking-[0.5em] font-bold border border-[#D4AF37]/30 px-4 py-1.5 rounded-full bg-[#D4AF37]/10 mt-3">
@@ -175,7 +177,6 @@ export default function AdminLoginPage() {
         </div>
 
         <div className="bg-[#121212] p-10 rounded-[40px] border border-white/5 shadow-2xl relative animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
-          
           {!isForcingChange ? (
             <form onSubmit={handleLogin} className="space-y-6">
               <div>
@@ -223,7 +224,6 @@ export default function AdminLoginPage() {
               </button>
             </form>
           ) : (
-            // 🟢 強制修改個人專屬密碼視窗 (文案微調為首次登入提示)
             <form onSubmit={handleForceChangeSubmit} className="space-y-6">
               <div className="bg-[#D4AF37]/10 border border-[#D4AF37]/20 p-4 rounded-2xl text-[#D4AF37] text-xs font-bold leading-relaxed flex items-start gap-3">
                  <div className="mt-0.5"><i className="fa-solid fa-triangle-exclamation text-base"></i></div>
@@ -278,7 +278,6 @@ export default function AdminLoginPage() {
               </div>
             </form>
           )}
-
         </div>
         
         <div className="text-center mt-8 animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
