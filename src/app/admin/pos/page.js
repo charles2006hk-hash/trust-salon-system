@@ -170,20 +170,43 @@ export default function SmartPOS() {
 
   const handleKeyDown = (e) => { if (e.key === 'Enter') { e.preventDefault(); handleCheckIn(phone); } };
 
-  const handleCheckIn = async (phoneNum, bookingData = null) => {
+  const handleCheckIn = async (phoneNum, bookingData = null, isAnonymous = false) => {
     if (!currentBranch) return toast.error("請先選擇營業門市");
-    if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話");
+
+    let formattedPhone = phoneNum;
+    
+    if (isAnonymous) {
+       // 🟢 匿名模式：賦予一個專屬的識別字串
+       formattedPhone = "Walk-in (無提供電話)";
+    } else {
+       if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話，或點擊下方「不留電話」按鈕");
+       formattedPhone = phoneNum.startsWith('+') ? phoneNum : `+852${phoneNum}`;
+    }
+
     if (!bookingData && (!walkInStylist || !walkInService)) return toast.error("請選擇髮型師與服務項目");
 
-    const formattedPhone = phoneNum.startsWith('+') ? phoneNum : `+852${phoneNum}`;
     try {
       await addDoc(collection(db, "active_sessions"), {
-        phoneNumber: formattedPhone, stylist: bookingData?.stylist || walkInStylist, service: bookingData?.service || walkInService, startTime: new Date().toISOString(), bookingId: bookingData?.id || null, branch: currentBranch 
+        phoneNumber: formattedPhone, 
+        stylist: bookingData?.stylist || walkInStylist, 
+        service: bookingData?.service || walkInService, 
+        startTime: new Date().toISOString(), 
+        bookingId: bookingData?.id || null, 
+        branch: currentBranch 
       });
-      if (bookingData?.id) { const appRef = doc(db, "appointments", bookingData.id); await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); }
+      if (bookingData?.id) { 
+        const appRef = doc(db, "appointments", bookingData.id); 
+        await runTransaction(db, async (tx) => { tx.update(appRef, { status: "checked-in" }); }); 
+      }
       toast.success(`${formattedPhone} 已入店服務`);
-      setPhone('+852'); setWalkInStylist(''); setWalkInService('');
-    } catch (e) { toast.error("報到失敗"); }
+      
+      // 清空狀態
+      setPhone('+852'); 
+      setWalkInStylist(''); 
+      setWalkInService('');
+    } catch (e) { 
+      toast.error("報到失敗"); 
+    }
   };
 
   const openCheckout = async (session) => {
@@ -600,6 +623,16 @@ export default function SmartPOS() {
                     GO <i className="fa-solid fa-arrow-right ml-1"></i>
                   </button>
                 </div>
+                
+                {/* 🟢 新增：不留電話的非會員快捷鍵 */}
+                <button
+                  type="button"
+                  onClick={() => handleCheckIn(null, null, true)}
+                  className="w-full mt-2 bg-transparent border border-dashed border-white/20 hover:border-[#D4AF37]/50 hover:text-[#D4AF37] text-gray-500 py-3.5 rounded-xl text-xs font-bold tracking-widest transition-colors"
+                >
+                  <i className="fa-solid fa-user-ninja mr-2"></i> 不留電話，直接安排入座
+                </button>
+                        
 
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button 
