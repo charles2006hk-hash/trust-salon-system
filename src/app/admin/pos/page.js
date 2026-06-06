@@ -17,12 +17,14 @@ export default function SmartPOS() {
   const [activeSessions, setActiveSessions] = useState([]); 
   const [appointments, setAppointments] = useState([]); 
   
-  // 🟢 使用更詳細的 rawStaff 狀態來判斷是不是助手
   const [rawStaff, setRawStaff] = useState([]); 
   const [services, setServices] = useState([]); 
   const [tiers, setTiers] = useState([]); 
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
+  
+  // 🟢 新增：儲存 CMS 設定的分類原始資料 (包含排序權重)
+  const [rawCategories, setRawCategories] = useState([]);
 
   const [phone, setPhone] = useState('+852');
   const [walkInStylist, setWalkInStylist] = useState('');
@@ -83,8 +85,9 @@ export default function SmartPOS() {
       catch (e) { return { docs: [] }; }
     };
 
-    const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap] = await Promise.all([
-      safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches')
+    // 🟢 同步抓取 categories
+    const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap, cSnap] = await Promise.all([
+      safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches'), safeGet('categories')
     ]);
     
     const branchList = bSnap.docs.map(d => d.data().name);
@@ -114,6 +117,10 @@ export default function SmartPOS() {
 
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
+
+    // 🟢 儲存分類資料以供排序使用
+    const catData = cSnap.docs ? cSnap.docs.map(d => d.data()) : [];
+    setRawCategories(catData);
   };
 
   const handleSignOut = async () => {
@@ -133,7 +140,6 @@ export default function SmartPOS() {
     toast.success(`已切換至 ${branchName} 收銀模式`);
   };
 
-  // 🟢 智能助手分流計算區
   const displayStaff = [...new Set(rawStaff.filter(s => s.branch === currentBranch || s.branch === 'ALL').map(s => s.name))].filter(Boolean);
   const dedicatedAssistants = [...new Set(rawStaff.filter(s => (s.branch === currentBranch || s.branch === 'ALL') && s.isAssistant).map(s => s.name))].filter(Boolean);
   const otherStylists = displayStaff.filter(name => !dedicatedAssistants.includes(name));
@@ -146,7 +152,18 @@ export default function SmartPOS() {
     .filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch)
     .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
 
-  const availableCategories = ['全部', ...new Set(displayServices.map(s => s.category || '未分類'))];
+  // 🟢 根據 CMS 的 sortWeight 動態排序分類
+  const uniqueServiceCategories = [...new Set(displayServices.map(s => s.category || '未分類'))];
+  const sortedUniqueCategories = uniqueServiceCategories.sort((a, b) => {
+    if (a === '未分類') return 1; 
+    if (b === '未分類') return -1;
+    const catA = rawCategories.find(c => c.name === a);
+    const catB = rawCategories.find(c => c.name === b);
+    const weightA = catA ? (Number(catA.sortWeight) || 0) : 0;
+    const weightB = catB ? (Number(catB.sortWeight) || 0) : 0;
+    return weightB - weightA; 
+  });
+  const availableCategories = ['全部', ...sortedUniqueCategories];
 
   const displaySessions = activeSessions.filter(s => s.branch === currentBranch || !s.branch);
   const displayAppointments = appointments.filter(a => a.branch === currentBranch || !a.branch);
@@ -415,6 +432,7 @@ export default function SmartPOS() {
 
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
+                 {/* 🟢 動態渲染並支援 CMS 權重排序的分類 Tabs */}
                  {availableCategories.map(cat => (
                    <button 
                      key={cat} 
@@ -428,9 +446,25 @@ export default function SmartPOS() {
             )}
 
             <div className="overflow-y-auto custom-scrollbar flex-1 pr-2">
-               {/* 🟢 智能助手名單分流 */}
                {selectorConfig.type === 'stylist' && (
                  <div className="col-span-2 md:col-span-3 space-y-6 pb-8">
+                   
+                   {/* 🟢 主力髮型師移至上方 */}
+                   {otherStylists.length > 0 && (
+                     <div>
+                       <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">💇‍♂️ 負責設計師</h4>
+                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                         {otherStylists.map(s => (
+                           <button key={s} onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }} className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group">
+                             <div className="w-12 h-12 mx-auto bg-gray-800 text-gray-300 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-[#D4AF37] group-hover:text-black transition-colors">{s.charAt(0)}</div>
+                             <span className="text-white font-bold tracking-widest">{s}</span>
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                   )}
+
+                   {/* 🟢 專職助手移至下方 */}
                    {dedicatedAssistants.length > 0 && (
                      <div>
                        <h4 className="text-[10px] text-yellow-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">⭐ 專職助手</h4>
@@ -438,20 +472,6 @@ export default function SmartPOS() {
                          {dedicatedAssistants.map(s => (
                            <button key={s} onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }} className="bg-[#1a1a1a] border border-yellow-500/30 hover:border-yellow-400 p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group">
                              <div className="w-12 h-12 mx-auto bg-yellow-500/10 text-yellow-500 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-yellow-500 group-hover:text-black transition-colors">{s.charAt(0)}</div>
-                             <span className="text-white font-bold tracking-widest">{s}</span>
-                           </button>
-                         ))}
-                       </div>
-                     </div>
-                   )}
-                   
-                   {otherStylists.length > 0 && (
-                     <div>
-                       <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">💇‍♂️ 其他設計師</h4>
-                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                         {otherStylists.map(s => (
-                           <button key={s} onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }} className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-6 rounded-2xl text-center transition-all active:scale-95 shadow-lg group">
-                             <div className="w-12 h-12 mx-auto bg-gray-800 text-gray-300 rounded-full flex items-center justify-center text-xl font-black mb-3 group-hover:bg-[#D4AF37] group-hover:text-black transition-colors">{s.charAt(0)}</div>
                              <span className="text-white font-bold tracking-widest">{s}</span>
                            </button>
                          ))}
@@ -467,7 +487,6 @@ export default function SmartPOS() {
                       .map(s => (
                       <button 
                         key={s.id} 
-                        // 👇 找到這一行，把原本的 s.name 改成 s 👇
                         onClick={() => { selectorConfig.onSelect(s); setSelectorConfig({...selectorConfig, isOpen: false}); }}
                         className="bg-[#1a1a1a] border border-white/5 hover:border-[#D4AF37] p-5 rounded-2xl text-left transition-all active:scale-95 shadow-lg flex flex-col justify-between min-h-[100px] group"
                       >
