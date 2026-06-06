@@ -75,12 +75,9 @@ export default function AdminManagePage() {
       try {
         const docSnap = await getDoc(doc(db, 'users', user.uid));
         if (docSnap.exists()) {
-          // 🟢 智慧現形：抓取並確保小寫，防止大小寫造成的判定錯誤
           const role = String(docSnap.data().role || 'member').toLowerCase();
           setCurrentUserRole(role);
-          
           if (['member', 'reception', 'staff'].includes(role)) {
-            // 如果你看到這個錯誤，代表測試帳號真的不是 manager
             toast.error(`⛔ 權限不足：您的身分 (${role}) 無法進入 CMS 管理中心`);
             router.push(role === 'member' ? '/dashboard' : '/admin/pos');
             return;
@@ -114,7 +111,8 @@ export default function AdminManagePage() {
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
       if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
-      if (['services', 'packages'].includes(activeTab)) data.sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
+      // 🟢 確保分類 (categories) 也支援依照 sortWeight 自動排序
+      if (['services', 'packages', 'categories'].includes(activeTab)) data.sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
       
       if (activeTab === 'settings') {
         const settingsDoc = data.find(d => d.id === 'global_config');
@@ -284,7 +282,6 @@ export default function AdminManagePage() {
     </div>
   );
 
-  // 🟢 核心過濾機制：經理只會看到「營運定價」和「行銷模組」，完全看不到「全局設定」
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches'].includes(item.id)) };
     return group;
@@ -332,7 +329,6 @@ export default function AdminManagePage() {
               {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
             </h2>
 
-            {/* 🟢 權限顯示機制：經理若點到不該點的地方，會顯示這個畫面 (雖然按鈕已隱藏) */}
             {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
@@ -504,7 +500,20 @@ export default function AdminManagePage() {
                   </>
                 )}
 
-                {activeTab === 'categories' && (<div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">新分類名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>)}
+                {/* 🟢 補回的分類選項輸入框 */}
+                {activeTab === 'categories' && (
+                  <>
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">新分類名稱</label>
+                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
+                    </div>
+                    <div className="space-y-2 col-span-2">
+                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠左)</label>
+                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                    </div>
+                  </>
+                )}
+
                 {activeTab === 'promos' && (
                   <><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2 block">優惠標題</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800"><span className="text-xs text-gray-500 w-full mb-1">快速插入 Emoji:</span>{promoEmojiList.map(e => (<button key={e} type="button" onClick={() => addPromoEmoji(e)} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>))}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required /></div><div className="space-y-2 col-span-2 md:col-span-1"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">有效日期至</label><input type="date" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.expiry} onChange={e => setFormData({...formData, expiry: e.target.value})} required /></div><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">詳細內容</label><textarea className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white h-32 focus:border-[#D4AF37] outline-none" value={formData.content} onChange={e => setFormData({...formData, content: e.target.value})} required /></div></>
                 )}
@@ -599,7 +608,7 @@ export default function AdminManagePage() {
                                       {item.branch === 'ALL' ? '🌐 跨店通用' : `📍 ${item.branch}`}
                                     </span>
                                   )}
-                                  {['services', 'packages'].includes(activeTab) && (
+                                  {['services', 'packages', 'categories'].includes(activeTab) && (
                                     <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 font-bold tracking-tighter">
                                       ⭐ 權重: {item.sortWeight || 0}
                                     </span>
