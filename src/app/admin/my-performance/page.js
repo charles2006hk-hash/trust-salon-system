@@ -11,12 +11,16 @@ export default function StaffPerformancePage() {
   const [loading, setLoading] = useState(true);
   const [myTransactions, setMyTransactions] = useState([]);
   
+  // 🟢 新增：月份選擇器狀態 (預設為當前月份 YYYY-MM)
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [serviceMapContext, setServiceMapContext] = useState({}); 
+
   // 🌟 統計數據狀態
   const [stats, setStats] = useState({
-    totalRevenue: 0,   // 個人創造總營業額 (大數總和)
-    totalCommission: 0, // 個人實得總抽成
-    clientCount: 0,     // 服務總客數
-    averageSpend: 0     // 平均客單價
+    totalRevenue: 0,   
+    totalCommission: 0, 
+    clientCount: 0,     
+    averageSpend: 0     
   });
 
   // 🟢 參數大數拆解狀態
@@ -34,7 +38,7 @@ export default function StaffPerformancePage() {
             const userData = userSnap.data();
             setCurrentUser({ uid: user.uid, ...userData });
             
-            await initData(userData.name);
+            await initData(userData.name, selectedMonth);
           } else {
             toast.error("找不到您的員工檔案，請聯繫老闆。");
             setLoading(false);
@@ -50,10 +54,15 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
-  // 🟢 初始化資料：抓取全域標籤、服務對照表，最後再抓業績
-  const initData = async (staffName) => {
+  // 🟢 監聽：當使用者切換月份時，自動重新計算業績
+  useEffect(() => {
+    if (currentUser && Object.keys(serviceMapContext).length > 0) {
+      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth);
+    }
+  }, [selectedMonth]);
+
+  const initData = async (staffName, monthStr) => {
     try {
-      // 1. 抓取 CMS 的自訂標籤 (W1, R1...)
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
       let labels = {};
       if (settingSnap.exists() && settingSnap.data().commissionLabels) {
@@ -61,7 +70,6 @@ export default function StaffPerformancePage() {
       }
       setGlobalLabels(labels);
 
-      // 2. 抓取 Services 和 Packages 來建立「服務名稱 -> 參數代碼」的對照字典
       const [svSnap, pkSnap] = await Promise.all([
           getDocs(collection(db, 'services')),
           getDocs(collection(db, 'packages'))
@@ -71,8 +79,8 @@ export default function StaffPerformancePage() {
       svSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'W1' });
       pkSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'SCALP' });
 
-      // 3. 開始結算個人業績
-      await fetchMyTransactions(staffName, serviceMap);
+      setServiceMapContext(serviceMap); 
+      await fetchMyTransactions(staffName, serviceMap, monthStr);
     } catch (e) {
       console.error(e);
       toast.error("初始化資料失敗");
@@ -80,11 +88,11 @@ export default function StaffPerformancePage() {
     }
   };
 
-  const fetchMyTransactions = async (staffName, serviceMap) => {
+  const fetchMyTransactions = async (staffName, serviceMap, monthStr) => {
+    setLoading(true);
     try {
       if (!staffName) return;
       
-      // 🟢 擴大抓取範圍，包含會員結帳、非會員現金、套票扣除與助手獎金
       const q = query(
         collection(db, 'transactions'), 
         where('type', 'in', ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus'])
@@ -100,18 +108,20 @@ export default function StaffPerformancePage() {
 
       snap.forEach(d => {
         const tx = d.data();
-        if (tx.stylist && tx.stylist.includes(staffName)) {
+        // 🟢 關鍵修復：提取這筆交易的「年月 (YYYY-MM)」
+        const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
+
+        // 🟢 雙重過濾：只有「名字符合」且「月份符合」的單據，才加總進來！
+        if (tx.stylist && tx.stylist.includes(staffName) && txMonth === monthStr) {
           matchedList.push({ id: d.id, ...tx });
           
           const amount = Number(tx.amount || 0);
           revSum += amount;
           
-          // 只針對有實際金額的單計算客數 (過濾掉純0元的紀錄)
           if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
              clientCount++;
           }
           
-          // 計算抽成
           if (tx.type === 'assistant_bonus') {
              commSum += Number(tx.bonusAmount || 0);
           } else if (tx.commissionAmount) {
@@ -120,10 +130,9 @@ export default function StaffPerformancePage() {
              commSum += (amount * DEFAULT_COMMISSION_RATE);
           }
 
-          // 🟢 大數拆解邏輯
           let code = '未綁定參數';
           if (tx.type === 'assistant_bonus') {
-             code = 'ASSISTANT_BONUS'; // 助手獎金獨立一區
+             code = 'ASSISTANT_BONUS'; 
           } else if (tx.service && serviceMap[tx.service]) {
              code = serviceMap[tx.service];
           }
@@ -152,7 +161,7 @@ export default function StaffPerformancePage() {
     }
   };
 
-  if (loading) return <div className="p-10 text-[#D4AF37] bg-[#080808] min-h-screen font-bold tracking-widest text-sm">載入您的尊爵業績數據中...</div>;
+  if (loading && !currentUser) return <div className="p-10 text-[#D4AF37] bg-[#080808] min-h-screen font-bold tracking-widest text-sm">載入您的尊爵業績數據中...</div>;
   if (!currentUser) return <div className="p-10 text-red-500 bg-[#080808] min-h-screen">請先登入系統。</div>;
 
   return (
@@ -170,17 +179,29 @@ export default function StaffPerformancePage() {
             <span className="text-[#D4AF37] font-mono font-bold tracking-normal">Logged as: {currentUser.name} ({currentUser.role})</span>
           </p>
         </div>
-        <div className="text-right">
+        
+        {/* 🟢 新增：查詢月份選擇器與店鋪資訊 */}
+        <div className="flex flex-col items-end gap-3">
+          <div className="flex items-center gap-2 bg-[#121212] border border-white/10 p-1.5 rounded-2xl">
+            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-3">結算月份</span>
+            <input 
+              type="month" 
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="bg-black text-[#D4AF37] border border-[#D4AF37]/30 px-4 py-2 rounded-xl text-sm font-bold outline-none cursor-pointer custom-month-picker"
+            />
+          </div>
           <span className="text-[9px] px-3 py-1.5 rounded-full font-bold tracking-widest uppercase bg-[#D4AF37]/10 text-[#D4AF37] border border-[#D4AF37]/30">
             所屬店鋪：{currentUser.branch === 'ALL' ? '全域管理' : currentUser.branch || '未綁定'}
           </span>
         </div>
       </header>
 
+      {/* 將卡片標題加上動態月份，更清晰 */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 animate-fade-in" style={{ animationDelay: '0.1s' }}>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5 group-hover:scale-110 transition-transform">💰</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">本月實得提成 (分潤)</p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 實得提成</p>
           <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalCommission.toLocaleString()}</p>
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
@@ -190,7 +211,7 @@ export default function StaffPerformancePage() {
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">本月服務客數</p>
+          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 服務客數</p>
           <p className="text-3xl font-black text-white font-mono">{stats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
@@ -200,7 +221,6 @@ export default function StaffPerformancePage() {
         </div>
       </section>
 
-      {/* 🟢 全新區塊：參數大數拆解 (Gross Revenue Breakdown) */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
            📊 各項服務大數拆解 (Gross Revenue Breakdown)
@@ -210,7 +230,7 @@ export default function StaffPerformancePage() {
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
                Object.entries(categoryBreakdown)
-                 .sort((a, b) => b[1] - a[1]) // 依金額由大到小排序
+                 .sort((a, b) => b[1] - a[1]) 
                  .map(([code, amount]) => (
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
                     <div className="relative z-10">
@@ -221,7 +241,6 @@ export default function StaffPerformancePage() {
                          <span className="text-gray-500 text-sm mr-1">$</span>{amount.toLocaleString()}
                        </p>
                     </div>
-                    {/* 背景裝飾 */}
                     <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic">
                       {code.substring(0, 2)}
                     </div>
@@ -233,83 +252,93 @@ export default function StaffPerformancePage() {
 
       <div className="bg-[#121212] rounded-[32px] border border-white/5 overflow-hidden shadow-2xl animate-fade-in" style={{ animationDelay: '0.2s' }}>
         <div className="p-6 border-b border-white/5 bg-black/20 flex justify-between items-center">
-           <h3 className="text-sm font-black tracking-widest uppercase text-white"><i className="fa-solid fa-list-check mr-2 text-[#D4AF37]"></i> 本月服務流水對帳單</h3>
+           <h3 className="text-sm font-black tracking-widest uppercase text-white"><i className="fa-solid fa-list-check mr-2 text-[#D4AF37]"></i> {selectedMonth} 服務流水對帳單</h3>
            <p className="text-[10px] text-gray-500 font-mono">共計 {myTransactions.length} 筆項目</p>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/5 bg-black/40">
-                <th className="p-5 font-bold">結帳日期 / 時間</th>
-                <th className="p-5 font-bold">客戶識別號</th>
-                <th className="p-5 font-bold">所做服務 / 項目內容</th>
-                <th className="p-5 font-bold">項目大數 (HKD)</th>
-                <th className="p-5 font-bold text-right">預估個人分成</th>
-              </tr>
-            </thead>
-            <tbody className="text-sm font-medium">
-              {myTransactions.map(tx => {
-                const amt = Number(tx.amount || 0);
-                
-                // 決定顯示的提成金額
-                let comm = 0;
-                if (tx.type === 'assistant_bonus') {
-                   comm = Number(tx.bonusAmount || 0);
-                } else if (tx.commissionAmount) {
-                   comm = Number(tx.commissionAmount);
-                } else {
-                   comm = (amt * DEFAULT_COMMISSION_RATE);
-                }
-                
-                return (
-                  <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.01] transition-colors">
-                    <td className="p-5 text-xs text-gray-400 font-mono">
-                      {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : '時間不詳'}
-                    </td>
-                    <td className="p-5">
-                      <p className="text-white font-bold font-mono tracking-wider text-xs">
-                        {tx.phoneNumber && tx.phoneNumber !== 'Walk-in (無提供電話)' 
-                          ? (tx.phoneNumber.includes('+') ? tx.phoneNumber : `+852 ${tx.phoneNumber}`) 
-                          : '現場散客 (Walk-in)'}
-                      </p>
-                    </td>
-                    <td className="p-5">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-sm text-gray-200">
-                          {tx.service || '未知項目'}
-                        </span>
-                        <div className="flex gap-2 items-center">
-                          {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
-                          {tx.type === 'deduct_package' && <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/30 uppercase">扣抵套票 (-{tx.deductedGrids}格)</span>}
+        {loading && myTransactions.length === 0 ? (
+          <div className="text-center py-10 text-[#D4AF37] text-xs font-bold tracking-widest">
+            <i className="fa-solid fa-circle-notch fa-spin mr-2"></i>結算中...
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/5 bg-black/40">
+                  <th className="p-5 font-bold">結帳日期 / 時間</th>
+                  <th className="p-5 font-bold">客戶識別號</th>
+                  <th className="p-5 font-bold">所做服務 / 項目內容</th>
+                  <th className="p-5 font-bold">項目大數 (HKD)</th>
+                  <th className="p-5 font-bold text-right">預估個人分成</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm font-medium">
+                {myTransactions.map(tx => {
+                  const amt = Number(tx.amount || 0);
+                  
+                  let comm = 0;
+                  if (tx.type === 'assistant_bonus') {
+                     comm = Number(tx.bonusAmount || 0);
+                  } else if (tx.commissionAmount) {
+                     comm = Number(tx.commissionAmount);
+                  } else {
+                     comm = (amt * DEFAULT_COMMISSION_RATE);
+                  }
+                  
+                  return (
+                    <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.01] transition-colors">
+                      <td className="p-5 text-xs text-gray-400 font-mono">
+                        {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : '時間不詳'}
+                      </td>
+                      <td className="p-5">
+                        <p className="text-white font-bold font-mono tracking-wider text-xs">
+                          {tx.phoneNumber && tx.phoneNumber !== 'Walk-in (無提供電話)' 
+                            ? (tx.phoneNumber.includes('+') ? tx.phoneNumber : `+852 ${tx.phoneNumber}`) 
+                            : '現場散客 (Walk-in)'}
+                        </p>
+                      </td>
+                      <td className="p-5">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-sm text-gray-200">
+                            {tx.service || '未知項目'}
+                          </span>
+                          <div className="flex gap-2 items-center">
+                            {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
+                            {tx.type === 'deduct_package' && <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/30 uppercase">扣抵套票 (-{tx.deductedGrids}格)</span>}
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="p-5 text-white font-bold font-mono">
-                      ${amt.toLocaleString()}
-                    </td>
-                    <td className="p-5 text-[#D4AF37] font-black font-mono text-right">
-                      ${Math.round(comm).toLocaleString()}
+                      </td>
+                      <td className="p-5 text-white font-bold font-mono">
+                        ${amt.toLocaleString()}
+                      </td>
+                      <td className="p-5 text-[#D4AF37] font-black font-mono text-right">
+                        ${Math.round(comm).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {myTransactions.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
+                      📭 您在 {selectedMonth} 尚無結帳服務紀錄。
                     </td>
                   </tr>
-                );
-              })}
-
-              {myTransactions.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
-                    📭 您本月目前尚無結帳服務紀錄。新的一個月繼續加油！
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        /* 美化原生的日期選擇器 */
+        ::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+            cursor: pointer;
+        }
       `}</style>
     </div>
   );
