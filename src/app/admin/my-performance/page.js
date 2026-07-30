@@ -11,11 +11,9 @@ export default function StaffPerformancePage() {
   const [loading, setLoading] = useState(true);
   const [myTransactions, setMyTransactions] = useState([]);
   
-  // 🟢 新增：月份選擇器狀態 (預設為當前月份 YYYY-MM)
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [serviceMapContext, setServiceMapContext] = useState({}); 
 
-  // 🌟 統計數據狀態
   const [stats, setStats] = useState({
     totalRevenue: 0,   
     totalCommission: 0, 
@@ -23,11 +21,8 @@ export default function StaffPerformancePage() {
     averageSpend: 0     
   });
 
-  // 🟢 參數大數拆解狀態
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
   const [globalLabels, setGlobalLabels] = useState({});
-
-  const DEFAULT_COMMISSION_RATE = 0.30; 
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -37,8 +32,7 @@ export default function StaffPerformancePage() {
           if (userSnap.exists()) {
             const userData = userSnap.data();
             setCurrentUser({ uid: user.uid, ...userData });
-            
-            await initData(userData.name, selectedMonth);
+            await initData(userData.name, selectedMonth, userData);
           } else {
             toast.error("找不到您的員工檔案，請聯繫老闆。");
             setLoading(false);
@@ -54,14 +48,13 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
-  // 🟢 監聽：當使用者切換月份時，自動重新計算業績
   useEffect(() => {
     if (currentUser && Object.keys(serviceMapContext).length > 0) {
-      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth);
+      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth, currentUser);
     }
   }, [selectedMonth]);
 
-  const initData = async (staffName, monthStr) => {
+  const initData = async (staffName, monthStr, userData) => {
     try {
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
       let labels = {};
@@ -80,7 +73,7 @@ export default function StaffPerformancePage() {
       pkSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'SCALP' });
 
       setServiceMapContext(serviceMap); 
-      await fetchMyTransactions(staffName, serviceMap, monthStr);
+      await fetchMyTransactions(staffName, serviceMap, monthStr, userData);
     } catch (e) {
       console.error(e);
       toast.error("初始化資料失敗");
@@ -88,7 +81,7 @@ export default function StaffPerformancePage() {
     }
   };
 
-  const fetchMyTransactions = async (staffName, serviceMap, monthStr) => {
+  const fetchMyTransactions = async (staffName, serviceMap, monthStr, userData) => {
     setLoading(true);
     try {
       if (!staffName) return;
@@ -106,12 +99,13 @@ export default function StaffPerformancePage() {
       let clientCount = 0;
       let breakdown = {};
 
+      // 🟢 抓取該員工專屬的階梯式抽成模板
+      const userCommissionsRule = userData?.commissions || {};
+
       snap.forEach(d => {
         const tx = d.data();
-        // 🟢 關鍵修復：提取這筆交易的「年月 (YYYY-MM)」
         const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
 
-        // 🟢 雙重過濾：只有「名字符合」且「月份符合」的單據，才加總進來！
         if (tx.stylist && tx.stylist.includes(staffName) && txMonth === monthStr) {
           matchedList.push({ id: d.id, ...tx });
           
@@ -121,14 +115,6 @@ export default function StaffPerformancePage() {
           if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
              clientCount++;
           }
-          
-          if (tx.type === 'assistant_bonus') {
-             commSum += Number(tx.bonusAmount || 0);
-          } else if (tx.commissionAmount) {
-             commSum += Number(tx.commissionAmount);
-          } else {
-             commSum += (amount * DEFAULT_COMMISSION_RATE);
-          }
 
           let code = '未綁定參數';
           if (tx.type === 'assistant_bonus') {
@@ -136,6 +122,24 @@ export default function StaffPerformancePage() {
           } else if (tx.service && serviceMap[tx.service]) {
              code = serviceMap[tx.service];
           }
+
+          // 🟢 核心修正：對齊 Finance 財務結算的佣金公式，取代 30% Hardcode
+          let calculatedComm = 0;
+          if (tx.type === 'assistant_bonus') {
+            calculatedComm = Number(tx.bonusAmount || 0);
+          } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
+            calculatedComm = Number(tx.commissionAmount);
+          } else {
+            const rule = userCommissionsRule[code] || { deduct: 0, percent: 30 };
+            const deduct = Number(rule.deduct || 0);
+            const percent = Number(rule.percent || 0);
+            
+            if (amount > deduct) {
+              calculatedComm = (amount - deduct) * (percent / 100);
+            }
+          }
+
+          commSum += calculatedComm;
 
           if (!breakdown[code]) breakdown[code] = 0;
           breakdown[code] += amount;
@@ -146,11 +150,16 @@ export default function StaffPerformancePage() {
       
       setMyTransactions(matchedList);
       setCategoryBreakdown(breakdown);
+      
+      // 🟢 確保浮點數完全四捨五入至整數，解決小數點產生 .2 等問題
+      const safeRevSum = Math.round(revSum);
+      const safeCommSum = Math.round(commSum);
+
       setStats({
-        totalRevenue: revSum,
-        totalCommission: commSum,
+        totalRevenue: safeRevSum,
+        totalCommission: safeCommSum,
         clientCount: clientCount,
-        averageSpend: clientCount > 0 ? Math.round(revSum / clientCount) : 0
+        averageSpend: clientCount > 0 ? Math.round(safeRevSum / clientCount) : 0
       });
 
     } catch (error) {
@@ -180,7 +189,6 @@ export default function StaffPerformancePage() {
           </p>
         </div>
         
-        {/* 🟢 新增：查詢月份選擇器與店鋪資訊 */}
         <div className="flex flex-col items-end gap-3">
           <div className="flex items-center gap-2 bg-[#121212] border border-white/10 p-1.5 rounded-2xl">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-3">結算月份</span>
@@ -197,7 +205,6 @@ export default function StaffPerformancePage() {
         </div>
       </header>
 
-      {/* 將卡片標題加上動態月份，更清晰 */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 animate-fade-in" style={{ animationDelay: '0.1s' }}>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5 group-hover:scale-110 transition-transform">💰</div>
@@ -238,7 +245,7 @@ export default function StaffPerformancePage() {
                          {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : code === '未綁定參數' ? '⚠️ 未綁定參數' : `${code} - ${globalLabels[code] || '未知標籤'}`}
                        </p>
                        <p className="text-xl font-black text-white font-mono tracking-tighter">
-                         <span className="text-gray-500 text-sm mr-1">$</span>{amount.toLocaleString()}
+                         <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(amount).toLocaleString()}
                        </p>
                     </div>
                     <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic">
@@ -279,10 +286,13 @@ export default function StaffPerformancePage() {
                   let comm = 0;
                   if (tx.type === 'assistant_bonus') {
                      comm = Number(tx.bonusAmount || 0);
-                  } else if (tx.commissionAmount) {
+                  } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
                      comm = Number(tx.commissionAmount);
                   } else {
-                     comm = (amt * DEFAULT_COMMISSION_RATE);
+                     const rule = currentUser?.commissions?.[serviceMapContext[tx.service] || 'W1'] || { deduct: 0, percent: 30 };
+                     if (amt > rule.deduct) {
+                       comm = (amt - rule.deduct) * (rule.percent / 100);
+                     }
                   }
                   
                   return (
@@ -309,7 +319,7 @@ export default function StaffPerformancePage() {
                         </div>
                       </td>
                       <td className="p-5 text-white font-bold font-mono">
-                        ${amt.toLocaleString()}
+                        ${Math.round(amt).toLocaleString()}
                       </td>
                       <td className="p-5 text-[#D4AF37] font-black font-mono text-right">
                         ${Math.round(comm).toLocaleString()}
@@ -334,7 +344,6 @@ export default function StaffPerformancePage() {
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        /* 美化原生的日期選擇器 */
         ::-webkit-calendar-picker-indicator {
             filter: invert(1);
             cursor: pointer;
