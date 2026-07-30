@@ -84,8 +84,11 @@ export default function FinancePage() {
          setOutstandingTDollar(totalOut);
       }
 
-      const staffSnap = await getDocs(collection(db, 'staff'));
-      setStaffConfig(staffSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const staffSnap = await getDocs(collection(db, 'users'));
+      const staffList = staffSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(u => ['staff', 'manager', 'admin'].includes(u.role));
+      setStaffConfig(staffList);
       
       const svSnap = await getDocs(collection(db, 'services'));
       setServicesData(svSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -127,7 +130,6 @@ export default function FinancePage() {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      // 🟢 加入對 'assistant_bonus' 的攔截
       else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
@@ -137,9 +139,8 @@ export default function FinancePage() {
         const staff = stylistAggregator[stylistName];
         let revenue = 0; let commCode = null; let formulaStr = ""; let commission = 0;
 
-        // 🟢 特殊處理：如果是助手定額獎金
         if (tx.type === 'assistant_bonus') {
-          revenue = 0; // 不計入店鋪產值，因為錢已經含在主單裡了
+          revenue = 0; 
           commission = Number(tx.bonusAmount || 0);
           formulaStr = `店家發放定額獎金 ($${commission})`;
           commCode = 'BONUS';
@@ -161,7 +162,6 @@ export default function FinancePage() {
           }
         }
 
-        // 正常計算抽成 (如果不是定額獎金的話)
         if (tx.type !== 'assistant_bonus') {
           if (!commCode) {
               formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
@@ -193,19 +193,31 @@ export default function FinancePage() {
           service: tx.service || tx.packageName,
           type: tx.type, 
           commCode: commCode || 'N/A', 
-          revenue: revenue, 
-          commission: commission, 
+          revenue: Math.round(revenue), 
+          commission: Math.round(commission), 
           formulaStr: formulaStr, 
           branch: tx.branch || '未知門店'
         });
       }
     });
 
-    setMetrics({ totalCashIn: cashIn, totalServiceValue: serviceValue, totalGivenPoints: givenPoints, outstandingTDollar: selectedBranch === 'ALL' ? outstandingTDollar : 0, tDollarDeducted: tDollarDeducted });
-    setStylistRanking(Object.entries(stylists).sort((a, b) => b[1] - a[1]));
-    setServiceRanking(Object.entries(services).sort((a, b) => b[1] - a[1]));
+    // 🟢 處理最終統計數字為乾淨的四捨五入整數
+    setMetrics({ 
+      totalCashIn: Math.round(cashIn), 
+      totalServiceValue: Math.round(serviceValue), 
+      totalGivenPoints: Math.round(givenPoints), 
+      outstandingTDollar: selectedBranch === 'ALL' ? Math.round(outstandingTDollar) : 0, 
+      tDollarDeducted: Math.round(tDollarDeducted) 
+    });
+    setStylistRanking(Object.entries(stylists).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
+    setServiceRanking(Object.entries(services).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
 
-    const report = Object.values(stylistAggregator).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    const report = Object.values(stylistAggregator).map(s => ({
+      ...s,
+      totalRevenue: Math.round(s.totalRevenue),
+      totalCommission: Math.round(s.totalCommission)
+    })).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    
     setPayrollReport(report);
   };
 
@@ -285,7 +297,7 @@ export default function FinancePage() {
         if (tx.type === 'topup' || tx.type === 'buy_package') itemDetail = `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}`;
         else itemDetail = `${tx.service || tx.packageName} (${tx.stylist})`;
         
-        let amount = `-$${tx.amount || 0}`;
+        let amount = `-$${Math.round(tx.amount || 0)}`;
         if (tx.type === 'topup') amount = `+$${tx.tDollarAdded}`;
         if (tx.type === 'buy_package') amount = `+$${tx.amountPaidHKD}`;
         if (tx.type === 'assistant_bonus') amount = `(獎金) +$${tx.bonusAmount}`;
@@ -381,7 +393,7 @@ export default function FinancePage() {
                 </p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
-                  <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                  <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString()}</p>
                 </div>
               </div>
               
@@ -392,7 +404,7 @@ export default function FinancePage() {
                 </p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                  <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString()}</p>
                 </div>
               </div>
 
@@ -401,7 +413,7 @@ export default function FinancePage() {
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">預計發放總佣金成本</p>
                 <div className="flex items-baseline gap-1 text-red-400">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{totalCommissionPayout.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                  <p className="text-4xl font-black tracking-tighter">{totalCommissionPayout.toLocaleString()}</p>
                 </div>
               </div>
             </div>
@@ -414,7 +426,7 @@ export default function FinancePage() {
                 </p>
                 <div className="flex items-baseline gap-1 text-purple-300">
                   <span className="text-3xl font-bold">$</span>
-                  <p className="text-5xl font-black tracking-tighter">{metrics.tDollarDeducted.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                  <p className="text-5xl font-black tracking-tighter">{metrics.tDollarDeducted.toLocaleString()}</p>
                 </div>
                 {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若採獨立戶頭，總部/他店需將此金額撥款給該店。</p>}
               </div>
@@ -425,7 +437,7 @@ export default function FinancePage() {
                   系統總未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
                 </p>
                 <p className="text-4xl font-black text-gray-300 tracking-tighter">
-                  {selectedBranch === 'ALL' ? `$${metrics.outstandingTDollar.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}` : '---'}
+                  {selectedBranch === 'ALL' ? `$${metrics.outstandingTDollar.toLocaleString()}` : '---'}
                 </p>
                 {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">請切換至「全線總計」以查看全系統總負債餘額</p>}
               </div>
@@ -448,7 +460,7 @@ export default function FinancePage() {
                               <span className={`w-6 h-6 flex items-center justify-center rounded-full text-[10px] ${index === 0 ? 'bg-[#D4AF37] text-black' : index === 1 ? 'bg-gray-300 text-black' : index === 2 ? 'bg-[#CD7F32] text-white' : 'bg-white/10 text-gray-400'}`}>{index + 1}</span>
                               {name}
                             </span>
-                            <span className="text-[#D4AF37] font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
+                            <span className="text-[#D4AF37] font-mono">${val.toLocaleString()}</span>
                           </div>
                           <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
                             <div className="bg-[#D4AF37] h-full rounded-full transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
@@ -473,7 +485,7 @@ export default function FinancePage() {
                         <div key={name} className="relative">
                           <div className="flex justify-between text-xs font-bold uppercase tracking-widest mb-2">
                             <span className="text-gray-300">{name}</span>
-                            <span className="text-white font-mono">${val.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</span>
+                            <span className="text-white font-mono">${val.toLocaleString()}</span>
                           </div>
                           <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden">
                             <div className="bg-blue-500/80 h-full rounded-full transition-all duration-1000" style={{ width: `${percentage}%` }}></div>
@@ -564,11 +576,11 @@ export default function FinancePage() {
                 <div className="flex flex-wrap gap-6 w-full md:w-auto bg-black/50 p-4 rounded-2xl border border-white/5">
                    <div>
                      <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">創造產值 (Revenue)</p>
-                     <p className="text-xl font-mono text-white">${staff.totalRevenue.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                     <p className="text-xl font-mono text-white">${staff.totalRevenue.toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6">
                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實得佣金與獎金</p>
-                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${staff.totalCommission.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}</p>
+                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${staff.totalCommission.toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6 flex items-center">
                       <button onClick={() => setSelectedStaffDetail(staff)} className="bg-white/10 hover:bg-white text-white hover:text-black px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
@@ -610,7 +622,6 @@ export default function FinancePage() {
                     <div className="flex-1 w-full">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
                         <span className="text-white font-bold text-sm md:text-base">{item.service}</span>
-                        {/* 🟢 動態顯示標籤與特殊徽章 */}
                         {item.type === 'assistant_bonus' ? (
                           <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold uppercase tracking-widest">💰 助手獎金</span>
                         ) : (
@@ -632,7 +643,7 @@ export default function FinancePage() {
                     <div className="w-full md:w-32 text-right shrink-0">
                       <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得金額</p>
                       <p className="text-lg font-black text-[#D4AF37] font-mono">
-                        ${item.commission.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 1})}
+                        ${item.commission.toLocaleString()}
                       </p>
                     </div>
                   </div>
