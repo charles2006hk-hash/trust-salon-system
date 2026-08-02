@@ -23,6 +23,9 @@ export default function StaffPerformancePage() {
 
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
   const [globalLabels, setGlobalLabels] = useState({});
+  
+  // 🟢 新增：儲存從 staff 集合抓取到的個人專屬抽成規則，供表格使用
+  const [myCommissionRules, setMyCommissionRules] = useState({});
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -32,7 +35,8 @@ export default function StaffPerformancePage() {
           if (userSnap.exists()) {
             const userData = userSnap.data();
             setCurrentUser({ uid: user.uid, ...userData });
-            await initData(userData.name, selectedMonth, userData);
+            
+            await initData(userData.name, selectedMonth);
           } else {
             toast.error("找不到您的員工檔案，請聯繫老闆。");
             setLoading(false);
@@ -50,11 +54,11 @@ export default function StaffPerformancePage() {
 
   useEffect(() => {
     if (currentUser && Object.keys(serviceMapContext).length > 0) {
-      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth, currentUser);
+      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth);
     }
   }, [selectedMonth]);
 
-  const initData = async (staffName, monthStr, userData) => {
+  const initData = async (staffName, monthStr) => {
     try {
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
       let labels = {};
@@ -73,7 +77,7 @@ export default function StaffPerformancePage() {
       pkSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'SCALP' });
 
       setServiceMapContext(serviceMap); 
-      await fetchMyTransactions(staffName, serviceMap, monthStr, userData);
+      await fetchMyTransactions(staffName, serviceMap, monthStr);
     } catch (e) {
       console.error(e);
       toast.error("初始化資料失敗");
@@ -81,7 +85,7 @@ export default function StaffPerformancePage() {
     }
   };
 
-  const fetchMyTransactions = async (staffName, serviceMap, monthStr, userData) => {
+  const fetchMyTransactions = async (staffName, serviceMap, monthStr) => {
     setLoading(true);
     try {
       if (!staffName) return;
@@ -99,7 +103,7 @@ export default function StaffPerformancePage() {
       let clientCount = 0;
       let breakdown = {};
 
-      // 🟢 修正：去 staff 集合抓取 CMS 設定的抽成模板與參數
+      // 🟢 核心修正：去 staff 集合尋找 CMS 設定的抽成模板與參數
       const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
       const staffConfigSnap = await getDocs(staffConfigQ);
       let userCommissionsRule = {};
@@ -107,6 +111,7 @@ export default function StaffPerformancePage() {
       if (!staffConfigSnap.empty) {
         userCommissionsRule = staffConfigSnap.docs[0].data().commissions || {};
       }
+      setMyCommissionRules(userCommissionsRule);
 
       snap.forEach(d => {
         const tx = d.data();
@@ -135,13 +140,12 @@ export default function StaffPerformancePage() {
           } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
             calculatedComm = Number(tx.commissionAmount);
           } else {
-            // 🟢 使用從 staff 集合抓到的規則進行計算
-            const rule = userCommissionsRule[code] || null;
+            // 🟢 正確讀取 CMS staff 集合的抽成公式
+            const rule = userCommissionsRule[code];
             if (rule) {
               const deduct = Number(rule.deduct || 0);
               const percent = Number(rule.percent || 0);
               if (amount > deduct) {
-                // 處理浮點數精度
                 calculatedComm = (amount - deduct) * (percent / 100);
               }
             }
@@ -296,16 +300,17 @@ export default function StaffPerformancePage() {
                   } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
                      comm = Number(tx.commissionAmount);
                   } else {
-                     const rule = currentUser?.commissions?.[serviceMapContext[tx.service] || 'W1'] || { deduct: 0, percent: 30 };
-                     if (amt > rule.deduct) {
-                       comm = (amt - rule.deduct) * (rule.percent / 100);
+                     // 🟢 修正：讀取正確綁定的抽成規則
+                     const rule = myCommissionRules[serviceMapContext[tx.service] || 'W1'];
+                     if (rule && amt > Number(rule.deduct || 0)) {
+                       comm = (amt - Number(rule.deduct || 0)) * (Number(rule.percent || 0) / 100);
                      }
                   }
                   
                   return (
                     <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.01] transition-colors">
                       <td className="p-5 text-xs text-gray-400 font-mono">
-                        {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : '時間不詳'}
+                        {tx.timestamp ? new Date(tx.timestamp).toLocaleString('zh-HK') : '時間不詳'}
                       </td>
                       <td className="p-5">
                         <p className="text-white font-bold font-mono tracking-wider text-xs">
@@ -351,6 +356,7 @@ export default function StaffPerformancePage() {
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        /* 美化原生的日期選擇器 */
         ::-webkit-calendar-picker-indicator {
             filter: invert(1);
             cursor: pointer;
