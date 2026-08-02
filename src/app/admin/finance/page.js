@@ -84,10 +84,9 @@ export default function FinancePage() {
          setOutstandingTDollar(totalOut);
       }
 
-      const staffSnap = await getDocs(collection(db, 'users'));
-      const staffList = staffSnap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(u => ['staff', 'manager', 'admin'].includes(u.role));
+      // 🟢 核心修正：將 users 換成 staff 集合，以讀取 CMS 設定的薪資參數
+      const staffSnap = await getDocs(collection(db, 'staff'));
+      const staffList = staffSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setStaffConfig(staffList);
       
       const svSnap = await getDocs(collection(db, 'services'));
@@ -201,7 +200,6 @@ export default function FinancePage() {
       }
     });
 
-    // 🟢 處理最終統計數字為乾淨的四捨五入整數
     setMetrics({ 
       totalCashIn: Math.round(cashIn), 
       totalServiceValue: Math.round(serviceValue), 
