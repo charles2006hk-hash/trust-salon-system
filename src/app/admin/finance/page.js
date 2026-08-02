@@ -341,7 +341,7 @@ export default function FinancePage() {
             </p>
           </div>
           
-          <div className="flex flex-wrap items-center gap-4">
+         <div className="flex flex-wrap items-center gap-4">
              {currentAdminRole === 'admin' && (
                 <>
                   <button onClick={exportToCSV} className="bg-green-900/30 text-green-400 border border-green-800/50 hover:bg-green-600 hover:text-white px-5 py-3 rounded-xl text-xs font-bold transition flex items-center gap-2">
@@ -354,18 +354,24 @@ export default function FinancePage() {
              )}
 
              {isManagement && (
-               <div className="bg-[#121212] border border-white/10 p-2 rounded-xl flex items-center gap-3 shadow-inner">
-                 <i className="fa-solid fa-store ml-3 text-[#D4AF37]"></i>
-                 <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none">
+               <div className="bg-[#121212] border border-white/10 px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors">
+                 <i className="fa-solid fa-store text-[#D4AF37] pointer-events-none"></i>
+                 <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none w-full">
                    <option value="ALL">🌐 全線總計 (All Branches)</option>
                    {branches.map(b => <option key={b} value={b}>📍 {b}</option>)}
                  </select>
                </div>
              )}
 
-             <div className="bg-[#121212] border border-white/10 p-2 rounded-xl flex items-center gap-3 shadow-inner">
-               <i className="fa-regular fa-calendar ml-3 text-[#D4AF37]"></i>
-               <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm" />
+             {/* 🟢 修正：強化版月份選擇器 */}
+             <div className="relative bg-[#121212] border border-white/10 px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
+               <i className="fa-regular fa-calendar text-[#D4AF37] pointer-events-none"></i>
+               <input 
+                 type="month" 
+                 value={selectedMonth} 
+                 onChange={(e) => setSelectedMonth(e.target.value)} 
+                 className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm custom-month-input" 
+               />
              </div>
           </div>
         </header>
@@ -659,6 +665,22 @@ export default function FinancePage() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
+        
+        /* 🟢 CSS 魔術：將原生月份選擇器的點擊範圍撐滿整個 Input */
+        .custom-month-input {
+          position: relative;
+        }
+        .custom-month-input::-webkit-calendar-picker-indicator {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0; /* 隱藏原生醜醜的 icon，保留我們自己的金色 icon */
+            cursor: pointer;
+        }
       `}</style>
     </div>
   );
