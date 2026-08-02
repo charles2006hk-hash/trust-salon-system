@@ -5,8 +5,7 @@ import {
   collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, writeBatch 
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { logUserAction } from '@/lib/logger'; 
-import { safeAdd, safeSubtract } from '@/lib/finance'; 
+// 移除對 @/lib/logger 和 @/lib/finance 的外部依賴，避免 Vercel 找不到檔案
 import { 
   DollarSign, Search, Plus, Calendar, CheckCircle, Clock, AlertCircle, 
   ArrowDownRight, ArrowUpRight, Filter, X, Loader2, Home, User, FileText, Edit, 
@@ -16,10 +15,19 @@ import {
 import { useSearchParams } from 'next/navigation';
 
 // ============================================================================
-// 財務會計運算工具 (轉為仙 Cents 整數運算，杜絕浮點數計算誤差)
+// 財務會計運算工具 (轉為仙 Cents 整數運算，杜絕浮點數計算誤差，並內建安全運算)
 // ============================================================================
 const toCents = (num: number | string): number => Math.round((Number(num) || 0) * 100);
 const fromCents = (cents: number): number => Number((cents / 100).toFixed(2));
+
+const safeAdd = (a: number | string, b: number | string): number => fromCents(toCents(a) + toCents(b));
+const safeSubtract = (a: number | string, b: number | string): number => fromCents(toCents(a) - toCents(b));
+
+// 建立輕量級的日誌替代方案 (如果你沒有設定 @/lib/logger)
+const logUserAction = async (action: string, module: string, details: string, refId: string) => {
+  console.log(`[${action}] ${module}: ${details} (Ref: ${refId})`);
+  // 如果未來有 audit_logs 集合，可以直接在這裡實作 addDoc
+};
 
 export type TransactionType = 'income' | 'expense' | 'capital_in' | 'capital_out' | 'AR' | 'AP';
 export type TransactionStatus = 'pending' | 'completed' | 'voided' | 'Refunded'; 
