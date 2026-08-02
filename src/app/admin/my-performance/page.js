@@ -99,8 +99,14 @@ export default function StaffPerformancePage() {
       let clientCount = 0;
       let breakdown = {};
 
-      // 🟢 抓取該員工專屬的階梯式抽成模板
-      const userCommissionsRule = userData?.commissions || {};
+      // 🟢 修正：去 staff 集合抓取 CMS 設定的抽成模板與參數
+      const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
+      const staffConfigSnap = await getDocs(staffConfigQ);
+      let userCommissionsRule = {};
+      
+      if (!staffConfigSnap.empty) {
+        userCommissionsRule = staffConfigSnap.docs[0].data().commissions || {};
+      }
 
       snap.forEach(d => {
         const tx = d.data();
@@ -123,19 +129,21 @@ export default function StaffPerformancePage() {
              code = serviceMap[tx.service];
           }
 
-          // 🟢 核心修正：對齊 Finance 財務結算的佣金公式，取代 30% Hardcode
           let calculatedComm = 0;
           if (tx.type === 'assistant_bonus') {
             calculatedComm = Number(tx.bonusAmount || 0);
           } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
             calculatedComm = Number(tx.commissionAmount);
           } else {
-            const rule = userCommissionsRule[code] || { deduct: 0, percent: 30 };
-            const deduct = Number(rule.deduct || 0);
-            const percent = Number(rule.percent || 0);
-            
-            if (amount > deduct) {
-              calculatedComm = (amount - deduct) * (percent / 100);
+            // 🟢 使用從 staff 集合抓到的規則進行計算
+            const rule = userCommissionsRule[code] || null;
+            if (rule) {
+              const deduct = Number(rule.deduct || 0);
+              const percent = Number(rule.percent || 0);
+              if (amount > deduct) {
+                // 處理浮點數精度
+                calculatedComm = (amount - deduct) * (percent / 100);
+              }
             }
           }
 
@@ -151,7 +159,6 @@ export default function StaffPerformancePage() {
       setMyTransactions(matchedList);
       setCategoryBreakdown(breakdown);
       
-      // 🟢 確保浮點數完全四捨五入至整數，解決小數點產生 .2 等問題
       const safeRevSum = Math.round(revSum);
       const safeCommSum = Math.round(commSum);
 
