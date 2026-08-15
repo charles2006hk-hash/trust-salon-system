@@ -14,7 +14,10 @@ export default function StaffPerformancePage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [serviceMapContext, setServiceMapContext] = useState({}); 
 
-  // 🟢 修正：擴充 stats 狀態以容納細分客數
+  // 🟢 權限擴充：讓 Admin 可以選擇目標員工
+  const [targetStaff, setTargetStaff] = useState('');
+  const [staffList, setStaffList] = useState([]);
+
   const [stats, setStats] = useState({
     totalRevenue: 0,   
     totalCommission: 0, 
@@ -27,7 +30,6 @@ export default function StaffPerformancePage() {
 
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
   const [globalLabels, setGlobalLabels] = useState({});
-  
   const [myCommissionRules, setMyCommissionRules] = useState({});
 
   useEffect(() => {
@@ -38,6 +40,15 @@ export default function StaffPerformancePage() {
           if (userSnap.exists()) {
             const userData = userSnap.data();
             setCurrentUser({ uid: user.uid, ...userData });
+            setTargetStaff(userData.name); // 預設查看自己
+
+            // 🔒 嚴格安全性修正：只有老闆 (Admin) 才能抓取名單並切換員工
+            if (userData.role === 'admin') {
+               const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
+               const staffSnap = await getDocs(staffQ);
+               const names = staffSnap.docs.map(d => d.data().name).filter(Boolean);
+               setStaffList([...new Set(names)]);
+            }
             
             await initData(userData.name, selectedMonth);
           } else {
@@ -55,11 +66,12 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
+  // 🟢 監聽：當月份或目標員工改變時，重新計算
   useEffect(() => {
-    if (currentUser && Object.keys(serviceMapContext).length > 0) {
-      fetchMyTransactions(currentUser.name, serviceMapContext, selectedMonth);
+    if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
+      fetchMyTransactions(targetStaff, serviceMapContext, selectedMonth);
     }
-  }, [selectedMonth]);
+  }, [selectedMonth, targetStaff]);
 
   const initData = async (staffName, monthStr) => {
     try {
@@ -80,7 +92,6 @@ export default function StaffPerformancePage() {
       pkSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'SCALP' });
 
       setServiceMapContext(serviceMap); 
-      await fetchMyTransactions(staffName, serviceMap, monthStr);
     } catch (e) {
       console.error(e);
       toast.error("初始化資料失敗");
@@ -105,7 +116,6 @@ export default function StaffPerformancePage() {
       let commSum = 0;
       let breakdown = {};
       
-      // 🟢 修正：使用 Set 來去重與細分客數
       let uniqueClients = new Set();
       let uniqueWR = new Set();
       let uniqueScalp = new Set();
@@ -137,7 +147,6 @@ export default function StaffPerformancePage() {
              code = serviceMap[tx.service];
           }
           
-          // ✅ 修改後：對齊財務系統的「單據 (Ticket)」去重邏輯
           if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
              const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`; 
              uniqueClients.add(ticketId);
@@ -200,6 +209,9 @@ export default function StaffPerformancePage() {
   if (loading && !currentUser) return <div className="p-10 text-[#D4AF37] bg-[#080808] min-h-screen font-bold tracking-widest text-sm">載入您的尊爵業績數據中...</div>;
   if (!currentUser) return <div className="p-10 text-red-500 bg-[#080808] min-h-screen">請先登入系統。</div>;
 
+  // 🔒 嚴格安全性判斷：唯有 Admin 才能擁有上帝視角
+  const isAdmin = currentUser.role === 'admin';
+
   return (
     <div className="p-6 md:p-10 pb-32 bg-[#080808] min-h-screen text-white font-sans selection:bg-[#D4AF37] selection:text-black">
       <Toaster position="top-right" />
@@ -212,23 +224,39 @@ export default function StaffPerformancePage() {
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold flex items-center gap-2">
             <span>設計師專屬業績與分成控制台</span>
             <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-            <span className="text-[#D4AF37] font-mono font-bold tracking-normal">Logged as: {currentUser.name} ({currentUser.role})</span>
+            <span className="text-[#D4AF37] font-mono font-bold tracking-normal">
+              Viewing: {targetStaff} {targetStaff === currentUser.name ? '(本人)' : ''}
+            </span>
           </p>
         </div>
         
         <div className="flex flex-col items-end gap-3">
-          <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
-            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">結算月份</span>
-            <input 
-              type="month" 
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="bg-transparent text-[#D4AF37] font-bold outline-none cursor-pointer text-sm custom-month-input"
-            />
+          <div className="flex gap-2">
+            {/* 🔒 只有老闆 (Admin) 看得見切換器 */}
+            {isAdmin && staffList.length > 0 && (
+              <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
+                <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
+                <select 
+                  value={targetStaff}
+                  onChange={(e) => setTargetStaff(e.target.value)}
+                  className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm appearance-none pr-4"
+                >
+                  {staffList.map(name => <option key={name} value={name} className="bg-[#121212]">{name}</option>)}
+                </select>
+                <i className="fa-solid fa-chevron-down text-blue-500/50 absolute right-3 pointer-events-none text-xs"></i>
+              </div>
+            )}
+            
+            <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
+              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">結算月份</span>
+              <input 
+                type="month" 
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="bg-transparent text-[#D4AF37] font-bold outline-none cursor-pointer text-sm custom-month-input"
+              />
+            </div>
           </div>
-          <span className="text-[9px] px-3 py-1.5 rounded-full font-bold tracking-widest uppercase bg-[#D4AF37]/10 text-[#D4AF37] border border-[#D4AF37]/30">
-            所屬店鋪：{currentUser.branch === 'ALL' ? '全域管理' : currentUser.branch || '未綁定'}
-          </span>
         </div>
       </header>
 
@@ -248,7 +276,6 @@ export default function StaffPerformancePage() {
           </div>
         </div>
         
-        {/* 🟢 修正：加入客數細分的 UI */}
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
           <div>
@@ -374,7 +401,7 @@ export default function StaffPerformancePage() {
                 {myTransactions.length === 0 && !loading && (
                   <tr>
                     <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
-                      📭 您在 {selectedMonth} 尚無結帳服務紀錄。
+                      📭 {targetStaff} 在 {selectedMonth} 尚無結帳服務紀錄。
                     </td>
                   </tr>
                 )}
@@ -387,14 +414,9 @@ export default function StaffPerformancePage() {
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        ::-webkit-calendar-picker-indicator {
-            filter: invert(1);
-            cursor: pointer;
-        }
+        ::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
         .custom-month-input { position: relative; }
-        .custom-month-input::-webkit-calendar-picker-indicator {
-            position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
-        }
+        .custom-month-input::-webkit-calendar-picker-indicator { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
       `}</style>
     </div>
   );
