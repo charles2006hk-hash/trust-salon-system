@@ -84,7 +84,6 @@ export default function FinancePage() {
          setOutstandingTDollar(totalOut);
       }
 
-      // 🟢 核心修正：將 users 換成 staff 集合，以讀取 CMS 設定的薪資參數
       const staffSnap = await getDocs(collection(db, 'staff'));
       const staffList = staffSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setStaffConfig(staffList);
@@ -120,7 +119,8 @@ export default function FinancePage() {
         name: staff.name, 
         grade: staff.templateName || '自訂比例', 
         commissionsRule: staff.commissions || {}, 
-        totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [] 
+        totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [],
+        uniqueClientsSet: new Set() // 🟢 引入 Set 來對客數去重
       };
     });
 
@@ -132,7 +132,7 @@ export default function FinancePage() {
       else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
-          stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [] };
+          stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
         }
 
         const staff = stylistAggregator[stylistName];
@@ -179,12 +179,17 @@ export default function FinancePage() {
           }
         }
 
+        // 🟢 將客數紀錄去重 (以電話或交易ID為準)
+        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
+           staff.uniqueClientsSet.add(tx.phoneNumber || tx.id);
+           staff.clientCount = staff.uniqueClientsSet.size;
+        }
+
         serviceValue += revenue;
         stylists[stylistName] = (stylists[stylistName] || 0) + revenue;
 
         staff.totalRevenue += revenue;
         staff.totalCommission += commission;
-        staff.clientCount += 1;
         
         staff.details.push({
           id: tx.id,
@@ -341,7 +346,7 @@ export default function FinancePage() {
             </p>
           </div>
           
-         <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
              {currentAdminRole === 'admin' && (
                 <>
                   <button onClick={exportToCSV} className="bg-green-900/30 text-green-400 border border-green-800/50 hover:bg-green-600 hover:text-white px-5 py-3 rounded-xl text-xs font-bold transition flex items-center gap-2">
@@ -363,7 +368,6 @@ export default function FinancePage() {
                </div>
              )}
 
-             {/* 🟢 修正：強化版月份選擇器 */}
              <div className="relative bg-[#121212] border border-white/10 px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
                <i className="fa-regular fa-calendar text-[#D4AF37] pointer-events-none"></i>
                <input 
@@ -425,14 +429,15 @@ export default function FinancePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
               <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
+                {/* 🟢 修正：紫區塊的誤導文字 */}
                 <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務消耗 (需跨店撥款)
+                  🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務消耗扣抵總額
                 </p>
                 <div className="flex items-baseline gap-1 text-purple-300">
                   <span className="text-3xl font-bold">$</span>
                   <p className="text-5xl font-black tracking-tighter">{metrics.tDollarDeducted.toLocaleString()}</p>
                 </div>
-                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若採獨立戶頭，總部/他店需將此金額撥款給該店。</p>}
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若貴公司各分店採獨立財務核算，總部需將此金額撥款補貼給該實體店。</p>}
               </div>
 
               <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5 opacity-50'}`}>
@@ -573,7 +578,7 @@ export default function FinancePage() {
                       <h4 className="text-xl font-bold text-white">{staff.name}</h4>
                       <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase tracking-widest ${staff.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-white/10 text-gray-300'}`}>{staff.grade}</span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">本篩選共參與 <span className="text-white font-bold">{staff.clientCount}</span> 個項目</p>
+                    <p className="text-xs text-gray-500 mt-1">本篩選共參與 <span className="text-white font-bold">{staff.clientCount}</span> 個客戶結帳</p>
                   </div>
                 </div>
 
@@ -608,7 +613,6 @@ export default function FinancePage() {
             <button onClick={() => setSelectedStaffDetail(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition-colors">
               <i className="fa-solid fa-xmark text-2xl"></i>
             </button>
-            
             <div className="mb-6 border-b border-white/10 pb-6 shrink-0">
               <h2 className="text-2xl md:text-3xl font-black text-white italic tracking-tighter">Commission <span className="text-[#D4AF37]">Details</span></h2>
               <div className="flex flex-col md:flex-row md:items-center gap-3 mt-2">
@@ -616,7 +620,6 @@ export default function FinancePage() {
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
             </div>
-            
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
               {selectedStaffDetail.details.length === 0 ? (
                  <p className="text-center text-gray-500 py-10">此月份尚無明細</p>
@@ -636,14 +639,12 @@ export default function FinancePage() {
                       </div>
                       <p className="text-[10px] text-gray-500">{item.date}</p>
                     </div>
-                    
                     <div className="w-full md:w-auto bg-[#1a1a1a] p-3 rounded-xl border border-white/5">
                       <p className="text-[9px] text-gray-500 uppercase tracking-widest mb-1">拆帳計算診斷</p>
                       <p className={`text-xs font-mono font-bold ${item.formulaStr.includes('未綁定') || item.formulaStr.includes('未儲存') ? 'text-red-400' : 'text-gray-300'}`}>
                         {item.formulaStr}
                       </p>
                     </div>
-
                     <div className="w-full md:w-32 text-right shrink-0">
                       <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得金額</p>
                       <p className="text-lg font-black text-[#D4AF37] font-mono">
@@ -657,7 +658,6 @@ export default function FinancePage() {
           </div>
         </div>
       )}
-
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
@@ -665,21 +665,9 @@ export default function FinancePage() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
-        
-        /* 🟢 CSS 魔術：將原生月份選擇器的點擊範圍撐滿整個 Input */
-        .custom-month-input {
-          position: relative;
-        }
+        .custom-month-input { position: relative; }
         .custom-month-input::-webkit-calendar-picker-indicator {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            width: 100%;
-            height: 100%;
-            opacity: 0; /* 隱藏原生醜醜的 icon，保留我們自己的金色 icon */
-            cursor: pointer;
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
         }
       `}</style>
     </div>
