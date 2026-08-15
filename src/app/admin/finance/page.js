@@ -179,9 +179,10 @@ export default function FinancePage() {
           }
         }
 
-        // 🟢 將客數紀錄去重 (以電話或交易ID為準)
+        // ✅ 修改後：改用「時間戳 + 電話」作為服務單據 (Ticket) 去重
         if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
-           staff.uniqueClientsSet.add(tx.phoneNumber || tx.id);
+           const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`;
+           staff.uniqueClientsSet.add(ticketId);
            staff.clientCount = staff.uniqueClientsSet.size;
         }
 
