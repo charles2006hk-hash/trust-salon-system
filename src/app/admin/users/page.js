@@ -17,8 +17,8 @@ export default function UserManagementPage() {
   const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  // 🟢 預設全域通為 ALL
-  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL' });
+  // 🟢 修正：加入 tier 與 discount 供新增會員時使用
+  const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL', tier: '基本會員 (Basic)', discount: 1 });
 
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -30,13 +30,12 @@ export default function UserManagementPage() {
   const [isResettingPassword, setIsResettingPassword] = useState(false);
   const [isRoleMatrixOpen, setIsRoleMatrixOpen] = useState(false);
 
-  // 舊帳號數據遷移專用狀態
   const [migratePhone, setMigratePhone] = useState('');
   const [migratePassword, setMigratePassword] = useState('');
   const [migrateBranch, setMigrateBranch] = useState('ALL');
 
-  // 🟢 動態分店清單狀態
   const [branchesList, setBranchesList] = useState([]);
+  const [tiersList, setTiersList] = useState([]); // 🟢 新增：儲存系統中的會員等級列表
 
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
@@ -49,7 +48,8 @@ export default function UserManagementPage() {
       }
     });
     fetchUsers();
-    fetchBranches(); // 🟢 載入頁面時同步抓取最新的分店清單
+    fetchBranches(); 
+    fetchTiers(); // 🟢 載入頁面時同步抓取會員等級清單
     return () => unsubscribe();
   }, []);
 
@@ -67,13 +67,24 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 從 Firestore 動態抓取系統所有分店
   const fetchBranches = async () => {
     try {
       const snap = await getDocs(collection(db, 'branches'));
       setBranchesList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (e) {
       console.error("讀取分店清單失敗", e);
+    }
+  };
+
+  // 🟢 抓取會員等級列表，供新建帳號時選擇
+  const fetchTiers = async () => {
+    try {
+      const snap = await getDocs(collection(db, 'tiers'));
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
+      setTiersList(data);
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -116,31 +127,41 @@ export default function UserManagementPage() {
         finalUid = data.localId;
       }
 
+      // 🟢 修正：建檔時直接寫入指定的會員等級、折扣，與初始餘額 (不影響報表現金流)
       const userData = {
         name: newUser.name,
         phoneNumber: newUser.phone,
         email: loginEmail || '', 
         role: newUser.role,
-        tDollarBalance: Number(newUser.tDollar),
+        tDollarBalance: Number(newUser.tDollar), // 初始餘額直接發放
         points: Number(newUser.points),
+        tier: newUser.tier || '基本會員 (Basic)', // 初始等級
+        discount: Number(newUser.discount) || 1, // 初始折扣
+        totalTopUp: 0, // 歷史充值現金歸零，因為是直接手動給餘額
         packageBalances: {},
         createdAt: new Date().toISOString(),
         status: 'active',
         notes: '',
         isFirstLogin: true, 
-        branch: newUser.branch || 'ALL' // 🟢 寫入動態選擇的店鋪
+        branch: newUser.branch || 'ALL'
       };
+
+      // 為了避免系統之後自動將其降級，我們把 totalTopUp 設為對應等級的門檻
+      if (newUser.tier !== '基本會員 (Basic)') {
+          const matchedTier = tiersList.find(x => x.name === newUser.tier);
+          if (matchedTier) userData.totalTopUp = Number(matchedTier.threshold);
+      }
 
       if (finalUid) {
         await setDoc(doc(db, "users", finalUid), userData);
         toast.success(`員工帳號建立成功！\n登入電話：${newUser.phone}\n登入密碼：${newUser.password}`, { id: toastId, duration: 6000 });
       } else {
         await addDoc(collection(db, "users"), userData);
-        toast.success("客戶檔案建立成功！可進入 Details 派發註冊禮積分。", { id: toastId });
+        toast.success("客戶檔案建立成功！", { id: toastId });
       }
 
       setIsCreateOpen(false);
-      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL' });
+      setNewUser({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL', tier: '基本會員 (Basic)', discount: 1 });
       fetchUsers();
       
     } catch (error) {
@@ -438,7 +459,6 @@ export default function UserManagementPage() {
                     </p>
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
-                  {/* 🟢 動態讀取並清爽顯示所屬分店標籤 */}
                   <td className="p-6">
                     <span className={`text-[9px] px-2 py-1 rounded font-bold tracking-widest uppercase ${['ALL', 'all'].includes(u.branch) ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
                       {['ALL', 'all'].includes(u.branch) ? '全域通' : u.branch || '未設定'}
@@ -535,7 +555,6 @@ export default function UserManagementPage() {
                   </select>
                 </div>
 
-                {/* 🟢 動態讀取所屬分店 */}
                 <div className="space-y-1">
                   <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">所屬分店 (Branch)</label>
                   <select 
@@ -562,6 +581,32 @@ export default function UserManagementPage() {
                 </div>
               </div>
 
+              {/* 🟢 新增：指定初始等級與餘額，避免污染現金流報表 */}
+              {newUser.role === 'member' && (
+                <div className="grid grid-cols-2 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest">初始會員等級 (選填)</label>
+                    <select 
+                      value={newUser.tier} 
+                      onChange={e => {
+                         const t = tiersList.find(x => x.name === e.target.value);
+                         setNewUser({...newUser, tier: e.target.value, discount: t ? t.discount : 1});
+                      }} 
+                      className="w-full bg-black border border-purple-500/40 p-3 rounded-xl text-purple-400 text-sm font-bold outline-none"
+                    >
+                      <option value="基本會員 (Basic)">基本會員 (Basic) - 無折扣</option>
+                      {tiersList.map(t => (
+                        <option key={t.id} value={t.name}>{t.name} - {t.discount * 10}折</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-green-400 font-bold uppercase tracking-widest">初始 T-Dollar 餘額</label>
+                    <input type="number" value={newUser.tDollar} onChange={e => setNewUser({...newUser, tDollar: e.target.value})} className="w-full bg-black border border-green-500/40 p-3 rounded-xl text-white outline-none focus:border-green-400" placeholder="如: 3000" />
+                  </div>
+                </div>
+              )}
+
               {newUser.role !== 'member' && (
                 <div className="grid grid-cols-1 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
                   <div className="space-y-1">
@@ -582,7 +627,6 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 🟢 用戶細節彈窗 */}
       {isDetailOpen && selectedUser && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[40px] border border-white/10 shadow-2xl relative custom-scrollbar">
@@ -616,7 +660,6 @@ export default function UserManagementPage() {
                       <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">設定臨時密碼</label>
                       <input type="text" value={migratePassword} onChange={e => setMigratePassword(e.target.value)} className="w-full bg-black border border-blue-500/20 p-3 rounded-xl text-white outline-none focus:border-blue-400 text-sm" placeholder="如: 123456" />
                     </div>
-                    {/* 🟢 動態讀取遷移分店 */}
                     <div className="space-y-1">
                       <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">指定所屬分店</label>
                       <select 
@@ -694,7 +737,6 @@ export default function UserManagementPage() {
                     <input type="text" value={selectedUser.phoneNumber || ''} onChange={e => setSelectedUser({...selectedUser, phoneNumber: e.target.value})} className="w-full bg-black border border-white/5 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37] text-sm font-mono" />
                   </div>
                   
-                  {/* 🟢 動態讀取修改分店 */}
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest ml-1">修改所屬店鋪 (Branch)</label>
                     <select 
