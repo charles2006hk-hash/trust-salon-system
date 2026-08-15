@@ -14,17 +14,20 @@ export default function StaffPerformancePage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [serviceMapContext, setServiceMapContext] = useState({}); 
 
+  // 🟢 修正：擴充 stats 狀態以容納細分客數
   const [stats, setStats] = useState({
     totalRevenue: 0,   
     totalCommission: 0, 
-    clientCount: 0,     
+    clientCount: 0,
+    wrClientCount: 0,
+    scalpClientCount: 0,
+    productClientCount: 0,
     averageSpend: 0     
   });
 
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
   const [globalLabels, setGlobalLabels] = useState({});
   
-  // 🟢 新增：儲存從 staff 集合抓取到的個人專屬抽成規則，供表格使用
   const [myCommissionRules, setMyCommissionRules] = useState({});
 
   useEffect(() => {
@@ -100,10 +103,14 @@ export default function StaffPerformancePage() {
       
       let revSum = 0;
       let commSum = 0;
-      let clientCount = 0;
       let breakdown = {};
+      
+      // 🟢 修正：使用 Set 來去重與細分客數
+      let uniqueClients = new Set();
+      let uniqueWR = new Set();
+      let uniqueScalp = new Set();
+      let uniqueProduct = new Set();
 
-      // 🟢 核心修正：去 staff 集合尋找 CMS 設定的抽成模板與參數
       const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
       const staffConfigSnap = await getDocs(staffConfigQ);
       let userCommissionsRule = {};
@@ -122,16 +129,22 @@ export default function StaffPerformancePage() {
           
           const amount = Number(tx.amount || 0);
           revSum += amount;
-          
-          if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
-             clientCount++;
-          }
 
           let code = '未綁定參數';
           if (tx.type === 'assistant_bonus') {
              code = 'ASSISTANT_BONUS'; 
           } else if (tx.service && serviceMap[tx.service]) {
              code = serviceMap[tx.service];
+          }
+          
+          // 🟢 修正：去重邏輯
+          if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
+             const phone = tx.phoneNumber || tx.id; 
+             uniqueClients.add(phone);
+             
+             if (code.startsWith('W') || code.startsWith('R')) uniqueWR.add(phone);
+             else if (code === 'SCALP') uniqueScalp.add(phone);
+             else if (code.startsWith('P')) uniqueProduct.add(phone);
           }
 
           let calculatedComm = 0;
@@ -140,7 +153,6 @@ export default function StaffPerformancePage() {
           } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
             calculatedComm = Number(tx.commissionAmount);
           } else {
-            // 🟢 正確讀取 CMS staff 集合的抽成公式
             const rule = userCommissionsRule[code];
             if (rule) {
               const deduct = Number(rule.deduct || 0);
@@ -165,12 +177,16 @@ export default function StaffPerformancePage() {
       
       const safeRevSum = Math.round(revSum);
       const safeCommSum = Math.round(commSum);
+      const finalClientCount = uniqueClients.size;
 
       setStats({
         totalRevenue: safeRevSum,
         totalCommission: safeCommSum,
-        clientCount: clientCount,
-        averageSpend: clientCount > 0 ? Math.round(safeRevSum / clientCount) : 0
+        clientCount: finalClientCount,
+        wrClientCount: uniqueWR.size,
+        scalpClientCount: uniqueScalp.size,
+        productClientCount: uniqueProduct.size,
+        averageSpend: finalClientCount > 0 ? Math.round(safeRevSum / finalClientCount) : 0
       });
 
     } catch (error) {
@@ -201,13 +217,13 @@ export default function StaffPerformancePage() {
         </div>
         
         <div className="flex flex-col items-end gap-3">
-          <div className="flex items-center gap-2 bg-[#121212] border border-white/10 p-1.5 rounded-2xl">
-            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-3">結算月份</span>
+          <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
+            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">結算月份</span>
             <input 
               type="month" 
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
-              className="bg-black text-[#D4AF37] border border-[#D4AF37]/30 px-4 py-2 rounded-xl text-sm font-bold outline-none cursor-pointer custom-month-picker"
+              className="bg-transparent text-[#D4AF37] font-bold outline-none cursor-pointer text-sm custom-month-input"
             />
           </div>
           <span className="text-[9px] px-3 py-1.5 rounded-full font-bold tracking-widest uppercase bg-[#D4AF37]/10 text-[#D4AF37] border border-[#D4AF37]/30">
@@ -217,25 +233,41 @@ export default function StaffPerformancePage() {
       </header>
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 animate-fade-in" style={{ animationDelay: '0.1s' }}>
-        <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all">
+        <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5 group-hover:scale-110 transition-transform">💰</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 實得提成</p>
-          <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalCommission.toLocaleString()}</p>
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 實得提成</p>
+            <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalCommission.toLocaleString()}</p>
+          </div>
         </div>
-        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
+        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">📈</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">創造總營業額 (總大數)</p>
-          <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalRevenue.toLocaleString()}</p>
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">創造總營業額 (總大數)</p>
+            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalRevenue.toLocaleString()}</p>
+          </div>
         </div>
-        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
+        
+        {/* 🟢 修正：加入客數細分的 UI */}
+        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 服務客數</p>
-          <p className="text-3xl font-black text-white font-mono">{stats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 服務總客數</p>
+            <p className="text-3xl font-black text-white font-mono">{stats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
+          </div>
+          <div className="flex gap-3 mt-3 pt-3 border-t border-white/10">
+             <span className="text-[9px] text-gray-400">W/R: <span className="text-white font-bold">{stats.wrClientCount}</span></span>
+             <span className="text-[9px] text-gray-400">Scalp: <span className="text-white font-bold">{stats.scalpClientCount}</span></span>
+             <span className="text-[9px] text-gray-400">Prod: <span className="text-white font-bold">{stats.productClientCount}</span></span>
+          </div>
         </div>
-        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all">
+
+        <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">🎯</div>
-          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">個人平均客單價</p>
-          <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.averageSpend.toLocaleString()}</p>
+          <div>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">個人平均客單價</p>
+            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.averageSpend.toLocaleString()}</p>
+          </div>
         </div>
       </section>
 
@@ -300,7 +332,6 @@ export default function StaffPerformancePage() {
                   } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
                      comm = Number(tx.commissionAmount);
                   } else {
-                     // 🟢 修正：讀取正確綁定的抽成規則
                      const rule = myCommissionRules[serviceMapContext[tx.service] || 'W1'];
                      if (rule && amt > Number(rule.deduct || 0)) {
                        comm = (amt - Number(rule.deduct || 0)) * (Number(rule.percent || 0) / 100);
@@ -356,10 +387,13 @@ export default function StaffPerformancePage() {
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.5s ease-out both; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        /* 美化原生的日期選擇器 */
         ::-webkit-calendar-picker-indicator {
             filter: invert(1);
             cursor: pointer;
+        }
+        .custom-month-input { position: relative; }
+        .custom-month-input::-webkit-calendar-picker-indicator {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
         }
       `}</style>
     </div>
