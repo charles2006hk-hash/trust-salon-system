@@ -137,14 +137,14 @@ export default function StaffPerformancePage() {
              code = serviceMap[tx.service];
           }
           
-          // 🟢 修正：去重邏輯
+          // ✅ 修改後：對齊財務系統的「單據 (Ticket)」去重邏輯
           if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
-             const phone = tx.phoneNumber || tx.id; 
-             uniqueClients.add(phone);
+             const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`; 
+             uniqueClients.add(ticketId);
              
-             if (code.startsWith('W') || code.startsWith('R')) uniqueWR.add(phone);
-             else if (code === 'SCALP') uniqueScalp.add(phone);
-             else if (code.startsWith('P')) uniqueProduct.add(phone);
+             if (code.startsWith('W') || code.startsWith('R')) uniqueWR.add(ticketId);
+             else if (code === 'SCALP') uniqueScalp.add(ticketId);
+             else if (code.startsWith('P')) uniqueProduct.add(ticketId);
           }
 
           let calculatedComm = 0;
