@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, query, orderBy, doc, getDoc, where } from 'firebase/firestore'; 
+// 🟢 新增了 updateDoc 引入
+import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -41,6 +42,35 @@ export default function FinancePage() {
   const [payrollReport, setPayrollReport] = useState([]);
 
   const [selectedStaffDetail, setSelectedStaffDetail] = useState(null);
+
+  // 🟢 新增：錯單修改專用 State
+  const [editingTx, setEditingTx] = useState(null);
+  const [isUpdatingTx, setIsUpdatingTx] = useState(false);
+
+  // 🟢 新增：執行更新單據的函數
+  const handleUpdateTransaction = async (e) => {
+    e.preventDefault();
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
+    
+    const toastId = toast.loading("正在覆寫單據資料...");
+    setIsUpdatingTx(true);
+    try {
+      const txRef = doc(db, 'transactions', editingTx.id);
+      await updateDoc(txRef, {
+        amount: Number(editingTx.amount),
+        stylist: editingTx.stylist || '未指定',
+      });
+      
+      toast.success("✅ 單據修改成功！報表已同步更新。", { id: toastId });
+      setEditingTx(null);
+      fetchFinancialData(); // 重新抓取資料以刷新報表
+    } catch (error) {
+      console.error(error);
+      toast.error("修改失敗，請檢查網路連線", { id: toastId });
+    } finally {
+      setIsUpdatingTx(false);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -120,7 +150,7 @@ export default function FinancePage() {
         grade: staff.templateName || '自訂比例', 
         commissionsRule: staff.commissions || {}, 
         totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [],
-        uniqueClientsSet: new Set() // 🟢 引入 Set 來對客數去重
+        uniqueClientsSet: new Set() 
       };
     });
 
@@ -179,7 +209,6 @@ export default function FinancePage() {
           }
         }
 
-        // ✅ 修改後：改用「時間戳 + 電話」作為服務單據 (Ticket) 去重
         if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
            const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`;
            staff.uniqueClientsSet.add(ticketId);
@@ -430,7 +459,6 @@ export default function FinancePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
               <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
-                {/* 🟢 修正：紫區塊的誤導文字 */}
                 <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-2 flex items-center gap-1">
                   🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務消耗扣抵總額
                 </p>
@@ -520,6 +548,8 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right">變動金額</th>
+                      {/* 🟢 Admin 專屬表頭 */}
+                      {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
@@ -554,6 +584,20 @@ export default function FinancePage() {
                         <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : tx.type === 'assistant_bonus' ? 'text-yellow-400' : 'text-white'}`}>
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
+                        
+                        {/* 🟢 加入 Admin 專屬的修改按鈕 */}
+                        {currentAdminRole === 'admin' && (
+                          <td className="py-4 text-center">
+                            {(tx.type === 'deduct' || tx.type === 'walkin_cash') && (
+                              <button 
+                                onClick={() => setEditingTx(tx)}
+                                className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
+                              >
+                                <i className="fa-solid fa-pen"></i> 修改
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch).length === 0 && (
@@ -659,6 +703,59 @@ export default function FinancePage() {
           </div>
         </div>
       )}
+
+      {/* 🟢 Admin 專屬錯單編輯彈窗 */}
+      {editingTx && (
+        <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
+            <button onClick={() => setEditingTx(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition">
+              <i className="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <h2 className="text-2xl font-black text-white italic mb-6">Edit <span className="text-blue-500">Transaction</span></h2>
+            
+            <form onSubmit={handleUpdateTransaction} className="space-y-5">
+              <div className="p-4 bg-white/5 rounded-xl border border-white/5">
+                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">修改單據時間</p>
+                 <p className="text-sm font-mono text-gray-300">{new Date(editingTx.timestamp).toLocaleString('zh-HK')}</p>
+                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-2 mb-1">服務項目 (防呆鎖定)</p>
+                 <p className="text-sm text-gray-300">{editingTx.service || editingTx.packageName}</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改結帳金額 (HKD)</label>
+                <input 
+                  type="number" 
+                  required 
+                  value={editingTx.amount || 0} 
+                  onChange={(e) => setEditingTx({...editingTx, amount: e.target.value})}
+                  className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-lg font-mono font-bold" 
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改負責設計師</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editingTx.stylist || ''} 
+                  onChange={(e) => setEditingTx({...editingTx, stylist: e.target.value})}
+                  className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500" 
+                  placeholder="輸入正確的設計師名字"
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={isUpdatingTx}
+                className="w-full bg-blue-600 text-white font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-blue-500 transition-all shadow-lg disabled:opacity-50 mt-4"
+              >
+                {isUpdatingTx ? '處理中...' : '💾 強制覆寫單據'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       <style jsx>{`
         .animate-fade-in { animation: fadeIn 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
