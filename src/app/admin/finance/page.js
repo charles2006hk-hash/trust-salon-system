@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion } from 'firebase/firestore'; 
+import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion, addDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -42,20 +42,22 @@ export default function FinancePage() {
 
   const [selectedStaffDetail, setSelectedStaffDetail] = useState(null);
 
+  // 🟢 錯單修改專用 State
   const [editingTx, setEditingTx] = useState(null);
   const [originalTx, setOriginalTx] = useState(null); 
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
+  // 🟢 審計日誌查帳 State
+  const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
 
-  // 🟢 執行更新單據的函數 (解鎖：支援修改服務項目與助手獎金)
+  // 🟢 執行更新單據的函數 (包含全局寫入與審計紀錄)
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
     
-    const toastId = toast.loading("正在覆寫單據資料並寫入審計紀錄...");
+    const toastId = toast.loading("正在覆寫單據資料並寫入全域審計紀錄...");
     setIsUpdatingTx(true);
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
-      
       const isBonus = editingTx.type === 'assistant_bonus';
       
       const oldAmount = isBonus ? Number(originalTx.bonusAmount || 0) : Number(originalTx.amount || 0);
@@ -92,7 +94,20 @@ export default function FinancePage() {
          }
       }
 
+      // 1. 更新單據本身
       await updateDoc(txRef, updatePayload);
+
+      // 2. 寫入「全局審計日誌 (Global Audit Logs)」
+      await addDoc(collection(db, 'audit_logs'), {
+        module: 'finance_transactions',
+        action: 'edit_transaction',
+        transactionId: editingTx.id,
+        customerPhone: editingTx.phoneNumber || '未提供',
+        branch: editingTx.branch || '未指定',
+        timestamp: new Date().toISOString(),
+        adminName: currentUserName || 'Admin',
+        changes: auditLog
+      });
       
       toast.success("✅ 單據修改成功！歷史紀錄已永久保存。", { id: toastId });
       setEditingTx(null);
@@ -619,20 +634,31 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🟢 加入 Admin 專屬的修改按鈕 (解鎖助手獎金) */}
+                        {/* 🟢 加入 Admin 專屬的修改按鈕與查帳按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
-                            {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
-                              <button 
-                                onClick={() => {
-                                  setEditingTx({...tx}); 
-                                  setOriginalTx(tx); 
-                                }}
-                                className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
-                              >
-                                <i className="fa-solid fa-pen"></i> 修改
-                              </button>
-                            )}
+                            <div className="flex flex-col items-center gap-2">
+                              {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
+                                <button 
+                                  onClick={() => {
+                                    setEditingTx({...tx}); 
+                                    setOriginalTx(tx); 
+                                  }}
+                                  className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition w-full"
+                                >
+                                  <i className="fa-solid fa-pen"></i> 修改
+                                </button>
+                              )}
+                              
+                              {tx.editHistory && tx.editHistory.length > 0 && (
+                                <button 
+                                  onClick={() => setViewingHistoryTx(tx)}
+                                  className="bg-purple-500/10 text-purple-400 hover:bg-purple-500 hover:text-white px-3 py-1.5 rounded-lg text-[10px] font-bold transition flex items-center justify-center gap-1 w-full"
+                                >
+                                  <i className="fa-solid fa-clock-rotate-left"></i> 查帳
+                                </button>
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>
@@ -741,7 +767,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗：解鎖服務項目與助手獎金更改 */}
+      {/* 🟢 Admin 專屬錯單編輯彈窗：支援修改服務、助手獎金 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -756,7 +782,6 @@ export default function FinancePage() {
                  <p className="text-sm font-mono text-gray-300">{new Date(editingTx.timestamp).toLocaleString('zh-HK')}</p>
               </div>
 
-              {/* 🟢 如果不是助手獎金，顯示下拉選單選擇服務項目 */}
               {editingTx.type !== 'assistant_bonus' && (
                 <div className="space-y-1">
                   <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改服務項目</label>
@@ -782,7 +807,6 @@ export default function FinancePage() {
                 </div>
               )}
 
-              {/* 🟢 動態切換顯示：結帳金額 或 獎金金額 */}
               <div className="space-y-1">
                 <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '獎金金額' : '結帳金額'} (HKD)</label>
                 <input 
@@ -800,7 +824,6 @@ export default function FinancePage() {
                 />
               </div>
 
-              {/* 🟢 動態切換顯示：助手名稱 或 負責設計師 */}
               <div className="space-y-1">
                 <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '助手名稱' : '負責設計師'}</label>
                 <input 
@@ -818,9 +841,54 @@ export default function FinancePage() {
                 disabled={isUpdatingTx}
                 className="w-full bg-blue-600 text-white font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-blue-500 transition-all shadow-lg disabled:opacity-50 mt-4"
               >
-                {isUpdatingTx ? '處理中...' : '💾 強制覆寫單據並記錄日誌'}
+                {isUpdatingTx ? '處理中...' : '💾 強制覆寫單據並記錄全域日誌'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 🟢 Admin 專屬：審計查帳彈窗 (Audit History Modal) */}
+      {viewingHistoryTx && (
+        <div className="fixed inset-0 bg-black/90 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[32px] p-8 border border-purple-500/30 shadow-2xl relative animate-fade-in">
+            <button onClick={() => setViewingHistoryTx(null)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition">
+              <i className="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <h2 className="text-2xl font-black text-white italic mb-2">Audit <span className="text-purple-500">History</span></h2>
+            <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-6">單據修改軌跡紀錄 (由新到舊)</p>
+            
+            <div className="space-y-4">
+              {viewingHistoryTx.editHistory.slice().reverse().map((log, index) => (
+                <div key={index} className="p-5 bg-white/5 rounded-2xl border border-white/10 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-purple-500/50"></div>
+                  
+                  <div className="flex justify-between items-center mb-4 border-b border-white/5 pb-3">
+                    <span className="text-xs text-purple-400 font-bold tracking-widest flex items-center gap-2">
+                      <i className="fa-solid fa-user-shield"></i> {log.editedBy}
+                    </span>
+                    <span className="text-[10px] font-mono text-gray-400 bg-black/50 px-2 py-1 rounded">
+                      {new Date(log.editedAt).toLocaleString('zh-HK')}
+                    </span>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4 text-xs font-mono">
+                    <div className="bg-red-950/20 p-3 rounded-xl border border-red-500/10">
+                      <p className="text-red-400 font-bold mb-2 uppercase tracking-widest text-[9px]"><i className="fa-solid fa-arrow-left"></i> 修改前 (Old)</p>
+                      <p className="text-gray-400 line-through mb-1">${log.oldAmount}</p>
+                      <p className="text-gray-400 line-through truncate mb-1" title={log.oldService}>{log.oldService}</p>
+                      <p className="text-gray-400 line-through">{log.oldStylist}</p>
+                    </div>
+                    <div className="bg-green-950/20 p-3 rounded-xl border border-green-500/10">
+                      <p className="text-green-400 font-bold mb-2 uppercase tracking-widest text-[9px]">修改後 (New) <i className="fa-solid fa-arrow-right"></i></p>
+                      <p className="text-white font-bold mb-1">${log.newAmount}</p>
+                      <p className="text-gray-200 truncate mb-1" title={log.newService}>{log.newService}</p>
+                      <p className="text-gray-200">{log.newStylist}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
