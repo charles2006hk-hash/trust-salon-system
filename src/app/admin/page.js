@@ -107,7 +107,7 @@ export default function AdminHub() {
             </div>
           )}
 
-          {/* 模組 3：CMS 管理 (Admin, Manager, Staff 可見) */}
+          {/* 模組 3：CMS 管理 (Admin, Manager, Staff 可見 - 這裡修復了原先的重複代碼) */}
           {['admin', 'manager', 'staff'].includes(userData.role) && (
             <div onClick={() => router.push('/admin/manage')} className="bg-[#121212] p-8 rounded-[32px] border border-white/5 hover:border-white/30 cursor-pointer transition-all group shadow-xl flex flex-col justify-between h-full">
               <div>
@@ -120,7 +120,7 @@ export default function AdminHub() {
             </div>
           )}
 
-          {/* 🟢 模組 4：我的業績與提成 (給 Admin, Manager, Staff 的個人激勵中心) */}
+          {/* 模組 4：我的業績與提成 (給 Admin, Manager, Staff 的個人激勵中心) */}
           {['admin', 'manager', 'staff'].includes(userData.role) && (
             <div onClick={() => router.push('/admin/my-performance')} className="bg-gradient-to-br from-[#1a1a1a] to-[#080808] p-8 rounded-[32px] border border-[#D4AF37]/30 hover:border-[#D4AF37] cursor-pointer transition-all group shadow-[0_0_30px_rgba(212,175,55,0.1)] relative overflow-hidden flex flex-col justify-between h-full">
               <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
@@ -138,15 +138,17 @@ export default function AdminHub() {
             </div>
           )}
 
-          {/* 模組 3：CMS 管理 (Admin, Manager 可見) */}
-          {['admin', 'manager'].includes(userData.role) && (
-            <div onClick={() => router.push('/admin/manage')} className="bg-[#121212] p-8 rounded-[32px] border border-white/5 hover:border-white/30 cursor-pointer transition-all group shadow-xl flex flex-col justify-between h-full">
+          {/* 🟢 模組 5：全局審計日誌 (絕對機密：僅 Admin 可見) */}
+          {userData.role === 'admin' && (
+            <div onClick={() => router.push('/admin/system-logs')} className="bg-[#121212] p-8 rounded-[32px] border border-white/5 hover:border-purple-500/50 cursor-pointer transition-all group shadow-xl flex flex-col justify-between h-full">
               <div>
-                <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                  <i className="fa-solid fa-sliders text-2xl text-gray-300"></i>
+                <div className="w-16 h-16 rounded-2xl bg-purple-500/10 flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                  <i className="fa-solid fa-user-shield text-2xl text-purple-400"></i>
                 </div>
-                <h3 className="text-lg font-bold text-white mb-2">CMS 資料引擎</h3>
-                <p className="text-xs text-gray-500 leading-relaxed">服務定價、髮型師設定、全局參數與官網行銷活動上架。</p>
+                <h3 className="text-lg font-bold text-white mb-2">全局審計日誌</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  系統安全監控中心。追蹤所有單據修改、帳務異動與敏感操作軌跡。
+                </p>
               </div>
             </div>
           )}
