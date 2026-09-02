@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-// 🟢 新增了 updateDoc 引入
-import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -43,27 +42,54 @@ export default function FinancePage() {
 
   const [selectedStaffDetail, setSelectedStaffDetail] = useState(null);
 
-  // 🟢 新增：錯單修改專用 State
   const [editingTx, setEditingTx] = useState(null);
+  const [originalTx, setOriginalTx] = useState(null); 
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
 
-  // 🟢 新增：執行更新單據的函數
+  // 🟢 執行更新單據的函數 (解鎖：支援修改服務項目)
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
     
-    const toastId = toast.loading("正在覆寫單據資料...");
+    const toastId = toast.loading("正在覆寫單據資料並寫入審計紀錄...");
     setIsUpdatingTx(true);
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
-      await updateDoc(txRef, {
+      
+      const oldItem = originalTx.service || originalTx.packageName || '未指定';
+      const newItem = editingTx.service || editingTx.packageName || '未指定';
+
+      // 📝 建立審計日誌 (Audit Log)，包含金額、設計師、與服務項目的變動
+      const auditLog = {
+        editedAt: new Date().toISOString(),
+        editedBy: currentUserName || 'Admin', 
+        oldAmount: Number(originalTx.amount || 0),
+        newAmount: Number(editingTx.amount || 0),
+        oldStylist: originalTx.stylist || '未指定',
+        newStylist: editingTx.stylist || '未指定',
+        oldService: oldItem,
+        newService: newItem
+      };
+
+      const updatePayload = {
         amount: Number(editingTx.amount),
         stylist: editingTx.stylist || '未指定',
-      });
+        editHistory: arrayUnion(auditLog)
+      };
+
+      // 判斷原單據是套票扣抵還是普通服務，寫入對應欄位
+      if (editingTx.packageName !== undefined) {
+         updatePayload.packageName = editingTx.packageName;
+      } else {
+         updatePayload.service = editingTx.service;
+      }
+
+      await updateDoc(txRef, updatePayload);
       
-      toast.success("✅ 單據修改成功！報表已同步更新。", { id: toastId });
+      toast.success("✅ 單據修改成功！歷史紀錄已永久保存。", { id: toastId });
       setEditingTx(null);
-      fetchFinancialData(); // 重新抓取資料以刷新報表
+      setOriginalTx(null); 
+      fetchFinancialData(); 
     } catch (error) {
       console.error(error);
       toast.error("修改失敗，請檢查網路連線", { id: toastId });
@@ -588,9 +614,12 @@ export default function FinancePage() {
                         {/* 🟢 加入 Admin 專屬的修改按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
-                            {(tx.type === 'deduct' || tx.type === 'walkin_cash') && (
+                            {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') && (
                               <button 
-                                onClick={() => setEditingTx(tx)}
+                                onClick={() => {
+                                  setEditingTx({...tx}); 
+                                  setOriginalTx(tx); // 備份原始狀態寫入 log 用
+                                }}
                                 className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
                               >
                                 <i className="fa-solid fa-pen"></i> 修改
@@ -601,7 +630,7 @@ export default function FinancePage() {
                       </tr>
                     ))}
                     {transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch).length === 0 && (
-                      <tr><td colSpan="6" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
+                      <tr><td colSpan="7" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -704,7 +733,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗 */}
+      {/* 🟢 Admin 專屬錯單編輯彈窗：解鎖服務項目更改 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -714,11 +743,34 @@ export default function FinancePage() {
             <h2 className="text-2xl font-black text-white italic mb-6">Edit <span className="text-blue-500">Transaction</span></h2>
             
             <form onSubmit={handleUpdateTransaction} className="space-y-5">
-              <div className="p-4 bg-white/5 rounded-xl border border-white/5">
-                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">修改單據時間</p>
+              <div className="p-4 bg-white/5 rounded-xl border border-white/5 mb-4">
+                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">單據建立時間</p>
                  <p className="text-sm font-mono text-gray-300">{new Date(editingTx.timestamp).toLocaleString('zh-HK')}</p>
-                 <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-2 mb-1">服務項目 (防呆鎖定)</p>
-                 <p className="text-sm text-gray-300">{editingTx.service || editingTx.packageName}</p>
+              </div>
+
+              {/* 🟢 解鎖：下拉選單選擇正確的服務項目 */}
+              <div className="space-y-1">
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改服務項目</label>
+                <select 
+                  required 
+                  value={editingTx.service || editingTx.packageName || ''} 
+                  onChange={(e) => {
+                    if (editingTx.packageName !== undefined) {
+                        setEditingTx({...editingTx, packageName: e.target.value});
+                    } else {
+                        setEditingTx({...editingTx, service: e.target.value});
+                    }
+                  }}
+                  className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-sm font-bold"
+                >
+                  <option value="" disabled>請選擇正確項目</option>
+                  {servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                  {packagesData.map(p => <option key={p.id} value={p.name}>{p.name} (套票)</option>)}
+                  {/* 防呆：若原項目已被刪除，則保留顯示以免報錯 */}
+                  {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
+                    <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
+                  )}
+                </select>
               </div>
 
               <div className="space-y-1">
@@ -749,7 +801,7 @@ export default function FinancePage() {
                 disabled={isUpdatingTx}
                 className="w-full bg-blue-600 text-white font-black py-4 rounded-xl uppercase tracking-widest text-xs hover:bg-blue-500 transition-all shadow-lg disabled:opacity-50 mt-4"
               >
-                {isUpdatingTx ? '處理中...' : '💾 強制覆寫單據'}
+                {isUpdatingTx ? '處理中...' : '💾 強制覆寫單據並記錄日誌'}
               </button>
             </form>
           </div>
