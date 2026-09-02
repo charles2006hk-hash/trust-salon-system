@@ -23,12 +23,10 @@ export default function AdminLayout({ children }) {
     { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' },
     { id: 'finance', name: '全店財務報表', icon: 'fa-chart-pie', path: '/admin/finance' },
     { id: 'performance', name: '我的業績抽成', icon: 'fa-chart-simple', path: '/admin/my-performance' },
-    // 🟢 新增：全局審計日誌模組 (僅限 Admin)
     { id: 'system-logs', name: '全局審計日誌', icon: 'fa-user-shield', path: '/admin/system-logs' } 
   ];
 
   const ROLE_PERMISSIONS = {
-    // 🟢 Admin 開通 system-logs 權限
     admin: ['pos', 'manage', 'users', 'finance', 'performance', 'system-logs'], 
     manager: ['pos', 'manage', 'users', 'finance', 'performance'], 
     staff: ['pos', 'performance'],                     
@@ -82,12 +80,17 @@ export default function AdminLayout({ children }) {
   const allowedModules = ALL_MODULES.filter(module => allowedModuleIds.includes(module.id));
   const allowedPaths = allowedModules.map(m => m.path);
 
+  
+  // 🟢 依角色分流：老闆與經理留首頁，前台與員工直達 POS 收銀台
   if (pathname === '/admin') {
-    router.replace(allowedPaths[0] || '/dashboard');
-    return null;
+    if (userData.role === 'staff' || userData.role === 'reception') {
+      router.replace('/admin/pos');
+      return null;
+    }
   }
-
-  const hasPermission = allowedPaths.some(path => pathname.startsWith(path));
+  
+  // 🟢 核心修改：允許訪問 `/admin` 根目錄 (顯示九宮格首頁)，以及允許的子路由
+  const hasPermission = pathname === '/admin' || allowedPaths.some(path => pathname.startsWith(path));
   
   if (!hasPermission) {
     setTimeout(() => { router.replace(allowedPaths[0] || '/dashboard'); }, 1500);
@@ -113,34 +116,43 @@ export default function AdminLayout({ children }) {
            <i className="fa-solid fa-xmark text-xl"></i>
         </button>
 
-        <div className="p-6 border-b border-white/5 flex items-center gap-4 mt-2 md:mt-0">
-          <div className="w-12 h-12 rounded-xl bg-black border border-[#D4AF37]/30 flex items-center justify-center p-1.5 shadow-[0_0_15px_rgba(212,175,55,0.15)] shrink-0">
+        <Link href="/admin" onClick={() => setIsSidebarOpen(false)} className="p-6 border-b border-white/5 flex items-center gap-4 mt-2 md:mt-0 cursor-pointer hover:bg-white/5 transition-colors group">
+          <div className="w-12 h-12 rounded-xl bg-black border border-[#D4AF37]/30 flex items-center justify-center p-1.5 shadow-[0_0_15px_rgba(212,175,55,0.15)] shrink-0 group-hover:border-[#D4AF37] transition-colors">
             <img src="/images/logo-royal.png" alt="TRUST Logo" className="w-full h-full object-contain" />
           </div>
           <div className="flex flex-col overflow-hidden">
-            <h2 className="text-lg font-black text-white tracking-widest italic truncate">TRUST<span className="text-[#D4AF37] not-italic">.</span>OS</h2>
+            <h2 className="text-lg font-black text-white tracking-widest italic truncate group-hover:text-[#D4AF37] transition-colors">TRUST<span className="text-[#D4AF37] not-italic">.</span>OS</h2>
             <p className="text-[9px] text-[#D4AF37] uppercase tracking-[0.3em] font-bold truncate">Salon System</p>
           </div>
-        </div>
+        </Link>
         
         <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar">
           <p className="text-[10px] font-bold text-gray-600 uppercase tracking-widest px-4 mb-4 mt-4">Modules</p>
           
+          {/* 🟢 新增：返回首頁按鈕，讓在子頁面的人隨時可以回九宮格 */}
+          <Link href="/admin" onClick={() => setIsSidebarOpen(false)}
+            className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${
+              pathname === '/admin' ? 'bg-[#D4AF37] text-black shadow-lg shadow-[#D4AF37]/20' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+            }`}>
+            <i className={`fa-solid fa-house w-5 text-center ${pathname === '/admin' ? 'text-black' : 'text-[#D4AF37]'}`}></i>
+            返回系統首頁
+          </Link>
+
+          <div className="my-2 border-t border-white/5 mx-4"></div>
+
           {allowedModules.map(item => {
             const isActive = pathname.startsWith(item.path);
-            
-            // 🟢 針對 System Logs 給予特別的紫色高亮樣式
             const isSystemLogs = item.id === 'system-logs';
             
             return (
               <Link key={item.id} href={item.path} onClick={() => setIsSidebarOpen(false)}
                 className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${
                   isActive 
-                    ? (isSystemLogs ? 'bg-purple-500/20 text-purple-400 border-l-4 border-purple-500 shadow-lg shadow-purple-500/10' : 'bg-[#D4AF37] text-black shadow-lg shadow-[#D4AF37]/20') 
+                    ? (isSystemLogs ? 'bg-purple-500/20 text-purple-400 border-l-4 border-purple-500 shadow-lg shadow-purple-500/10' : 'bg-[#D4AF37]/20 text-[#D4AF37] border-l-4 border-[#D4AF37]') 
                     : 'text-gray-400 hover:bg-white/5 hover:text-white'
                 }`}>
                 <i className={`fa-solid ${item.icon} w-5 text-center ${
-                  isActive ? (isSystemLogs ? 'text-purple-400' : 'text-black') : (isSystemLogs ? 'text-purple-500/50' : 'text-[#D4AF37]')
+                  isActive ? (isSystemLogs ? 'text-purple-400' : 'text-[#D4AF37]') : (isSystemLogs ? 'text-purple-500/50' : 'text-gray-500')
                 }`}></i>
                 {item.name}
               </Link>
