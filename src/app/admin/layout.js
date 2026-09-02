@@ -22,11 +22,14 @@ export default function AdminLayout({ children }) {
     { id: 'manage', name: '資料管理 (CMS)', icon: 'fa-sliders', path: '/admin/manage' },
     { id: 'users', name: '用戶與權限', icon: 'fa-users-gear', path: '/admin/users' },
     { id: 'finance', name: '全店財務報表', icon: 'fa-chart-pie', path: '/admin/finance' },
-    { id: 'performance', name: '我的業績抽成', icon: 'fa-chart-simple', path: '/admin/my-performance' } 
+    { id: 'performance', name: '我的業績抽成', icon: 'fa-chart-simple', path: '/admin/my-performance' },
+    // 🟢 新增：全局審計日誌模組 (僅限 Admin)
+    { id: 'system-logs', name: '全局審計日誌', icon: 'fa-user-shield', path: '/admin/system-logs' } 
   ];
 
   const ROLE_PERMISSIONS = {
-    admin: ['pos', 'manage', 'users', 'finance', 'performance'], 
+    // 🟢 Admin 開通 system-logs 權限
+    admin: ['pos', 'manage', 'users', 'finance', 'performance', 'system-logs'], 
     manager: ['pos', 'manage', 'users', 'finance', 'performance'], 
     staff: ['pos', 'performance'],                     
     reception: ['pos', 'users']                                  
@@ -110,10 +113,8 @@ export default function AdminLayout({ children }) {
            <i className="fa-solid fa-xmark text-xl"></i>
         </button>
 
-        {/* ✨ 升級版 Sidebar Header：Logo + 系統名稱 */}
         <div className="p-6 border-b border-white/5 flex items-center gap-4 mt-2 md:mt-0">
           <div className="w-12 h-12 rounded-xl bg-black border border-[#D4AF37]/30 flex items-center justify-center p-1.5 shadow-[0_0_15px_rgba(212,175,55,0.15)] shrink-0">
-            {/* 🛑 請確認這張圖片存在於 public/images/logo-royal.png */}
             <img src="/images/logo-royal.png" alt="TRUST Logo" className="w-full h-full object-contain" />
           </div>
           <div className="flex flex-col overflow-hidden">
@@ -127,10 +128,20 @@ export default function AdminLayout({ children }) {
           
           {allowedModules.map(item => {
             const isActive = pathname.startsWith(item.path);
+            
+            // 🟢 針對 System Logs 給予特別的紫色高亮樣式
+            const isSystemLogs = item.id === 'system-logs';
+            
             return (
               <Link key={item.id} href={item.path} onClick={() => setIsSidebarOpen(false)}
-                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${isActive ? 'bg-[#D4AF37] text-black shadow-lg shadow-[#D4AF37]/20' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
-                <i className={`fa-solid ${item.icon} w-5 text-center ${isActive ? 'text-black' : 'text-[#D4AF37]'}`}></i>
+                className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm font-bold transition-all ${
+                  isActive 
+                    ? (isSystemLogs ? 'bg-purple-500/20 text-purple-400 border-l-4 border-purple-500 shadow-lg shadow-purple-500/10' : 'bg-[#D4AF37] text-black shadow-lg shadow-[#D4AF37]/20') 
+                    : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                }`}>
+                <i className={`fa-solid ${item.icon} w-5 text-center ${
+                  isActive ? (isSystemLogs ? 'text-purple-400' : 'text-black') : (isSystemLogs ? 'text-purple-500/50' : 'text-[#D4AF37]')
+                }`}></i>
                 {item.name}
               </Link>
             );
@@ -154,7 +165,6 @@ export default function AdminLayout({ children }) {
       </aside>
 
       <main className="flex-1 h-screen overflow-y-auto relative bg-[#080808]">
-         {/* ✨ 升級版 Mobile Sticky Header */}
          <div className="md:hidden bg-[#121212]/95 backdrop-blur-md p-4 flex justify-between items-center border-b border-white/5 sticky top-0 z-30 shadow-lg">
             <div className="flex items-center gap-4">
               <button onClick={() => setIsSidebarOpen(true)} className="text-gray-400 hover:text-[#D4AF37] text-xl transition-colors">
