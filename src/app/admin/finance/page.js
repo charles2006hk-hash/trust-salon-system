@@ -46,7 +46,7 @@ export default function FinancePage() {
   const [originalTx, setOriginalTx] = useState(null); 
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
 
-  // 🟢 執行更新單據的函數 (解鎖：支援修改服務項目)
+  // 🟢 執行更新單據的函數 (解鎖：支援修改服務項目與助手獎金)
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
@@ -56,15 +56,20 @@ export default function FinancePage() {
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
       
-      const oldItem = originalTx.service || originalTx.packageName || '未指定';
-      const newItem = editingTx.service || editingTx.packageName || '未指定';
+      const isBonus = editingTx.type === 'assistant_bonus';
+      
+      const oldAmount = isBonus ? Number(originalTx.bonusAmount || 0) : Number(originalTx.amount || 0);
+      const newAmount = isBonus ? Number(editingTx.bonusAmount || 0) : Number(editingTx.amount || 0);
+      
+      const oldItem = isBonus ? '🤝 助手特別獎金' : (originalTx.service || originalTx.packageName || '未指定');
+      const newItem = isBonus ? '🤝 助手特別獎金' : (editingTx.service || editingTx.packageName || '未指定');
 
-      // 📝 建立審計日誌 (Audit Log)，包含金額、設計師、與服務項目的變動
+      // 📝 建立審計日誌 (Audit Log)
       const auditLog = {
         editedAt: new Date().toISOString(),
         editedBy: currentUserName || 'Admin', 
-        oldAmount: Number(originalTx.amount || 0),
-        newAmount: Number(editingTx.amount || 0),
+        oldAmount: oldAmount,
+        newAmount: newAmount,
         oldStylist: originalTx.stylist || '未指定',
         newStylist: editingTx.stylist || '未指定',
         oldService: oldItem,
@@ -72,16 +77,19 @@ export default function FinancePage() {
       };
 
       const updatePayload = {
-        amount: Number(editingTx.amount),
         stylist: editingTx.stylist || '未指定',
         editHistory: arrayUnion(auditLog)
       };
 
-      // 判斷原單據是套票扣抵還是普通服務，寫入對應欄位
-      if (editingTx.packageName !== undefined) {
-         updatePayload.packageName = editingTx.packageName;
+      if (isBonus) {
+         updatePayload.bonusAmount = newAmount;
       } else {
-         updatePayload.service = editingTx.service;
+         updatePayload.amount = newAmount;
+         if (editingTx.packageName !== undefined) {
+            updatePayload.packageName = editingTx.packageName;
+         } else {
+            updatePayload.service = editingTx.service;
+         }
       }
 
       await updateDoc(txRef, updatePayload);
@@ -611,14 +619,14 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🟢 加入 Admin 專屬的修改按鈕 */}
+                        {/* 🟢 加入 Admin 專屬的修改按鈕 (解鎖助手獎金) */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
-                            {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') && (
+                            {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
                               <button 
                                 onClick={() => {
                                   setEditingTx({...tx}); 
-                                  setOriginalTx(tx); // 備份原始狀態寫入 log 用
+                                  setOriginalTx(tx); 
                                 }}
                                 className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition"
                               >
@@ -733,7 +741,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗：解鎖服務項目更改 */}
+      {/* 🟢 Admin 專屬錯單編輯彈窗：解鎖服務項目與助手獎金更改 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -748,51 +756,60 @@ export default function FinancePage() {
                  <p className="text-sm font-mono text-gray-300">{new Date(editingTx.timestamp).toLocaleString('zh-HK')}</p>
               </div>
 
-              {/* 🟢 解鎖：下拉選單選擇正確的服務項目 */}
-              <div className="space-y-1">
-                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改服務項目</label>
-                <select 
-                  required 
-                  value={editingTx.service || editingTx.packageName || ''} 
-                  onChange={(e) => {
-                    if (editingTx.packageName !== undefined) {
-                        setEditingTx({...editingTx, packageName: e.target.value});
-                    } else {
-                        setEditingTx({...editingTx, service: e.target.value});
-                    }
-                  }}
-                  className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-sm font-bold"
-                >
-                  <option value="" disabled>請選擇正確項目</option>
-                  {servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                  {packagesData.map(p => <option key={p.id} value={p.name}>{p.name} (套票)</option>)}
-                  {/* 防呆：若原項目已被刪除，則保留顯示以免報錯 */}
-                  {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
-                    <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
-                  )}
-                </select>
-              </div>
+              {/* 🟢 如果不是助手獎金，顯示下拉選單選擇服務項目 */}
+              {editingTx.type !== 'assistant_bonus' && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改服務項目</label>
+                  <select 
+                    required 
+                    value={editingTx.service || editingTx.packageName || ''} 
+                    onChange={(e) => {
+                      if (editingTx.packageName !== undefined) {
+                          setEditingTx({...editingTx, packageName: e.target.value});
+                      } else {
+                          setEditingTx({...editingTx, service: e.target.value});
+                      }
+                    }}
+                    className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-sm font-bold"
+                  >
+                    <option value="" disabled>請選擇正確項目</option>
+                    {servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                    {packagesData.map(p => <option key={p.id} value={p.name}>{p.name} (套票)</option>)}
+                    {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
+                      <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
+                    )}
+                  </select>
+                </div>
+              )}
 
+              {/* 🟢 動態切換顯示：結帳金額 或 獎金金額 */}
               <div className="space-y-1">
-                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改結帳金額 (HKD)</label>
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '獎金金額' : '結帳金額'} (HKD)</label>
                 <input 
                   type="number" 
                   required 
-                  value={editingTx.amount || 0} 
-                  onChange={(e) => setEditingTx({...editingTx, amount: e.target.value})}
+                  value={editingTx.type === 'assistant_bonus' ? (editingTx.bonusAmount || 0) : (editingTx.amount || 0)} 
+                  onChange={(e) => {
+                    if (editingTx.type === 'assistant_bonus') {
+                      setEditingTx({...editingTx, bonusAmount: e.target.value});
+                    } else {
+                      setEditingTx({...editingTx, amount: e.target.value});
+                    }
+                  }}
                   className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-lg font-mono font-bold" 
                 />
               </div>
 
+              {/* 🟢 動態切換顯示：助手名稱 或 負責設計師 */}
               <div className="space-y-1">
-                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改負責設計師</label>
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '助手名稱' : '負責設計師'}</label>
                 <input 
                   type="text" 
                   required 
                   value={editingTx.stylist || ''} 
                   onChange={(e) => setEditingTx({...editingTx, stylist: e.target.value})}
                   className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500" 
-                  placeholder="輸入正確的設計師名字"
+                  placeholder={editingTx.type === 'assistant_bonus' ? "輸入正確的助手名字" : "輸入正確的設計師名字"}
                 />
               </div>
 
