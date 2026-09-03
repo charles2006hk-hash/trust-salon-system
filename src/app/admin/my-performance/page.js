@@ -14,7 +14,6 @@ export default function StaffPerformancePage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
   const [serviceMapContext, setServiceMapContext] = useState({}); 
 
-  // 🟢 權限擴充：讓 Admin 可以選擇目標員工
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
 
@@ -40,9 +39,8 @@ export default function StaffPerformancePage() {
           if (userSnap.exists()) {
             const userData = userSnap.data();
             setCurrentUser({ uid: user.uid, ...userData });
-            setTargetStaff(userData.name); // 預設查看自己
+            setTargetStaff(userData.name);
 
-            // 🔒 嚴格安全性修正：只有老闆 (Admin) 才能抓取名單並切換員工
             if (userData.role === 'admin') {
                const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
                const staffSnap = await getDocs(staffQ);
@@ -66,7 +64,6 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
-  // 🟢 監聽：當月份或目標員工改變時，重新計算
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
       fetchMyTransactions(targetStaff, serviceMapContext, selectedMonth);
@@ -209,7 +206,6 @@ export default function StaffPerformancePage() {
   if (loading && !currentUser) return <div className="p-10 text-[#D4AF37] bg-[#080808] min-h-screen font-bold tracking-widest text-sm">載入您的尊爵業績數據中...</div>;
   if (!currentUser) return <div className="p-10 text-red-500 bg-[#080808] min-h-screen">請先登入系統。</div>;
 
-  // 🔒 嚴格安全性判斷：唯有 Admin 才能擁有上帝視角
   const isAdmin = currentUser.role === 'admin';
 
   return (
@@ -232,7 +228,6 @@ export default function StaffPerformancePage() {
         
         <div className="flex flex-col items-end gap-3">
           <div className="flex gap-2">
-            {/* 🔒 只有老闆 (Admin) 看得見切換器 */}
             {isAdmin && staffList.length > 0 && (
               <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
                 <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
@@ -379,8 +374,9 @@ export default function StaffPerformancePage() {
                       </td>
                       <td className="p-5">
                         <div className="flex flex-col gap-1">
-                          <span className="text-sm text-gray-200">
-                            {tx.service || '未知項目'}
+                          {/* 🌟 核心修正：強制覆寫助手服務名稱 */}
+                          <span className={`text-sm ${tx.type === 'assistant_bonus' ? 'text-[#D4AF37] font-bold' : 'text-gray-200'}`}>
+                            {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || '未知項目')}
                           </span>
                           <div className="flex gap-2 items-center">
                             {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
