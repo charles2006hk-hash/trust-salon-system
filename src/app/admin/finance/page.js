@@ -6,8 +6,6 @@ import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arr
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
-
-// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 同步
 import { calculateStaffCommissions } from '@/lib/finance';
 
 export default function FinancePage() {
@@ -187,7 +185,6 @@ export default function FinancePage() {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
     
-    // 建立服務對應表供引擎使用
     const serviceMap = {};
     servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
     packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
@@ -195,7 +192,7 @@ export default function FinancePage() {
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
     let stylists = {}; let services = {}; 
     let stylistAggregator = {};
-    const stylistsTxs = {}; // 用於將帳單按設計師分組
+    const stylistsTxs = {}; 
 
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
@@ -206,14 +203,13 @@ export default function FinancePage() {
         const stylistName = tx.stylist || '未指定';
         if (!stylistsTxs[stylistName]) stylistsTxs[stylistName] = [];
         
-        // 修正套票扣點的營業額 (針對財務首頁儀表板產值)
         let normalizedAmount = Number(tx.amount || 0);
         if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
             const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
             normalizedAmount = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
-            tx.amount = normalizedAmount; // 補齊 amount 欄位供引擎使用
+            tx.amount = normalizedAmount; 
           }
         }
         
@@ -228,12 +224,10 @@ export default function FinancePage() {
       }
     });
 
-    // 🚀 呼叫共用核心引擎：逐一結算每個設計師的總薪資
     Object.keys(stylistsTxs).forEach(sName => {
        const sTxs = stylistsTxs[sName];
        const staffDef = staffConfig.find(s => s.name === sName) || { templateName: '無資料 (未綁定)', commissions: {} };
        
-       // 調用與前台完全一致的計算引擎
        const result = calculateStaffCommissions(sTxs, staffDef.commissions || {}, serviceMap, globalLabels);
        
        stylistAggregator[sName] = {
@@ -243,9 +237,8 @@ export default function FinancePage() {
           totalRevenue: result.stats.totalRevenue,
           totalCommission: result.stats.totalCommission,
           clientCount: result.stats.clientCount,
-          dynamicTierStats: result.dynamicTierStats, // 保存階梯狀態供 UI 顯示
+          dynamicTierStats: result.dynamicTierStats, 
           details: result.processedTransactions.map(tx => {
-             // 重組 UI 顯示字串
              let formulaStr = '';
              if (tx.type === 'assistant_bonus') {
                 formulaStr = `店家發放定額獎金 ($${tx.computedCommission})`;
@@ -677,11 +670,11 @@ export default function FinancePage() {
                 <div className="flex flex-wrap gap-6 w-full md:w-auto bg-black/50 p-4 rounded-2xl border border-white/5">
                    <div>
                      <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">創造產值 (Revenue)</p>
-                     <p className="text-xl font-mono text-white">${staff.totalRevenue.toLocaleString()}</p>
+                     <p className="text-xl font-mono text-white">${(staff.totalRevenue || 0).toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6">
                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實得佣金與獎金</p>
-                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${staff.totalCommission.toLocaleString()}</p>
+                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${(staff.totalCommission || 0).toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6 flex items-center">
                       <button onClick={() => setSelectedStaffDetail(staff)} className="bg-white/10 hover:bg-white text-white hover:text-black px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
@@ -712,19 +705,18 @@ export default function FinancePage() {
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
               
-              {/* 🟢 在 Admin 報表中也同步顯示該設計師的動態階梯狀態 */}
               {selectedStaffDetail.dynamicTierStats && (
                 <div className="flex flex-wrap gap-4 mt-4 bg-green-900/20 p-3 rounded-xl border border-green-500/30">
-                  <span className="text-[10px] text-green-400 font-bold">套票客數: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.scalpClientCount}</span></span>
-                  <span className="text-[10px] text-green-400 font-bold">頭皮總績: <span className="text-white text-sm ml-1">${selectedStaffDetail.dynamicTierStats.combinedRevenue}</span></span>
-                  <span className="text-[10px] text-[#D4AF37] font-bold border-l border-green-500/50 pl-4">當前套票: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalScalpPct}%</span></span>
-                  <span className="text-[10px] text-[#D4AF37] font-bold">當前產品: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalProdPct}%</span></span>
+                  <span className="text-[10px] text-green-400 font-bold">套票客數: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.scalpClientCount || 0}</span></span>
+                  <span className="text-[10px] text-green-400 font-bold">頭皮總績: <span className="text-white text-sm ml-1">${(selectedStaffDetail.dynamicTierStats.combinedRevenue || 0).toLocaleString()}</span></span>
+                  <span className="text-[10px] text-[#D4AF37] font-bold border-l border-green-500/50 pl-4">當前套票: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalScalpPct || 25}%</span></span>
+                  <span className="text-[10px] text-[#D4AF37] font-bold">當前產品: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalProdPct || 20}%</span></span>
                 </div>
               )}
             </div>
             
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
-              {selectedStaffDetail.details.length === 0 ? (
+              {(selectedStaffDetail.details || []).length === 0 ? (
                  <p className="text-center text-gray-500 py-10">此月份尚無明細</p>
               ) : (
                 selectedStaffDetail.details.map((item, idx) => (
@@ -751,7 +743,7 @@ export default function FinancePage() {
                     <div className="w-full md:w-32 text-right shrink-0">
                       <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得金額</p>
                       <p className="text-lg font-black text-[#D4AF37] font-mono">
-                        ${item.commission.toLocaleString()}
+                        ${(item.commission || 0).toLocaleString()}
                       </p>
                     </div>
                   </div>
@@ -854,7 +846,7 @@ export default function FinancePage() {
             <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-6">單據修改軌跡紀錄 (由新到舊)</p>
             
             <div className="space-y-4">
-              {viewingHistoryTx.editHistory.slice().reverse().map((log, index) => (
+              {(viewingHistoryTx.editHistory || []).slice().reverse().map((log, index) => (
                 <div key={index} className="p-5 bg-white/5 rounded-2xl border border-white/10 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-1 h-full bg-purple-500/50"></div>
                   
