@@ -6,35 +6,31 @@ import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firesto
 import { onAuthStateChanged } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
+// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 一致
+import { calculateStaffCommissions } from '@/lib/finance'; 
+
 export default function StaffPerformancePage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [myTransactions, setMyTransactions] = useState([]);
   
-  // 🟢 修正：移除了 TypeScript 的 <'month' | 'day'> 避免 JS 編譯崩潰
+  // 日期與篩選狀態
   const [filterType, setFilterType] = useState('month');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  // YYYY-MM-DD
   
   const [serviceMapContext, setServiceMapContext] = useState({}); 
-
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
 
-  const [stats, setStats] = useState({
-    totalRevenue: 0,   
-    totalCommission: 0, 
-    clientCount: 0,
-    wrClientCount: 0,
-    scalpClientCount: 0,
-    productClientCount: 0,
-    averageSpend: 0     
-  });
-
+  // 接收自核心引擎的回傳狀態
+  const [myTransactions, setMyTransactions] = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
+  const [stats, setStats] = useState({ totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
+  const [dynamicTierStats, setDynamicTierStats] = useState({ scalpClientCount: 0, combinedRevenue: 0, finalScalpPct: 25, finalProdPct: 20 });
+  
   const [globalLabels, setGlobalLabels] = useState({});
-  const [myCommissionRules, setMyCommissionRules] = useState({});
 
+  // 1. 初始化使用者與權限
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -45,13 +41,13 @@ export default function StaffPerformancePage() {
             setCurrentUser({ uid: user.uid, ...userData });
             setTargetStaff(userData.name);
 
+            // Admin 取得員工名單
             if (userData.role === 'admin') {
                const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
                const staffSnap = await getDocs(staffQ);
                const names = staffSnap.docs.map(d => d.data().name).filter(Boolean);
                setStaffList([...new Set(names)]);
             }
-            
             await initData();
           } else {
             toast.error("找不到您的員工檔案，請聯繫老闆。");
@@ -68,12 +64,14 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
+  // 2. 監聽變數並觸發數據抓取
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
       fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate);
     }
   }, [filterType, selectedMonth, selectedDate, targetStaff, serviceMapContext]);
 
+  // 3. 抓取全域設定與服務對應表
   const initData = async () => {
     try {
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
@@ -100,6 +98,7 @@ export default function StaffPerformancePage() {
     }
   };
 
+  // 4. 抓取帳單並交給核心引擎計算
   const fetchMyTransactions = async (staffName, serviceMap, currentFilterType, monthStr, dateStr) => {
     setLoading(true);
     try {
@@ -111,31 +110,13 @@ export default function StaffPerformancePage() {
       );
       
       const snap = await getDocs(q);
-      const matchedList = [];
-      
-      let revSum = 0;
-      let commSum = 0;
-      let breakdown = {};
-      
-      let uniqueClients = new Set();
-      let uniqueWR = new Set();
-      let uniqueScalp = new Set();
-      let uniqueProduct = new Set();
+      const targetTxs = [];
 
-      const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
-      const staffConfigSnap = await getDocs(staffConfigQ);
-      let userCommissionsRule = {};
-      
-      if (!staffConfigSnap.empty) {
-        userCommissionsRule = staffConfigSnap.docs[0].data().commissions || {};
-      }
-      setMyCommissionRules(userCommissionsRule);
-
+      // 提取符合該員工與日期的紀錄
       snap.forEach(d => {
         const tx = d.data();
-        
-        // 🟢 日期匹配邏輯：根據切換器決定比對「月份」還是「具體日期」
         let isMatchDate = false;
+        
         if (currentFilterType === 'month') {
            const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
            isMatchDate = (txMonth === monthStr);
@@ -145,68 +126,31 @@ export default function StaffPerformancePage() {
         }
 
         if (tx.stylist && tx.stylist.includes(staffName) && isMatchDate) {
-          matchedList.push({ id: d.id, ...tx });
-          
-          const amount = Number(tx.amount || 0);
-          revSum += amount;
-
-          let code = '未綁定參數';
-          if (tx.type === 'assistant_bonus') {
-             code = 'ASSISTANT_BONUS'; 
-          } else if (tx.service && serviceMap[tx.service]) {
-             code = serviceMap[tx.service];
-          }
-          
-          if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
-             const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`; 
-             uniqueClients.add(ticketId);
-             
-             if (code.startsWith('W') || code.startsWith('R')) uniqueWR.add(ticketId);
-             else if (code === 'SCALP') uniqueScalp.add(ticketId);
-             else if (code.startsWith('P')) uniqueProduct.add(ticketId);
-          }
-
-          let calculatedComm = 0;
-          if (tx.type === 'assistant_bonus') {
-            calculatedComm = Number(tx.bonusAmount || 0);
-          } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
-            calculatedComm = Number(tx.commissionAmount);
-          } else {
-            const rule = userCommissionsRule[code];
-            if (rule) {
-              const deduct = Number(rule.deduct || 0);
-              const percent = Number(rule.percent || 0);
-              if (amount > deduct) {
-                calculatedComm = (amount - deduct) * (percent / 100);
-              }
-            }
-          }
-
-          commSum += calculatedComm;
-
-          if (!breakdown[code]) breakdown[code] = 0;
-          breakdown[code] += amount;
+           targetTxs.push({ id: d.id, ...tx });
         }
       });
 
-      matchedList.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-      
-      setMyTransactions(matchedList);
-      setCategoryBreakdown(breakdown);
-      
-      const safeRevSum = Math.round(revSum);
-      const safeCommSum = Math.round(commSum);
-      const finalClientCount = uniqueClients.size;
+      // 取得員工個人設定的抽成百分比
+      const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
+      const staffConfigSnap = await getDocs(staffConfigQ);
+      let userCommissionsRule = {};
+      if (!staffConfigSnap.empty) {
+        userCommissionsRule = staffConfigSnap.docs[0].data().commissions || {};
+      }
 
-      setStats({
-        totalRevenue: safeRevSum,
-        totalCommission: safeCommSum,
-        clientCount: finalClientCount,
-        wrClientCount: uniqueWR.size,
-        scalpClientCount: uniqueScalp.size,
-        productClientCount: uniqueProduct.size,
-        averageSpend: finalClientCount > 0 ? Math.round(safeRevSum / finalClientCount) : 0
-      });
+      // 🚀 核心邏輯：呼叫共用財務引擎，一秒取得所有完美計算好的階梯式數據
+      const result = calculateStaffCommissions(
+        targetTxs, 
+        userCommissionsRule, 
+        serviceMap, 
+        globalLabels
+      );
+
+      // 將引擎算好的數據綁定到畫面狀態
+      setMyTransactions(result.processedTransactions);
+      setDynamicTierStats(result.dynamicTierStats);
+      setCategoryBreakdown(result.categoryBreakdown);
+      setStats(result.stats);
 
     } catch (error) {
       console.error(error);
@@ -241,7 +185,7 @@ export default function StaffPerformancePage() {
         </div>
         
         <div className="flex flex-col lg:flex-row items-start lg:items-center gap-3">
-          
+          {/* Admin 切換員工下拉選單 */}
           {isAdmin && staffList.length > 0 && (
             <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
               <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
@@ -256,6 +200,7 @@ export default function StaffPerformancePage() {
             </div>
           )}
 
+          {/* 日期統計類型切換 */}
           <div className="flex bg-[#121212] p-1 rounded-xl border border-white/10 shadow-inner">
             <button 
               onClick={() => setFilterType('day')}
@@ -271,6 +216,7 @@ export default function StaffPerformancePage() {
             </button>
           </div>
           
+          {/* 日期選擇器 */}
           <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">
               {filterType === 'month' ? '結算月份' : '結算日期'}
@@ -291,9 +237,42 @@ export default function StaffPerformancePage() {
               />
             )}
           </div>
-
         </div>
       </header>
+
+      {/* ========================================================= */}
+      {/* 🟢 動態階梯激勵狀態面板 (引擎數據綁定) */}
+      {/* ========================================================= */}
+      <section className="mb-6 animate-fade-in bg-gradient-to-br from-green-900/30 to-[#121212] border border-green-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 blur-3xl rounded-full"></div>
+        <h3 className="text-sm font-black text-green-400 mb-3 flex items-center gap-2">
+          <i className="fa-solid fa-leaf"></i> 專屬頭皮/養護階梯獎勵狀態
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 relative z-10">
+           <div>
+             <p className="text-[10px] text-gray-400 uppercase tracking-widest">套票客量</p>
+             <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.scalpClientCount} <span className="text-xs font-normal text-gray-500">位</span></p>
+             <p className="text-[10px] text-green-500 font-bold mt-1">
+               {dynamicTierStats.scalpClientCount >= 2 ? '✅ 產品基礎提成已達 25%' : '距離升級 25% 還差 ' + (2 - dynamicTierStats.scalpClientCount) + ' 位'}
+             </p>
+           </div>
+           <div>
+             <p className="text-[10px] text-gray-400 uppercase tracking-widest">頭皮總業績 (套票+產品)</p>
+             <p className="text-xl font-bold font-mono text-white"><span className="text-xs text-gray-500">$</span>{dynamicTierStats.combinedRevenue.toLocaleString()}</p>
+             <p className="text-[10px] text-green-500 font-bold mt-1">
+               距離下次加成 (+5%) 還差 ${(10000 - (dynamicTierStats.combinedRevenue % 10000)).toLocaleString()}
+             </p>
+           </div>
+           <div className="bg-black/40 p-2 rounded-lg border border-white/5 text-center">
+             <p className="text-[10px] text-gray-500 uppercase">當前套票結算 %</p>
+             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalScalpPct}%</p>
+           </div>
+           <div className="bg-black/40 p-2 rounded-lg border border-white/5 text-center">
+             <p className="text-[10px] text-gray-500 uppercase">當前產品結算 %</p>
+             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalProdPct}%</p>
+           </div>
+        </div>
+      </section>
 
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8 animate-fade-in" style={{ animationDelay: '0.1s' }}>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all flex flex-col justify-between">
@@ -310,7 +289,6 @@ export default function StaffPerformancePage() {
             <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalRevenue.toLocaleString()}</p>
           </div>
         </div>
-        
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
           <div>
@@ -323,7 +301,6 @@ export default function StaffPerformancePage() {
              <span className="text-[9px] text-gray-400">Prod: <span className="text-white font-bold">{stats.productClientCount}</span></span>
           </div>
         </div>
-
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">🎯</div>
           <div>
@@ -347,7 +324,10 @@ export default function StaffPerformancePage() {
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
                     <div className="relative z-10">
                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1 truncate">
-                         {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : code === '未綁定參數' ? '⚠️ 未綁定參數' : `${code} - ${globalLabels[code] || '未知標籤'}`}
+                         {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : 
+                          code === 'SCALP_PROD' ? '🌱 頭皮產品' : 
+                          code === '未綁定參數' ? '⚠️ 未綁定參數' : 
+                          `${code} - ${globalLabels[code] || '未知標籤'}`}
                        </p>
                        <p className="text-xl font-black text-white font-mono tracking-tighter">
                          <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(Number(amount)).toLocaleString()}
@@ -386,20 +366,6 @@ export default function StaffPerformancePage() {
               </thead>
               <tbody className="text-sm font-medium">
                 {myTransactions.map(tx => {
-                  const amt = Number(tx.amount || 0);
-                  
-                  let comm = 0;
-                  if (tx.type === 'assistant_bonus') {
-                     comm = Number(tx.bonusAmount || 0);
-                  } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
-                     comm = Number(tx.commissionAmount);
-                  } else {
-                     const rule = myCommissionRules[serviceMapContext[tx.service] || 'W1'];
-                     if (rule && amt > Number(rule.deduct || 0)) {
-                       comm = (amt - Number(rule.deduct || 0)) * (Number(rule.percent || 0) / 100);
-                     }
-                  }
-                  
                   return (
                     <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.01] transition-colors">
                       <td className="p-5 text-xs text-gray-400 font-mono">
@@ -418,17 +384,20 @@ export default function StaffPerformancePage() {
                           <span className={`text-sm ${tx.type === 'assistant_bonus' ? 'text-[#D4AF37] font-bold' : 'text-gray-200'}`}>
                             {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || '未知項目')}
                           </span>
-                          <div className="flex gap-2 items-center">
+                          <div className="flex gap-2 items-center mt-0.5">
                             {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
-                            {tx.type === 'deduct_package' && <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/30 uppercase">扣抵套票 (-{tx.deductedGrids}格)</span>}
+                            {/* 標籤顯示引擎算出來的專屬 % */}
+                            {tx.computedCode === 'SCALP' && <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 uppercase font-mono">套票 {dynamicTierStats.finalScalpPct}%</span>}
+                            {tx.computedCode === 'SCALP_PROD' && <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded border border-teal-500/30 uppercase font-mono">產品 {dynamicTierStats.finalProdPct}%</span>}
                           </div>
                         </div>
                       </td>
                       <td className="p-5 text-white font-bold font-mono">
-                        ${Math.round(amt).toLocaleString()}
+                        ${Math.round(Number(tx.amount || 0)).toLocaleString()}
                       </td>
                       <td className="p-5 text-[#D4AF37] font-black font-mono text-right">
-                        ${Math.round(comm).toLocaleString()}
+                        {/* ✅ 直接引用引擎計算完並修正過浮點數精度的提成結果 */}
+                        ${Math.round(tx.computedCommission || 0).toLocaleString()}
                       </td>
                     </tr>
                   );
