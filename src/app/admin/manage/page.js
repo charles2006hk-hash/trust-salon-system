@@ -7,6 +7,23 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
+// ★ 定義 UI 強制排序規則，確保前 12 個標籤永遠維持熟悉的 3x4 網格佈局
+const PREFERRED_ORDER = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'];
+
+// ★ 排序函式：優先按照 PREFERRED_ORDER 排序，不在清單內的自訂標籤放後面並按字母排序
+const getSortedCodes = (labelsObj) => {
+  const keys = Object.keys(labelsObj || {});
+  return keys.sort((a, b) => {
+    const indexA = PREFERRED_ORDER.indexOf(a);
+    const indexB = PREFERRED_ORDER.indexOf(b);
+    
+    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+    if (indexA !== -1) return -1;
+    if (indexB !== -1) return 1;
+    return a.localeCompare(b);
+  });
+};
+
 export default function AdminManagePage() {
   const [activeTab, setActiveTab] = useState('services'); 
   const [list, setList] = useState([]);
@@ -26,7 +43,6 @@ export default function AdminManagePage() {
   const [expandedGroups, setExpandedGroups] = useState({});
   const router = useRouter();
 
-  // ★ 新增：自訂標籤的表單狀態
   const [newLabelCode, setNewLabelCode] = useState('');
   const [newLabelName, setNewLabelName] = useState('');
 
@@ -175,14 +191,13 @@ export default function AdminManagePage() {
 
       let dataToSave = { ...formData };
       
-      // ★ 支援動態標籤：不再硬性檢查 validCodes，改為依據 globalLabels 的 keys 來判斷
       const dynamicValidCodes = Object.keys(globalLabels);
       
       if (activeTab === 'packages') {
         dataToSave.commissionCode = 'SCALP';
       } else if (activeTab === 'services') {
         if (!dynamicValidCodes.includes(dataToSave.commissionCode)) {
-           dataToSave.commissionCode = 'W1'; // fallback
+           dataToSave.commissionCode = 'W1'; 
         }
       }
 
@@ -211,7 +226,6 @@ export default function AdminManagePage() {
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
   };
 
-  // ★ 新增標籤函數
   const handleAddLabel = () => {
     if (!newLabelCode || !newLabelName) return toast.error("請輸入代碼與名稱！");
     const upperCode = newLabelCode.toUpperCase().trim();
@@ -226,7 +240,6 @@ export default function AdminManagePage() {
     toast.success("標籤已加入清單，請記得點擊最下方【儲存全局設定】");
   };
 
-  // ★ 刪除標籤函數
   const handleRemoveLabel = (code) => {
     if (Object.keys(defaultLabels).includes(code)) {
       return toast.error("系統預設標籤無法刪除！");
@@ -287,10 +300,9 @@ export default function AdminManagePage() {
     setFormData({ ...formData, title: formData.title + emoji });
   };
 
-  // ★ 讓矩陣編輯器支援動態提取的標籤清單
+  // ★ 矩陣編輯器：強制先以 3x4 網格順序排版
   const renderMatrixEditor = () => {
-    // 從 globalLabels 動態提取所有鍵值
-    const dynamicCodes = Object.keys(globalLabels);
+    const sortedCodes = getSortedCodes(globalLabels);
     
     return (
       <div className="col-span-2 pt-6 border-t border-gray-800">
@@ -299,7 +311,7 @@ export default function AdminManagePage() {
           <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {dynamicCodes.map(code => (
+          {sortedCodes.map(code => (
             <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
                  <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
@@ -415,7 +427,6 @@ export default function AdminManagePage() {
                       <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤庫 (動態擴充)</h3>
                       <p className="text-xs text-gray-400 mb-4">您可以隨時新增或修改標籤，供服務定價與拆帳矩陣使用。</p>
                       
-                      {/* ★ 動態標籤新增區塊 */}
                       <div className="flex flex-wrap gap-2 mb-6 bg-blue-900/20 p-4 rounded-xl border border-blue-800/50 items-end">
                          <div className="flex-1">
                            <label className="text-[10px] text-blue-400 uppercase font-bold">新標籤代碼 (如 SCALP_PROD)</label>
@@ -430,9 +441,9 @@ export default function AdminManagePage() {
                          </button>
                       </div>
 
-                      {/* 動態渲染目前所有的標籤 */}
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {Object.keys(formData.commissionLabels || globalLabels).map(code => (
+                        {/* ★ 改用強制排序的 getSortedCodes */}
+                        {getSortedCodes(formData.commissionLabels || globalLabels).map(code => (
                           <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5 relative group">
                             <label className="text-[10px] font-bold text-gray-500 uppercase">{code} 標籤名稱</label>
                             <input 
@@ -441,7 +452,6 @@ export default function AdminManagePage() {
                               value={formData.commissionLabels?.[code] !== undefined ? formData.commissionLabels[code] : (defaultLabels[code] || '')} 
                               onChange={e => setFormData({...formData, commissionLabels: {...formData.commissionLabels, [code]: e.target.value}})} 
                             />
-                            {/* 預設標籤防呆不給刪除，只允許刪除自訂標籤 */}
                             {!Object.keys(defaultLabels).includes(code) && (
                               <button 
                                 type="button" 
@@ -482,11 +492,11 @@ export default function AdminManagePage() {
                       </select>
                     </div>
                     
-                    {/* ★ 讓下拉選單也支援動態生成的標籤 */}
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {Object.keys(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
+                        {/* ★ 改用強制排序的 getSortedCodes */}
+                        {getSortedCodes(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
                       </select>
                     </div>
                   </>
