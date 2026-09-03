@@ -7,6 +7,9 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
+// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 同步
+import { calculateStaffCommissions } from '@/lib/finance';
+
 export default function FinancePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -42,14 +45,11 @@ export default function FinancePage() {
 
   const [selectedStaffDetail, setSelectedStaffDetail] = useState(null);
 
-  // 🟢 錯單修改專用 State
   const [editingTx, setEditingTx] = useState(null);
   const [originalTx, setOriginalTx] = useState(null); 
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
-  // 🟢 審計日誌查帳 State
   const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
 
-  // 🟢 執行更新單據的函數 (包含全局寫入與審計紀錄)
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
@@ -66,7 +66,6 @@ export default function FinancePage() {
       const oldItem = isBonus ? '🤝 助手特別獎金' : (originalTx.service || originalTx.packageName || '未指定');
       const newItem = isBonus ? '🤝 助手特別獎金' : (editingTx.service || editingTx.packageName || '未指定');
 
-      // 📝 建立審計日誌 (Audit Log)
       const auditLog = {
         editedAt: new Date().toISOString(),
         editedBy: currentUserName || 'Admin', 
@@ -94,10 +93,8 @@ export default function FinancePage() {
          }
       }
 
-      // 1. 更新單據本身
       await updateDoc(txRef, updatePayload);
 
-      // 2. 寫入「全局審計日誌 (Global Audit Logs)」
       await addDoc(collection(db, 'audit_logs'), {
         module: 'finance_transactions',
         action: 'edit_transaction',
@@ -190,98 +187,91 @@ export default function FinancePage() {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
     
-    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
-    let stylists = {}; let services = {}; let stylistAggregator = {};
+    // 建立服務對應表供引擎使用
+    const serviceMap = {};
+    servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
+    packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
 
-    staffConfig.forEach(staff => {
-      stylistAggregator[staff.name] = { 
-        name: staff.name, 
-        grade: staff.templateName || '自訂比例', 
-        commissionsRule: staff.commissions || {}, 
-        totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [],
-        uniqueClientsSet: new Set() 
-      };
-    });
+    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
+    let stylists = {}; let services = {}; 
+    let stylistAggregator = {};
+    const stylistsTxs = {}; // 用於將帳單按設計師分組
 
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
+      else if (['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus'].includes(tx.type)) {
         const stylistName = tx.stylist || '未指定';
-        if (!stylistAggregator[stylistName]) {
-          stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
-        }
-
-        const staff = stylistAggregator[stylistName];
-        let revenue = 0; let commCode = null; let formulaStr = ""; let commission = 0;
-
-        if (tx.type === 'assistant_bonus') {
-          revenue = 0; 
-          commission = Number(tx.bonusAmount || 0);
-          formulaStr = `店家發放定額獎金 ($${commission})`;
-          commCode = 'BONUS';
-        } 
-        else if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
-          revenue = Number(tx.amount || 0);
-          const serviceItem = servicesData.find(s => s.name === tx.service);
-          commCode = serviceItem ? serviceItem.commissionCode : null;
-          services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
-          
-          if (tx.type === 'deduct') tDollarDeducted += revenue;
-        } 
-        else if (tx.type === 'deduct_package') {
+        if (!stylistsTxs[stylistName]) stylistsTxs[stylistName] = [];
+        
+        // 修正套票扣點的營業額 (針對財務首頁儀表板產值)
+        let normalizedAmount = Number(tx.amount || 0);
+        if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
             const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
-            revenue = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
-            commCode = pkgItem.commissionCode; 
+            normalizedAmount = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
+            tx.amount = normalizedAmount; // 補齊 amount 欄位供引擎使用
           }
         }
-
-        if (tx.type !== 'assistant_bonus') {
-          if (!commCode) {
-              formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
-          } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
-              formulaStr = "該設計師未儲存抽成參數";
-          } else if (staff.commissionsRule[commCode] === undefined) {
-              formulaStr = `該設計師未設定 ${commCode} 參數`;
-          } else {
-              const rule = staff.commissionsRule[commCode];
-              if (revenue > rule.deduct) {
-                commission = (revenue - rule.deduct) * (rule.percent / 100);
-                formulaStr = `($${revenue.toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
-              } else {
-                formulaStr = `實收低於耗材扣款 ($${rule.deduct})`;
-              }
-          }
-        }
-
-        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
-           const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`;
-           staff.uniqueClientsSet.add(ticketId);
-           staff.clientCount = staff.uniqueClientsSet.size;
-        }
-
-        serviceValue += revenue;
-        stylists[stylistName] = (stylists[stylistName] || 0) + revenue;
-
-        staff.totalRevenue += revenue;
-        staff.totalCommission += commission;
         
-        staff.details.push({
-          id: tx.id,
-          date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
-          service: tx.service || tx.packageName,
-          type: tx.type, 
-          commCode: commCode || 'N/A', 
-          revenue: Math.round(revenue), 
-          commission: Math.round(commission), 
-          formulaStr: formulaStr, 
-          branch: tx.branch || '未知門店'
-        });
+        if (tx.type !== 'assistant_bonus') {
+           serviceValue += normalizedAmount;
+           stylists[stylistName] = (stylists[stylistName] || 0) + normalizedAmount;
+           services[tx.service || tx.packageName || '一般服務'] = (services[tx.service || tx.packageName || '一般服務'] || 0) + normalizedAmount;
+           if (tx.type === 'deduct') tDollarDeducted += normalizedAmount;
+        }
+        
+        stylistsTxs[stylistName].push(tx);
       }
+    });
+
+    // 🚀 呼叫共用核心引擎：逐一結算每個設計師的總薪資
+    Object.keys(stylistsTxs).forEach(sName => {
+       const sTxs = stylistsTxs[sName];
+       const staffDef = staffConfig.find(s => s.name === sName) || { templateName: '無資料 (未綁定)', commissions: {} };
+       
+       // 調用與前台完全一致的計算引擎
+       const result = calculateStaffCommissions(sTxs, staffDef.commissions || {}, serviceMap, globalLabels);
+       
+       stylistAggregator[sName] = {
+          name: sName,
+          grade: staffDef.templateName || '自訂比例',
+          commissionsRule: staffDef.commissions || {},
+          totalRevenue: result.stats.totalRevenue,
+          totalCommission: result.stats.totalCommission,
+          clientCount: result.stats.clientCount,
+          dynamicTierStats: result.dynamicTierStats, // 保存階梯狀態供 UI 顯示
+          details: result.processedTransactions.map(tx => {
+             // 重組 UI 顯示字串
+             let formulaStr = '';
+             if (tx.type === 'assistant_bonus') {
+                formulaStr = `店家發放定額獎金 ($${tx.computedCommission})`;
+             } else if (tx.computedCode === 'SCALP') {
+                formulaStr = `動態階梯算法 (套票 ${result.dynamicTierStats.finalScalpPct}%)`;
+             } else if (tx.computedCode === 'SCALP_PROD') {
+                formulaStr = `動態階梯算法 (產品 ${result.dynamicTierStats.finalProdPct}%)`;
+             } else {
+                const rule = (staffDef.commissions || {})[tx.computedCode];
+                if (!rule) formulaStr = `未設定 ${tx.computedCode} 參數`;
+                else formulaStr = `($${Number(tx.amount||0).toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
+             }
+             
+             return {
+               id: tx.id,
+               date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
+               service: tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || tx.packageName),
+               type: tx.type, 
+               commCode: tx.computedCode || 'N/A', 
+               revenue: tx.type === 'assistant_bonus' ? 0 : Math.round(Number(tx.amount||0)), 
+               commission: Math.round(tx.computedCommission), 
+               formulaStr: formulaStr, 
+               branch: tx.branch || '未知門店'
+             }
+          })
+       };
     });
 
     setMetrics({ 
@@ -294,11 +284,7 @@ export default function FinancePage() {
     setStylistRanking(Object.entries(stylists).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
     setServiceRanking(Object.entries(services).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
 
-    const report = Object.values(stylistAggregator).map(s => ({
-      ...s,
-      totalRevenue: Math.round(s.totalRevenue),
-      totalCommission: Math.round(s.totalCommission)
-    })).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    const report = Object.values(stylistAggregator).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
     
     setPayrollReport(report);
   };
@@ -597,7 +583,6 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right">變動金額</th>
-                      {/* 🟢 Admin 專屬表頭 */}
                       {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
@@ -626,7 +611,7 @@ export default function FinancePage() {
                         <td className="py-4 text-gray-400">
                           {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
                             <span className="flex items-center gap-2">
-                              {tx.service || tx.packageName} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
+                              {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || tx.packageName)} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
                         </td>
@@ -634,7 +619,6 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🟢 加入 Admin 專屬的修改按鈕與查帳按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-2">
@@ -727,7 +711,18 @@ export default function FinancePage() {
                 <span className="text-sm font-bold text-gray-300">人員姓名：{selectedStaffDetail.name}</span>
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
+              
+              {/* 🟢 在 Admin 報表中也同步顯示該設計師的動態階梯狀態 */}
+              {selectedStaffDetail.dynamicTierStats && (
+                <div className="flex flex-wrap gap-4 mt-4 bg-green-900/20 p-3 rounded-xl border border-green-500/30">
+                  <span className="text-[10px] text-green-400 font-bold">套票客數: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.scalpClientCount}</span></span>
+                  <span className="text-[10px] text-green-400 font-bold">頭皮總績: <span className="text-white text-sm ml-1">${selectedStaffDetail.dynamicTierStats.combinedRevenue}</span></span>
+                  <span className="text-[10px] text-[#D4AF37] font-bold border-l border-green-500/50 pl-4">當前套票: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalScalpPct}%</span></span>
+                  <span className="text-[10px] text-[#D4AF37] font-bold">當前產品: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalProdPct}%</span></span>
+                </div>
+              )}
             </div>
+            
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
               {selectedStaffDetail.details.length === 0 ? (
                  <p className="text-center text-gray-500 py-10">此月份尚無明細</p>
@@ -767,7 +762,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗：支援修改服務、助手獎金 */}
+      {/* 🟢 Admin 專屬錯單編輯彈窗 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -848,7 +843,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬：審計查帳彈窗 (Audit History Modal) */}
+      {/* 🟢 Admin 專屬：審計查帳彈窗 */}
       {viewingHistoryTx && (
         <div className="fixed inset-0 bg-black/90 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[32px] p-8 border border-purple-500/30 shadow-2xl relative animate-fade-in">
