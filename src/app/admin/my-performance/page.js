@@ -6,7 +6,7 @@ import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firesto
 import { onAuthStateChanged } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
-// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 一致
+// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 同步
 import { calculateStaffCommissions } from '@/lib/finance'; 
 
 export default function StaffPerformancePage() {
@@ -22,15 +22,28 @@ export default function StaffPerformancePage() {
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
 
-  // 接收自核心引擎的回傳狀態
+  // 接收自核心引擎的回傳狀態 (加入預設值防呆，避免 undefined 崩潰)
   const [myTransactions, setMyTransactions] = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState({});
-  const [stats, setStats] = useState({ totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
-  const [dynamicTierStats, setDynamicTierStats] = useState({ scalpClientCount: 0, combinedRevenue: 0, finalScalpPct: 25, finalProdPct: 20 });
+  const [stats, setStats] = useState({ 
+    totalRevenue: 0, 
+    totalCommission: 0, 
+    clientCount: 0, 
+    wrClientCount: 0, 
+    scalpClientCount: 0, 
+    productClientCount: 0, 
+    averageSpend: 0 
+  });
+  const [dynamicTierStats, setDynamicTierStats] = useState({ 
+    scalpClientCount: 0, 
+    combinedRevenue: 0, 
+    finalScalpPct: 25, 
+    finalProdPct: 20 
+  });
   
   const [globalLabels, setGlobalLabels] = useState({});
+  const [myCommissionRules, setMyCommissionRules] = useState({});
 
-  // 1. 初始化使用者與權限
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -64,14 +77,12 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
-  // 2. 監聽變數並觸發數據抓取
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
       fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate);
     }
   }, [filterType, selectedMonth, selectedDate, targetStaff, serviceMapContext]);
 
-  // 3. 抓取全域設定與服務對應表
   const initData = async () => {
     try {
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
@@ -98,7 +109,6 @@ export default function StaffPerformancePage() {
     }
   };
 
-  // 4. 抓取帳單並交給核心引擎計算
   const fetchMyTransactions = async (staffName, serviceMap, currentFilterType, monthStr, dateStr) => {
     setLoading(true);
     try {
@@ -137,6 +147,7 @@ export default function StaffPerformancePage() {
       if (!staffConfigSnap.empty) {
         userCommissionsRule = staffConfigSnap.docs[0].data().commissions || {};
       }
+      setMyCommissionRules(userCommissionsRule);
 
       // 🚀 核心邏輯：呼叫共用財務引擎，一秒取得所有完美計算好的階梯式數據
       const result = calculateStaffCommissions(
@@ -146,11 +157,11 @@ export default function StaffPerformancePage() {
         globalLabels
       );
 
-      // 將引擎算好的數據綁定到畫面狀態
-      setMyTransactions(result.processedTransactions);
-      setDynamicTierStats(result.dynamicTierStats);
-      setCategoryBreakdown(result.categoryBreakdown);
-      setStats(result.stats);
+      // 將引擎算好的數據綁定到畫面狀態 (加入空值防呆保護)
+      setMyTransactions(result.processedTransactions || []);
+      setDynamicTierStats(result.dynamicTierStats || { scalpClientCount: 0, combinedRevenue: 0, finalScalpPct: 25, finalProdPct: 20 });
+      setCategoryBreakdown(result.categoryBreakdown || {});
+      setStats(result.stats || { totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
 
     } catch (error) {
       console.error(error);
@@ -251,25 +262,25 @@ export default function StaffPerformancePage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 relative z-10">
            <div>
              <p className="text-[10px] text-gray-400 uppercase tracking-widest">套票客量</p>
-             <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.scalpClientCount} <span className="text-xs font-normal text-gray-500">位</span></p>
+             <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.scalpClientCount || 0} <span className="text-xs font-normal text-gray-500">位</span></p>
              <p className="text-[10px] text-green-500 font-bold mt-1">
-               {dynamicTierStats.scalpClientCount >= 2 ? '✅ 產品基礎提成已達 25%' : '距離升級 25% 還差 ' + (2 - dynamicTierStats.scalpClientCount) + ' 位'}
+               {dynamicTierStats.scalpClientCount >= 2 ? '✅ 產品基礎提成已達 25%' : '距離升級 25% 還差 ' + (2 - (dynamicTierStats.scalpClientCount || 0)) + ' 位'}
              </p>
            </div>
            <div>
              <p className="text-[10px] text-gray-400 uppercase tracking-widest">頭皮總業績 (套票+產品)</p>
-             <p className="text-xl font-bold font-mono text-white"><span className="text-xs text-gray-500">$</span>{dynamicTierStats.combinedRevenue.toLocaleString()}</p>
+             <p className="text-xl font-bold font-mono text-white"><span className="text-xs text-gray-500">$</span>{(dynamicTierStats.combinedRevenue || 0).toLocaleString()}</p>
              <p className="text-[10px] text-green-500 font-bold mt-1">
-               距離下次加成 (+5%) 還差 ${(10000 - (dynamicTierStats.combinedRevenue % 10000)).toLocaleString()}
+               距離下次加成 (+5%) 還差 ${(10000 - ((dynamicTierStats.combinedRevenue || 0) % 10000)).toLocaleString()}
              </p>
            </div>
            <div className="bg-black/40 p-2 rounded-lg border border-white/5 text-center">
              <p className="text-[10px] text-gray-500 uppercase">當前套票結算 %</p>
-             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalScalpPct}%</p>
+             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalScalpPct || 25}%</p>
            </div>
            <div className="bg-black/40 p-2 rounded-lg border border-white/5 text-center">
              <p className="text-[10px] text-gray-500 uppercase">當前產品結算 %</p>
-             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalProdPct}%</p>
+             <p className="text-2xl font-black text-[#D4AF37] font-mono">{dynamicTierStats.finalProdPct || 20}%</p>
            </div>
         </div>
       </section>
@@ -279,33 +290,33 @@ export default function StaffPerformancePage() {
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5 group-hover:scale-110 transition-transform">💰</div>
           <div>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{displayDateStr} 實得提成</p>
-            <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalCommission.toLocaleString()}</p>
+            <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{(stats.totalCommission || 0).toLocaleString()}</p>
           </div>
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">📈</div>
           <div>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">創造總營業額 (總大數)</p>
-            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalRevenue.toLocaleString()}</p>
+            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{(stats.totalRevenue || 0).toLocaleString()}</p>
           </div>
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
           <div>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{displayDateStr} 服務總客數</p>
-            <p className="text-3xl font-black text-white font-mono">{stats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
+            <p className="text-3xl font-black text-white font-mono">{stats.clientCount || 0} <span className="text-xs text-gray-500 font-normal">位</span></p>
           </div>
           <div className="flex gap-3 mt-3 pt-3 border-t border-white/10">
-             <span className="text-[9px] text-gray-400">W/R: <span className="text-white font-bold">{stats.wrClientCount}</span></span>
-             <span className="text-[9px] text-gray-400">Scalp: <span className="text-white font-bold">{stats.scalpClientCount}</span></span>
-             <span className="text-[9px] text-gray-400">Prod: <span className="text-white font-bold">{stats.productClientCount}</span></span>
+             <span className="text-[9px] text-gray-400">W/R: <span className="text-white font-bold">{stats.wrClientCount || 0}</span></span>
+             <span className="text-[9px] text-gray-400">Scalp: <span className="text-white font-bold">{stats.scalpClientCount || 0}</span></span>
+             <span className="text-[9px] text-gray-400">Prod: <span className="text-white font-bold">{stats.productClientCount || 0}</span></span>
           </div>
         </div>
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">🎯</div>
           <div>
             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">個人平均客單價</p>
-            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{stats.averageSpend.toLocaleString()}</p>
+            <p className="text-3xl font-black text-white font-mono"><span className="text-sm mr-0.5">$</span>{(stats.averageSpend || 0).toLocaleString()}</p>
           </div>
         </div>
       </section>
@@ -315,10 +326,11 @@ export default function StaffPerformancePage() {
            📊 各項服務大數拆解 (Gross Revenue Breakdown)
          </h3>
          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {Object.keys(categoryBreakdown).length === 0 ? (
+            {/* 🛡️ 這裡加入了 categoryBreakdown || {} 防呆保護，解決您截圖中的報錯 */}
+            {Object.keys(categoryBreakdown || {}).length === 0 ? (
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
-               Object.entries(categoryBreakdown)
+               Object.entries(categoryBreakdown || {})
                  .sort((a, b) => Number(b[1]) - Number(a[1])) 
                  .map(([code, amount]) => (
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
@@ -345,10 +357,10 @@ export default function StaffPerformancePage() {
       <div className="bg-[#121212] rounded-[32px] border border-white/5 overflow-hidden shadow-2xl animate-fade-in" style={{ animationDelay: '0.2s' }}>
         <div className="p-6 border-b border-white/5 bg-black/20 flex justify-between items-center">
            <h3 className="text-sm font-black tracking-widest uppercase text-white"><i className="fa-solid fa-list-check mr-2 text-[#D4AF37]"></i> {displayDateStr} 服務流水對帳單</h3>
-           <p className="text-[10px] text-gray-500 font-mono">共計 {myTransactions.length} 筆項目</p>
+           <p className="text-[10px] text-gray-500 font-mono">共計 {(myTransactions || []).length} 筆項目</p>
         </div>
 
-        {loading && myTransactions.length === 0 ? (
+        {loading && (myTransactions || []).length === 0 ? (
           <div className="text-center py-10 text-[#D4AF37] text-xs font-bold tracking-widest">
             <i className="fa-solid fa-circle-notch fa-spin mr-2"></i>結算中...
           </div>
@@ -365,7 +377,7 @@ export default function StaffPerformancePage() {
                 </tr>
               </thead>
               <tbody className="text-sm font-medium">
-                {myTransactions.map(tx => {
+                {(myTransactions || []).map(tx => {
                   return (
                     <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.01] transition-colors">
                       <td className="p-5 text-xs text-gray-400 font-mono">
@@ -403,7 +415,7 @@ export default function StaffPerformancePage() {
                   );
                 })}
 
-                {myTransactions.length === 0 && !loading && (
+                {(myTransactions || []).length === 0 && !loading && (
                   <tr>
                     <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
                       📭 {targetStaff} 在 {displayDateStr} 尚無結帳服務紀錄。
