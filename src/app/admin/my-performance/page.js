@@ -11,8 +11,8 @@ export default function StaffPerformancePage() {
   const [loading, setLoading] = useState(true);
   const [myTransactions, setMyTransactions] = useState([]);
   
-  // 🟢 新增：統計類型切換與日期狀態
-  const [filterType, setFilterType] = useState<'month' | 'day'>('month');
+  // 🟢 修正：移除了 TypeScript 的 <'month' | 'day'> 避免 JS 編譯崩潰
+  const [filterType, setFilterType] = useState('month');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  // YYYY-MM-DD
   
@@ -68,7 +68,6 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
-  // 🟢 監聽：當過濾類型、日期、目標員工改變時，重新計算
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
       fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate);
@@ -257,7 +256,6 @@ export default function StaffPerformancePage() {
             </div>
           )}
 
-          {/* 🟢 UI 修復：日統計 / 月統計 切換開關 */}
           <div className="flex bg-[#121212] p-1 rounded-xl border border-white/10 shadow-inner">
             <button 
               onClick={() => setFilterType('day')}
@@ -273,7 +271,6 @@ export default function StaffPerformancePage() {
             </button>
           </div>
           
-          {/* 日期選擇器 */}
           <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">
               {filterType === 'month' ? '結算月份' : '結算日期'}
@@ -417,7 +414,7 @@ export default function StaffPerformancePage() {
                       </td>
                       <td className="p-5">
                         <div className="flex flex-col gap-1">
-                          {/* 🌟 核心修正：針對助手獎金強制顯示為「助手服務」 */}
+                          {/* 🌟 強制覆寫助手服務名稱 */}
                           <span className={`text-sm ${tx.type === 'assistant_bonus' ? 'text-[#D4AF37] font-bold' : 'text-gray-200'}`}>
                             {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || '未知項目')}
                           </span>
