@@ -26,6 +26,10 @@ export default function AdminManagePage() {
   const [expandedGroups, setExpandedGroups] = useState({});
   const router = useRouter();
 
+  // ★ 新增：自訂標籤的表單狀態
+  const [newLabelCode, setNewLabelCode] = useState('');
+  const [newLabelName, setNewLabelName] = useState('');
+
   const defaultLabels = {
     W1: '洗剪吹類 (需扣耗材)', W2: '洗剪吹類 (純抽成)', W3: '洗剪吹類 (高階)', 
     R1: '染燙化學類 (需扣耗材)', R2: '染燙化學類 (純抽成)', R3: '染燙化學類 (進階)', 
@@ -111,7 +115,6 @@ export default function AdminManagePage() {
       const data = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
       if (activeTab === 'tiers') data.sort((a, b) => Number(b.threshold) - Number(a.threshold));
-      // 🟢 確保分類 (categories) 也支援依照 sortWeight 自動排序
       if (['services', 'packages', 'categories'].includes(activeTab)) data.sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
       
       if (activeTab === 'settings') {
@@ -171,12 +174,15 @@ export default function AdminManagePage() {
       }
 
       let dataToSave = { ...formData };
+      
+      // ★ 支援動態標籤：不再硬性檢查 validCodes，改為依據 globalLabels 的 keys 來判斷
+      const dynamicValidCodes = Object.keys(globalLabels);
+      
       if (activeTab === 'packages') {
         dataToSave.commissionCode = 'SCALP';
       } else if (activeTab === 'services') {
-        const validCodes = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5'];
-        if (!validCodes.includes(dataToSave.commissionCode)) {
-           dataToSave.commissionCode = 'W1';
+        if (!dynamicValidCodes.includes(dataToSave.commissionCode)) {
+           dataToSave.commissionCode = 'W1'; // fallback
         }
       }
 
@@ -203,6 +209,33 @@ export default function AdminManagePage() {
       if (activeTab === 'templates') fetchTemplates();
       if (activeTab === 'branches') fetchBranches(); 
     } catch (error) { toast.error(error.message || "儲存失敗"); } finally { setLoading(false); }
+  };
+
+  // ★ 新增標籤函數
+  const handleAddLabel = () => {
+    if (!newLabelCode || !newLabelName) return toast.error("請輸入代碼與名稱！");
+    const upperCode = newLabelCode.toUpperCase().trim();
+    if (formData.commissionLabels[upperCode]) return toast.error("此代碼已經存在！");
+    
+    setFormData(prev => ({
+      ...prev,
+      commissionLabels: { ...prev.commissionLabels, [upperCode]: newLabelName.trim() }
+    }));
+    setNewLabelCode('');
+    setNewLabelName('');
+    toast.success("標籤已加入清單，請記得點擊最下方【儲存全局設定】");
+  };
+
+  // ★ 刪除標籤函數
+  const handleRemoveLabel = (code) => {
+    if (Object.keys(defaultLabels).includes(code)) {
+      return toast.error("系統預設標籤無法刪除！");
+    }
+    if (!confirm(`確定要刪除標籤 ${code} 嗎？\n注意：這不會修改已經綁定此標籤的歷史帳單。`)) return;
+
+    const updatedLabels = { ...formData.commissionLabels };
+    delete updatedLabels[code];
+    setFormData(prev => ({ ...prev, commissionLabels: updatedLabels }));
   };
 
   const startEdit = (item) => {
@@ -247,40 +280,47 @@ export default function AdminManagePage() {
   };
 
   const toggleGroup = (groupName) => {
-    setExpandedGroups(prev => ({
-      ...prev,
-      [groupName]: prev[groupName] === true ? false : true
-    }));
+    setExpandedGroups(prev => ({ ...prev, [groupName]: prev[groupName] === true ? false : true }));
   };
 
-  const renderMatrixEditor = () => (
-    <div className="col-span-2 pt-6 border-t border-gray-800">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-sm font-bold text-[#D4AF37]"><i className="fa-solid fa-calculator"></i> 拆帳矩陣參數設定</h3>
-        <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
-          <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
-             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-               <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
-             </div>
-             <div className="flex items-center gap-2">
-               <div className="flex-1 relative">
-                 <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
-                 <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+  const addPromoEmoji = (emoji) => {
+    setFormData({ ...formData, title: formData.title + emoji });
+  };
+
+  // ★ 讓矩陣編輯器支援動態提取的標籤清單
+  const renderMatrixEditor = () => {
+    // 從 globalLabels 動態提取所有鍵值
+    const dynamicCodes = Object.keys(globalLabels);
+    
+    return (
+      <div className="col-span-2 pt-6 border-t border-gray-800">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-sm font-bold text-[#D4AF37]"><i className="fa-solid fa-calculator"></i> 拆帳矩陣參數設定</h3>
+          <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {dynamicCodes.map(code => (
+            <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
+               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
+                 <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
                </div>
-               <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
-               <div className="flex-1 relative">
-                 <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
-                 <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+               <div className="flex items-center gap-2">
+                 <div className="flex-1 relative">
+                   <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                   <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+                 </div>
+                 <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+                 <div className="flex-1 relative">
+                   <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
+                   <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+                 </div>
                </div>
-             </div>
-          </div>
-        ))}
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const visibleMenuGroups = menuGroups.map(group => {
     if (currentUserRole === 'manager') return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches'].includes(item.id)) };
@@ -372,11 +412,28 @@ export default function AdminManagePage() {
                     </div>
                     
                     <div className="col-span-2 pt-6 border-t border-gray-800">
-                      <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤名稱 (可留空)</h3>
-                      <p className="text-xs text-gray-400 mb-6">您可以自訂標籤的顯示名稱。若留空，系統將只顯示代碼 (例如 W1)。</p>
+                      <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤庫 (動態擴充)</h3>
+                      <p className="text-xs text-gray-400 mb-4">您可以隨時新增或修改標籤，供服務定價與拆帳矩陣使用。</p>
+                      
+                      {/* ★ 動態標籤新增區塊 */}
+                      <div className="flex flex-wrap gap-2 mb-6 bg-blue-900/20 p-4 rounded-xl border border-blue-800/50 items-end">
+                         <div className="flex-1">
+                           <label className="text-[10px] text-blue-400 uppercase font-bold">新標籤代碼 (如 SCALP_PROD)</label>
+                           <input type="text" value={newLabelCode} onChange={e => setNewLabelCode(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500 uppercase font-mono" placeholder="限英文與底線"/>
+                         </div>
+                         <div className="flex-[2]">
+                           <label className="text-[10px] text-blue-400 uppercase font-bold">顯示名稱</label>
+                           <input type="text" value={newLabelName} onChange={e => setNewLabelName(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500" placeholder="例如：頭皮專用產品"/>
+                         </div>
+                         <button type="button" onClick={handleAddLabel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors shadow-lg">
+                           + 新增標籤
+                         </button>
+                      </div>
+
+                      {/* 動態渲染目前所有的標籤 */}
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'].map(code => (
-                          <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5">
+                        {Object.keys(formData.commissionLabels || globalLabels).map(code => (
+                          <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5 relative group">
                             <label className="text-[10px] font-bold text-gray-500 uppercase">{code} 標籤名稱</label>
                             <input 
                               type="text" 
@@ -384,6 +441,17 @@ export default function AdminManagePage() {
                               value={formData.commissionLabels?.[code] !== undefined ? formData.commissionLabels[code] : (defaultLabels[code] || '')} 
                               onChange={e => setFormData({...formData, commissionLabels: {...formData.commissionLabels, [code]: e.target.value}})} 
                             />
+                            {/* 預設標籤防呆不給刪除，只允許刪除自訂標籤 */}
+                            {!Object.keys(defaultLabels).includes(code) && (
+                              <button 
+                                type="button" 
+                                onClick={() => handleRemoveLabel(code)}
+                                className="absolute top-2 right-2 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="刪除此自訂標籤"
+                              >
+                                <i className="fa-solid fa-trash"></i>
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -413,10 +481,12 @@ export default function AdminManagePage() {
                         {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                       </select>
                     </div>
+                    
+                    {/* ★ 讓下拉選單也支援動態生成的標籤 */}
                     <div className="space-y-2 col-span-2">
                       <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
                       <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
+                        {Object.keys(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
                       </select>
                     </div>
                   </>
@@ -500,7 +570,6 @@ export default function AdminManagePage() {
                   </>
                 )}
 
-                {/* 🟢 補回的分類選項輸入框 */}
                 {activeTab === 'categories' && (
                   <>
                     <div className="space-y-2 col-span-2">
@@ -629,7 +698,7 @@ export default function AdminManagePage() {
                                   {activeTab === 'packages' && <><span className="text-gray-400 font-mono font-bold">${item.price}</span><span className="text-[#D4AF37] font-bold bg-[#D4AF37]/10 px-1.5 py-0.5 rounded border border-[#D4AF37]/30">內含 {item.quantity} 格</span></>}
                                   {activeTab === 'services' && <span className="text-gray-400 font-mono font-bold">${item.price}</span>}
                                   {activeTab === 'branches' && <span className="text-gray-500 italic">連鎖門店資料</span>}
-                                  {activeTab === 'templates' && <span className="text-gray-500 italic">包含 W1-W3, R1-R3, P1-P5, SCALP 公式</span>}
+                                  {activeTab === 'templates' && <span className="text-gray-500 italic">包含系統公式矩陣</span>}
                                   {activeTab === 'tiers' && (
                                     <>
                                       <span className="text-[#D4AF37] font-mono font-bold">門檻: ${item.threshold}</span>
