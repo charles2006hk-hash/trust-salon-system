@@ -1,30 +1,9 @@
-// lib/finance.js
-
-/**
- * 安全除法，避免 Infinity 或 NaN
- */
 export function safeDivide(a, b) {
   if (!b || b === 0) return 0;
   return a / b;
 }
 
-/**
- * 🎯 核心拆帳計算引擎 (Core Commission Engine)
- * 負責處理複雜的階梯式跳級算法，解決 JavaScript 浮點數精度誤差。
- * 供前台「設計師業績板」與後台「老闆薪資結算」共用，保證數據 100% 同步。
- * 
- * @param {Array} rawTransactions - 該設計師在指定期間內的所有原始交易紀錄
- * @param {Object} userCommissionsRule - 該設計師的基礎抽成設定 (deduct, percent)
- * @param {Object} serviceMapContext - 系統設定的服務對應代碼字典
- * @param {Object} globalLabels - 系統全域標籤設定
- * @returns {Object} 包含處理好的帳單陣列、階梯狀態、分類大數、總結數據
- */
-export function calculateStaffCommissions(
-  rawTransactions, 
-  userCommissionsRule = {}, 
-  serviceMapContext = {}, 
-  globalLabels = {}
-) {
+export function calculateStaffCommissions(rawTransactions, userCommissionsRule = {}, serviceMapContext = {}, globalLabels = {}) {
   let scalpRev = 0;
   let prodRev = 0;
   let scalpClients = new Set();
@@ -36,10 +15,8 @@ export function calculateStaffCommissions(
 
   const pass1Txs = [];
 
-  // ==============================================================
-  // 🟢 Pass 1: 分類帳單並計算 SCALP 與 產品 的客量及總金額
-  // ==============================================================
-  rawTransactions.forEach(tx => {
+  // Pass 1: 結算客量與提取 SCALP 相關業績
+  (rawTransactions || []).forEach(tx => {
     const amount = Number(tx.amount || 0);
     let code = '未綁定參數';
     
@@ -49,12 +26,10 @@ export function calculateStaffCommissions(
        code = serviceMapContext[tx.service];
     }
 
-    // ⚠️ 標籤防呆：若老闆自訂了「頭皮產品」標籤，或項目包含頭皮產品，強制歸類為 SCALP_PROD
     if (code === 'SCALP_PROD' || (tx.service && tx.service.includes('頭皮產品')) || globalLabels[code] === '頭皮產品') {
         code = 'SCALP_PROD';
     }
 
-    // 計算獨立客量 (以 Timestamp + 手機號碼為 Unique ID)
     if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
        const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`; 
        uniqueClients.add(ticketId);
@@ -62,7 +37,7 @@ export function calculateStaffCommissions(
        if (code.startsWith('W') || code.startsWith('R')) uniqueWR.add(ticketId);
        else if (code === 'SCALP') {
            uniqueScalp.add(ticketId);
-           scalpClients.add(ticketId); // 專門給頭皮套票算客量
+           scalpClients.add(ticketId); 
            scalpRev += amount;
        } 
        else if (code === 'SCALP_PROD') {
@@ -75,37 +50,21 @@ export function calculateStaffCommissions(
     pass1Txs.push({ ...tx, computedCode: code });
   });
 
-  // ==============================================================
-  // 🟢 階梯式動態拆帳演算法 (Tier-based Algorithm)
-  // ==============================================================
+  // 動態階梯算法
   const scalpClientCount = scalpClients.size;
   const combinedRevenue = scalpRev + prodRev;
-  
-  // 規則 1：套票固定基礎 25%。產品基礎視套票客量決定 (>= 2 人給 25%，否則 20%)
   const baseScalpPct = 25; 
   const baseProdPct = scalpClientCount >= 2 ? 25 : 20; 
-  
-  // 規則 2：總業績每滿 $10000，兩者的最終拆帳比例額外 +5%
   const bonusPct = Math.floor(combinedRevenue / 10000) * 5; 
-  
   const finalScalpPct = baseScalpPct + bonusPct;
   const finalProdPct = baseProdPct + bonusPct;
 
-  const dynamicTierStats = {
-     scalpClientCount,
-     combinedRevenue,
-     finalScalpPct,
-     finalProdPct
-  };
-
-  // ==============================================================
-  // 🟢 Pass 2: 套用最終 % 數計算每筆實得提成與總業績
-  // ==============================================================
   let revSum = 0;
   let commSum = 0;
-  let breakdown = {};
+  const categoryBreakdown = {}; // 確保變數在此宣告
   const processedTransactions = [];
 
+  // Pass 2: 套用最終 % 數算佣金
   pass1Txs.forEach(tx => {
     const amount = Number(tx.amount || 0);
     const code = tx.computedCode;
@@ -116,14 +75,12 @@ export function calculateStaffCommissions(
     if (tx.type === 'assistant_bonus') {
         calculatedComm = Number(tx.bonusAmount || 0);
     } else if (tx.commissionAmount !== undefined && tx.commissionAmount !== null) {
-        // 若已經被後台手動鎖定提成的特例
         calculatedComm = Number(tx.commissionAmount);
     } else if (code === 'SCALP') {
         calculatedComm = amount * (finalScalpPct / 100);
     } else if (code === 'SCALP_PROD') {
         calculatedComm = amount * (finalProdPct / 100);
     } else {
-        // 常規項目 (W1, R1, P1...) 讀取預設扣減與成數
         const rule = userCommissionsRule[code];
         if (rule) {
           const deduct = Number(rule.deduct || 0);
@@ -134,30 +91,24 @@ export function calculateStaffCommissions(
         }
     }
 
-    // 🛡️ 解決 JavaScript 浮點數精度誤差 (如 0.1 + 0.2 = 0.30000000000000004)
     calculatedComm = Math.round(calculatedComm * 100) / 100;
-
     commSum += calculatedComm;
-    if (!breakdown[code]) breakdown[code] = 0;
-    breakdown[code] += amount;
+
+    if (!categoryBreakdown[code]) categoryBreakdown[code] = 0;
+    categoryBreakdown[code] += amount;
 
     processedTransactions.push({ ...tx, computedCommission: calculatedComm });
   });
 
-  // 按時間倒序排列
   processedTransactions.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
 
   return {
     processedTransactions,
-    dynamicTierStats,
-    categoryBreakdown,
+    dynamicTierStats: { scalpClientCount, combinedRevenue, finalScalpPct, finalProdPct },
+    categoryBreakdown, // 確保安全回傳
     stats: {
-      totalRevenue: Math.round(revSum),
-      totalCommission: Math.round(commSum),
-      clientCount: uniqueClients.size,
-      wrClientCount: uniqueWR.size,
-      scalpClientCount: uniqueScalp.size,
-      productClientCount: uniqueProduct.size,
+      totalRevenue: Math.round(revSum), totalCommission: Math.round(commSum), clientCount: uniqueClients.size,
+      wrClientCount: uniqueWR.size, scalpClientCount: uniqueScalp.size, productClientCount: uniqueProduct.size,
       averageSpend: uniqueClients.size > 0 ? Math.round(revSum / uniqueClients.size) : 0
     }
   };
