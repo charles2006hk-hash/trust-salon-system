@@ -28,6 +28,10 @@ export default function FinancePage() {
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
   
+  // 🟢 新增：流水帳分頁控制狀態
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(20);
+
   const defaultLabels = {
     W1: '洗剪吹 (需扣耗材)', W2: '洗剪吹 (純抽成)', W3: '洗剪吹 (高階)', 
     R1: '染燙化學 (需扣耗材)', R2: '染燙化學 (純抽成)', R3: '染燙化學 (進階)', 
@@ -47,6 +51,11 @@ export default function FinancePage() {
   const [originalTx, setOriginalTx] = useState(null); 
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
   const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
+
+  // 切換篩選條件時，自動回到第一頁
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedBranch, selectedMonth, rowsPerPage]);
 
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
@@ -387,6 +396,16 @@ export default function FinancePage() {
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
+  // 🟢 處理分頁的交易列表
+  const filteredTxs = transactions
+    .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+  const totalPages = rowsPerPage === 'ALL' ? 1 : Math.ceil(filteredTxs.length / rowsPerPage);
+  const paginatedTxs = rowsPerPage === 'ALL' 
+    ? filteredTxs 
+    : filteredTxs.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
   return (
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 md:p-10 font-sans pb-24 selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -565,7 +584,11 @@ export default function FinancePage() {
             </div>
             
             <div className="bg-[#121212] rounded-[40px] p-10 border border-white/5 shadow-2xl overflow-hidden">
-              <h3 className="text-xl font-bold text-white mb-8 italic">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(篩選後前20筆)</span></h3>
+              <h3 className="text-xl font-bold text-white mb-8 italic">
+                Recent Transactions 
+                <span className="text-xs font-normal text-gray-500 not-italic ml-2">(共 {filteredTxs.length} 筆)</span>
+              </h3>
+              
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
@@ -576,14 +599,12 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right">變動金額</th>
+                      {/* 🟢 Admin 專屬表頭 */}
                       {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {transactions
-                      .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
-                      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-                      .slice(0, 20).map((tx) => (
+                    {paginatedTxs.map((tx) => (
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
                         <td className="py-4 text-[10px] text-gray-400 font-bold">{tx.branch || '未指定'}</td>
@@ -604,6 +625,7 @@ export default function FinancePage() {
                         <td className="py-4 text-gray-400">
                           {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
                             <span className="flex items-center gap-2">
+                              {/* 🟢 強制覆寫助手服務名稱 */}
                               {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || tx.packageName)} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
@@ -612,6 +634,7 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
+                        {/* 🟢 加入 Admin 專屬的修改按鈕與查帳按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-2">
@@ -640,11 +663,50 @@ export default function FinancePage() {
                         )}
                       </tr>
                     ))}
-                    {transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch).length === 0 && (
+                    {paginatedTxs.length === 0 && (
                       <tr><td colSpan="7" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* 🟢 新增：分頁控制項 */}
+              <div className="flex flex-col sm:flex-row justify-between items-center mt-6 text-sm gap-4 border-t border-white/5 pt-4">
+                <div className="flex items-center gap-3 text-gray-400">
+                  <span className="font-bold">每頁顯示:</span>
+                  <select
+                    value={rowsPerPage}
+                    onChange={(e) => setRowsPerPage(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
+                    className="bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-1.5 outline-none focus:border-[#D4AF37] text-white font-bold cursor-pointer"
+                  >
+                    <option value={20}>20 筆</option>
+                    <option value={50}>50 筆</option>
+                    <option value={100}>100 筆</option>
+                    <option value="ALL">全部顯示</option>
+                  </select>
+                </div>
+                
+                {rowsPerPage !== 'ALL' && totalPages > 1 && (
+                  <div className="flex items-center gap-4 bg-[#1a1a1a] p-1 rounded-xl border border-white/5 shadow-inner">
+                    <button 
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="px-4 py-2 bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition font-bold"
+                    >
+                      <i className="fa-solid fa-chevron-left mr-1"></i> 上一頁
+                    </button>
+                    <span className="text-gray-400 font-mono text-xs">
+                      第 <span className="text-white font-black text-sm">{currentPage}</span> / {totalPages} 頁
+                    </span>
+                    <button 
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-4 py-2 bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition font-bold"
+                    >
+                      下一頁 <i className="fa-solid fa-chevron-right ml-1"></i>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -705,6 +767,7 @@ export default function FinancePage() {
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
               
+              {/* 🟢 在 Admin 報表中也同步顯示該設計師的動態階梯狀態 */}
               {selectedStaffDetail.dynamicTierStats && (
                 <div className="flex flex-wrap gap-4 mt-4 bg-green-900/20 p-3 rounded-xl border border-green-500/30">
                   <span className="text-[10px] text-green-400 font-bold">套票客數: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.scalpClientCount || 0}</span></span>
