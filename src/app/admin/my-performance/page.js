@@ -11,7 +11,11 @@ export default function StaffPerformancePage() {
   const [loading, setLoading] = useState(true);
   const [myTransactions, setMyTransactions] = useState([]);
   
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+  // 🟢 新增：統計類型切換與日期狀態
+  const [filterType, setFilterType] = useState<'month' | 'day'>('month');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  // YYYY-MM-DD
+  
   const [serviceMapContext, setServiceMapContext] = useState({}); 
 
   const [targetStaff, setTargetStaff] = useState('');
@@ -48,7 +52,7 @@ export default function StaffPerformancePage() {
                setStaffList([...new Set(names)]);
             }
             
-            await initData(userData.name, selectedMonth);
+            await initData();
           } else {
             toast.error("找不到您的員工檔案，請聯繫老闆。");
             setLoading(false);
@@ -64,13 +68,14 @@ export default function StaffPerformancePage() {
     return () => unsubscribe();
   }, []);
 
+  // 🟢 監聽：當過濾類型、日期、目標員工改變時，重新計算
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
-      fetchMyTransactions(targetStaff, serviceMapContext, selectedMonth);
+      fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate);
     }
-  }, [selectedMonth, targetStaff]);
+  }, [filterType, selectedMonth, selectedDate, targetStaff, serviceMapContext]);
 
-  const initData = async (staffName, monthStr) => {
+  const initData = async () => {
     try {
       const settingSnap = await getDoc(doc(db, 'settings', 'global_config'));
       let labels = {};
@@ -96,7 +101,7 @@ export default function StaffPerformancePage() {
     }
   };
 
-  const fetchMyTransactions = async (staffName, serviceMap, monthStr) => {
+  const fetchMyTransactions = async (staffName, serviceMap, currentFilterType, monthStr, dateStr) => {
     setLoading(true);
     try {
       if (!staffName) return;
@@ -129,9 +134,18 @@ export default function StaffPerformancePage() {
 
       snap.forEach(d => {
         const tx = d.data();
-        const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
+        
+        // 🟢 日期匹配邏輯：根據切換器決定比對「月份」還是「具體日期」
+        let isMatchDate = false;
+        if (currentFilterType === 'month') {
+           const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
+           isMatchDate = (txMonth === monthStr);
+        } else {
+           const txDay = tx.timestamp ? tx.timestamp.slice(0, 10) : '';
+           isMatchDate = (txDay === dateStr);
+        }
 
-        if (tx.stylist && tx.stylist.includes(staffName) && txMonth === monthStr) {
+        if (tx.stylist && tx.stylist.includes(staffName) && isMatchDate) {
           matchedList.push({ id: d.id, ...tx });
           
           const amount = Number(tx.amount || 0);
@@ -176,7 +190,7 @@ export default function StaffPerformancePage() {
         }
       });
 
-      matchedList.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+      matchedList.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
       
       setMyTransactions(matchedList);
       setCategoryBreakdown(breakdown);
@@ -207,12 +221,13 @@ export default function StaffPerformancePage() {
   if (!currentUser) return <div className="p-10 text-red-500 bg-[#080808] min-h-screen">請先登入系統。</div>;
 
   const isAdmin = currentUser.role === 'admin';
+  const displayDateStr = filterType === 'month' ? selectedMonth : selectedDate;
 
   return (
     <div className="p-6 md:p-10 pb-32 bg-[#080808] min-h-screen text-white font-sans selection:bg-[#D4AF37] selection:text-black">
       <Toaster position="top-right" />
       
-      <header className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-end gap-4 animate-fade-in">
+      <header className="mb-10 flex flex-col lg:flex-row justify-between items-start lg:items-end gap-4 animate-fade-in">
         <div>
           <h1 className="text-3xl font-black text-white italic tracking-tighter mb-2">
             MY <span className="text-[#D4AF37]">PERFORMANCE</span>
@@ -226,32 +241,60 @@ export default function StaffPerformancePage() {
           </p>
         </div>
         
-        <div className="flex flex-col items-end gap-3">
-          <div className="flex gap-2">
-            {isAdmin && staffList.length > 0 && (
-              <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
-                <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
-                <select 
-                  value={targetStaff}
-                  onChange={(e) => setTargetStaff(e.target.value)}
-                  className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm appearance-none pr-4"
-                >
-                  {staffList.map(name => <option key={name} value={name} className="bg-[#121212]">{name}</option>)}
-                </select>
-                <i className="fa-solid fa-chevron-down text-blue-500/50 absolute right-3 pointer-events-none text-xs"></i>
-              </div>
-            )}
-            
-            <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
-              <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">結算月份</span>
+        <div className="flex flex-col lg:flex-row items-start lg:items-center gap-3">
+          
+          {isAdmin && staffList.length > 0 && (
+            <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
+              <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
+              <select 
+                value={targetStaff}
+                onChange={(e) => setTargetStaff(e.target.value)}
+                className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm appearance-none pr-4"
+              >
+                {staffList.map(name => <option key={name} value={name} className="bg-[#121212]">{name}</option>)}
+              </select>
+              <i className="fa-solid fa-chevron-down text-blue-500/50 absolute right-3 pointer-events-none text-xs"></i>
+            </div>
+          )}
+
+          {/* 🟢 UI 修復：日統計 / 月統計 切換開關 */}
+          <div className="flex bg-[#121212] p-1 rounded-xl border border-white/10 shadow-inner">
+            <button 
+              onClick={() => setFilterType('day')}
+              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'day' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+            >
+              日統計
+            </button>
+            <button 
+              onClick={() => setFilterType('month')}
+              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'month' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+            >
+              月統計
+            </button>
+          </div>
+          
+          {/* 日期選擇器 */}
+          <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
+            <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">
+              {filterType === 'month' ? '結算月份' : '結算日期'}
+            </span>
+            {filterType === 'month' ? (
               <input 
                 type="month" 
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
                 className="bg-transparent text-[#D4AF37] font-bold outline-none cursor-pointer text-sm custom-month-input"
               />
-            </div>
+            ) : (
+              <input 
+                type="date" 
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="bg-transparent text-[#D4AF37] font-bold outline-none cursor-pointer text-sm custom-month-input"
+              />
+            )}
           </div>
+
         </div>
       </header>
 
@@ -259,7 +302,7 @@ export default function StaffPerformancePage() {
         <div className="bg-[#121212] p-6 rounded-[24px] border border-[#D4AF37]/20 shadow-xl relative overflow-hidden group hover:border-[#D4AF37] transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5 group-hover:scale-110 transition-transform">💰</div>
           <div>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 實得提成</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{displayDateStr} 實得提成</p>
             <p className="text-3xl font-black text-[#D4AF37] font-mono"><span className="text-sm mr-0.5">$</span>{stats.totalCommission.toLocaleString()}</p>
           </div>
         </div>
@@ -274,7 +317,7 @@ export default function StaffPerformancePage() {
         <div className="bg-[#121212] p-6 rounded-[24px] border border-white/5 shadow-xl relative overflow-hidden group hover:border-white/10 transition-all flex flex-col justify-between">
           <div className="absolute -right-4 -bottom-4 text-6xl opacity-5">👤</div>
           <div>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{selectedMonth} 服務總客數</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mb-1">{displayDateStr} 服務總客數</p>
             <p className="text-3xl font-black text-white font-mono">{stats.clientCount} <span className="text-xs text-gray-500 font-normal">位</span></p>
           </div>
           <div className="flex gap-3 mt-3 pt-3 border-t border-white/10">
@@ -302,7 +345,7 @@ export default function StaffPerformancePage() {
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
                Object.entries(categoryBreakdown)
-                 .sort((a, b) => b[1] - a[1]) 
+                 .sort((a, b) => Number(b[1]) - Number(a[1])) 
                  .map(([code, amount]) => (
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
                     <div className="relative z-10">
@@ -310,7 +353,7 @@ export default function StaffPerformancePage() {
                          {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : code === '未綁定參數' ? '⚠️ 未綁定參數' : `${code} - ${globalLabels[code] || '未知標籤'}`}
                        </p>
                        <p className="text-xl font-black text-white font-mono tracking-tighter">
-                         <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(amount).toLocaleString()}
+                         <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(Number(amount)).toLocaleString()}
                        </p>
                     </div>
                     <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic">
@@ -324,7 +367,7 @@ export default function StaffPerformancePage() {
 
       <div className="bg-[#121212] rounded-[32px] border border-white/5 overflow-hidden shadow-2xl animate-fade-in" style={{ animationDelay: '0.2s' }}>
         <div className="p-6 border-b border-white/5 bg-black/20 flex justify-between items-center">
-           <h3 className="text-sm font-black tracking-widest uppercase text-white"><i className="fa-solid fa-list-check mr-2 text-[#D4AF37]"></i> {selectedMonth} 服務流水對帳單</h3>
+           <h3 className="text-sm font-black tracking-widest uppercase text-white"><i className="fa-solid fa-list-check mr-2 text-[#D4AF37]"></i> {displayDateStr} 服務流水對帳單</h3>
            <p className="text-[10px] text-gray-500 font-mono">共計 {myTransactions.length} 筆項目</p>
         </div>
 
@@ -374,7 +417,7 @@ export default function StaffPerformancePage() {
                       </td>
                       <td className="p-5">
                         <div className="flex flex-col gap-1">
-                          {/* 🌟 核心修正：強制覆寫助手服務名稱 */}
+                          {/* 🌟 核心修正：針對助手獎金強制顯示為「助手服務」 */}
                           <span className={`text-sm ${tx.type === 'assistant_bonus' ? 'text-[#D4AF37] font-bold' : 'text-gray-200'}`}>
                             {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || '未知項目')}
                           </span>
@@ -397,7 +440,7 @@ export default function StaffPerformancePage() {
                 {myTransactions.length === 0 && !loading && (
                   <tr>
                     <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
-                      📭 {targetStaff} 在 {selectedMonth} 尚無結帳服務紀錄。
+                      📭 {targetStaff} 在 {displayDateStr} 尚無結帳服務紀錄。
                     </td>
                   </tr>
                 )}
