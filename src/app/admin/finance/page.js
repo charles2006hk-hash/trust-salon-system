@@ -2,11 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion, addDoc } from 'firebase/firestore'; 
+// 🟢 引入 deleteDoc 用於刪除功能
+import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion, addDoc, deleteDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
-import { calculateStaffCommissions } from '@/lib/finance';
 
 export default function FinancePage() {
   const router = useRouter();
@@ -15,8 +15,17 @@ export default function FinancePage() {
   const [viewMode, setViewMode] = useState('dashboard');
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
   const [currentUserName, setCurrentUserName] = useState(''); 
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  
+  // 🟢 時間篩選狀態：支援按「月」或按「日」
+  const [filterType, setFilterType] = useState('month'); // 'month' | 'date'
+  
+  // 取得當地時間 (HKT) 避免 UTC 時差問題
+  const today = new Date();
+  const localMonth = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+  const localDate = localMonth + '-' + String(today.getDate()).padStart(2, '0');
+  
+  const [selectedMonth, setSelectedMonth] = useState(localMonth);
+  const [selectedDate, setSelectedDate] = useState(localDate);
   
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('ALL');
@@ -28,10 +37,6 @@ export default function FinancePage() {
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
   
-  // 🟢 新增：流水帳分頁控制狀態
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(20);
-
   const defaultLabels = {
     W1: '洗剪吹 (需扣耗材)', W2: '洗剪吹 (純抽成)', W3: '洗剪吹 (高階)', 
     R1: '染燙化學 (需扣耗材)', R2: '染燙化學 (純抽成)', R3: '染燙化學 (進階)', 
@@ -52,10 +57,49 @@ export default function FinancePage() {
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
   const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
 
-  // 切換篩選條件時，自動回到第一頁
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [selectedBranch, selectedMonth, rowsPerPage]);
+  // 🟢 新增：執行「刪除單據」的函數
+  const handleDeleteTransaction = async (tx) => {
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
+    
+    const itemName = tx.service || tx.packageName || '助手獎金';
+    const itemAmount = tx.amount || tx.bonusAmount || 0;
+    
+    // 防呆確認視窗
+    if (!window.confirm(`⚠️ 警告：您確定要永久刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '未指定'}\n\n❗ 刪除後將無法恢復，且系統會將此操作寫入安全日誌。`)) {
+      return;
+    }
+
+    const toastId = toast.loading("正在刪除單據並寫入安全日誌...");
+    try {
+      // 1. 寫入「全局審計日誌 (Global Audit Logs)」
+      await addDoc(collection(db, 'audit_logs'), {
+        module: 'finance_transactions',
+        action: 'delete_transaction',
+        transactionId: tx.id,
+        customerPhone: tx.phoneNumber || '未提供',
+        branch: tx.branch || '未指定',
+        timestamp: new Date().toISOString(),
+        adminName: currentUserName || 'Admin',
+        changes: {
+          deletedAt: new Date().toISOString(),
+          deletedBy: currentUserName || 'Admin',
+          amount: itemAmount,
+          service: itemName,
+          stylist: tx.stylist || '未指定',
+          originalTimestamp: tx.timestamp
+        }
+      });
+
+      // 2. 執行刪除
+      await deleteDoc(doc(db, 'transactions', tx.id));
+      
+      toast.success("✅ 單據已永久刪除！", { id: toastId });
+      fetchFinancialData(); // 重新整理報表
+    } catch (error) {
+      console.error(error);
+      toast.error("刪除失敗，請檢查權限或網路", { id: toastId });
+    }
+  };
 
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
@@ -144,18 +188,26 @@ export default function FinancePage() {
     });
     fetchFinancialData();
     return () => unsubscribe();
-  }, [selectedMonth]); 
+  }, [selectedMonth, selectedDate, filterType]); // 🟢 加入篩選依賴
 
   useEffect(() => {
-    if (transactions.length > 0) calculateData();
+    if (transactions.length >= 0) calculateData(); // 即使是 0 也要重算以清空畫面
   }, [selectedBranch, transactions, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
     try {
-      const startOfMonth = `${selectedMonth}-01T00:00:00`;
-      const endOfMonth = `${selectedMonth}-31T23:59:59`;
-      const qTx = query(collection(db, "transactions"), where("timestamp", ">=", startOfMonth), where("timestamp", "<=", endOfMonth));
+      // 🟢 根據 filterType 決定查詢的時間範圍
+      let startTime, endTime;
+      if (filterType === 'month') {
+        startTime = `${selectedMonth}-01T00:00:00`;
+        endTime = `${selectedMonth}-31T23:59:59`;
+      } else {
+        startTime = `${selectedDate}T00:00:00`;
+        endTime = `${selectedDate}T23:59:59`;
+      }
+
+      const qTx = query(collection(db, "transactions"), where("timestamp", ">=", startTime), where("timestamp", "<=", endTime));
       
       const txSnap = await getDocs(qTx);
       setTransactions(txSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -194,86 +246,98 @@ export default function FinancePage() {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
     
-    const serviceMap = {};
-    servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
-    packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
-
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
-    let stylists = {}; let services = {}; 
-    let stylistAggregator = {};
-    const stylistsTxs = {}; 
+    let stylists = {}; let services = {}; let stylistAggregator = {};
+
+    staffConfig.forEach(staff => {
+      stylistAggregator[staff.name] = { 
+        name: staff.name, 
+        grade: staff.templateName || '自訂比例', 
+        commissionsRule: staff.commissions || {}, 
+        totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [],
+        uniqueClientsSet: new Set() 
+      };
+    });
 
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      else if (['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus'].includes(tx.type)) {
+      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
-        if (!stylistsTxs[stylistName]) stylistsTxs[stylistName] = [];
-        
-        let normalizedAmount = Number(tx.amount || 0);
-        if (tx.type === 'deduct_package') {
+        if (!stylistAggregator[stylistName]) {
+          stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
+        }
+
+        const staff = stylistAggregator[stylistName];
+        let revenue = 0; let commCode = null; let formulaStr = ""; let commission = 0;
+
+        if (tx.type === 'assistant_bonus') {
+          revenue = 0; 
+          commission = Number(tx.bonusAmount || 0);
+          formulaStr = `店家發放定額獎金 ($${commission})`;
+          commCode = 'BONUS';
+        } 
+        else if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
+          revenue = Number(tx.amount || 0);
+          const serviceItem = servicesData.find(s => s.name === tx.service);
+          commCode = serviceItem ? serviceItem.commissionCode : null;
+          services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
+          
+          if (tx.type === 'deduct') tDollarDeducted += revenue;
+        } 
+        else if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
             const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
-            normalizedAmount = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
-            tx.amount = normalizedAmount; 
+            revenue = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
+            commCode = pkgItem.commissionCode; 
           }
         }
-        
-        if (tx.type !== 'assistant_bonus') {
-           serviceValue += normalizedAmount;
-           stylists[stylistName] = (stylists[stylistName] || 0) + normalizedAmount;
-           services[tx.service || tx.packageName || '一般服務'] = (services[tx.service || tx.packageName || '一般服務'] || 0) + normalizedAmount;
-           if (tx.type === 'deduct') tDollarDeducted += normalizedAmount;
-        }
-        
-        stylistsTxs[stylistName].push(tx);
-      }
-    });
 
-    Object.keys(stylistsTxs).forEach(sName => {
-       const sTxs = stylistsTxs[sName];
-       const staffDef = staffConfig.find(s => s.name === sName) || { templateName: '無資料 (未綁定)', commissions: {} };
-       
-       const result = calculateStaffCommissions(sTxs, staffDef.commissions || {}, serviceMap, globalLabels);
-       
-       stylistAggregator[sName] = {
-          name: sName,
-          grade: staffDef.templateName || '自訂比例',
-          commissionsRule: staffDef.commissions || {},
-          totalRevenue: result.stats.totalRevenue,
-          totalCommission: result.stats.totalCommission,
-          clientCount: result.stats.clientCount,
-          dynamicTierStats: result.dynamicTierStats, 
-          details: result.processedTransactions.map(tx => {
-             let formulaStr = '';
-             if (tx.type === 'assistant_bonus') {
-                formulaStr = `店家發放定額獎金 ($${tx.computedCommission})`;
-             } else if (tx.computedCode === 'SCALP') {
-                formulaStr = `動態階梯算法 (套票 ${result.dynamicTierStats.finalScalpPct}%)`;
-             } else if (tx.computedCode === 'SCALP_PROD') {
-                formulaStr = `動態階梯算法 (產品 ${result.dynamicTierStats.finalProdPct}%)`;
-             } else {
-                const rule = (staffDef.commissions || {})[tx.computedCode];
-                if (!rule) formulaStr = `未設定 ${tx.computedCode} 參數`;
-                else formulaStr = `($${Number(tx.amount||0).toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
-             }
-             
-             return {
-               id: tx.id,
-               date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
-               service: tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || tx.packageName),
-               type: tx.type, 
-               commCode: tx.computedCode || 'N/A', 
-               revenue: tx.type === 'assistant_bonus' ? 0 : Math.round(Number(tx.amount||0)), 
-               commission: Math.round(tx.computedCommission), 
-               formulaStr: formulaStr, 
-               branch: tx.branch || '未知門店'
-             }
-          })
-       };
+        if (tx.type !== 'assistant_bonus') {
+          if (!commCode) {
+              formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
+          } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
+              formulaStr = "該設計師未儲存抽成參數";
+          } else if (staff.commissionsRule[commCode] === undefined) {
+              formulaStr = `該設計師未設定 ${commCode} 參數`;
+          } else {
+              const rule = staff.commissionsRule[commCode];
+              if (revenue > rule.deduct) {
+                commission = (revenue - rule.deduct) * (rule.percent / 100);
+                formulaStr = `($${revenue.toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
+              } else {
+                formulaStr = `實收低於耗材扣款 ($${rule.deduct})`;
+              }
+          }
+        }
+
+        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
+           const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`;
+           staff.uniqueClientsSet.add(ticketId);
+           staff.clientCount = staff.uniqueClientsSet.size;
+        }
+
+        serviceValue += revenue;
+        stylists[stylistName] = (stylists[stylistName] || 0) + revenue;
+
+        staff.totalRevenue += revenue;
+        staff.totalCommission += commission;
+        
+        staff.details.push({
+          id: tx.id,
+          date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
+          service: tx.service || tx.packageName,
+          type: tx.type, 
+          commCode: commCode || 'N/A', 
+          revenue: Math.round(revenue), 
+          commission: Math.round(commission), 
+          formulaStr: formulaStr, 
+          branch: tx.branch || '未知門店'
+        });
+      }
     });
 
     setMetrics({ 
@@ -286,7 +350,11 @@ export default function FinancePage() {
     setStylistRanking(Object.entries(stylists).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
     setServiceRanking(Object.entries(services).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
 
-    const report = Object.values(stylistAggregator).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    const report = Object.values(stylistAggregator).map(s => ({
+      ...s,
+      totalRevenue: Math.round(s.totalRevenue),
+      totalCommission: Math.round(s.totalCommission)
+    })).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
     
     setPayrollReport(report);
   };
@@ -335,7 +403,8 @@ export default function FinancePage() {
     try {
       let csvContent = '\uFEFF'; 
       csvContent += `TRUST 沙龍財務報表\n`;
-      csvContent += `報表月份,${selectedMonth}\n`;
+      // 🟢 匯出時顯示正確的時間區間
+      csvContent += `報表日期區間,${filterType === 'month' ? selectedMonth + ' (整月)' : selectedDate + ' (單日)'}\n`;
       csvContent += `篩選門店,${selectedBranch === 'ALL' ? '全線總計' : selectedBranch}\n\n`;
 
       csvContent += `【營收與跨店結算總覽】\n`;
@@ -352,7 +421,7 @@ export default function FinancePage() {
       });
       csvContent += `,,,總計發放佣金,$${totalCommissionPayout}\n\n`;
 
-      csvContent += `【本月交易明細流水帳】\n`;
+      csvContent += `【交易明細流水帳】\n`;
       csvContent += `交易時間,門店,交易類型,客戶電話,項目/髮型師,變動金額\n`;
       const filteredTx = transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'));
       filteredTx.forEach(tx => {
@@ -381,7 +450,7 @@ export default function FinancePage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `TRUST_Financial_Report_${selectedBranch}_${selectedMonth}.csv`;
+      a.download = `TRUST_Financial_Report_${selectedBranch}_${filterType === 'month' ? selectedMonth : selectedDate}.csv`;
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       
       toast.success("✅ 財務報表已成功匯出！", { id: toastId });
@@ -395,16 +464,6 @@ export default function FinancePage() {
   const isManagement = ['admin', 'manager'].includes(currentAdminRole);
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
-
-  // 🟢 處理分頁的交易列表
-  const filteredTxs = transactions
-    .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    
-  const totalPages = rowsPerPage === 'ALL' ? 1 : Math.ceil(filteredTxs.length / rowsPerPage);
-  const paginatedTxs = rowsPerPage === 'ALL' 
-    ? filteredTxs 
-    : filteredTxs.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   return (
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 md:p-10 font-sans pb-24 selection:bg-[#D4AF37] selection:text-black">
@@ -445,14 +504,39 @@ export default function FinancePage() {
                </div>
              )}
 
+             {/* 🟢 升級版：日 / 月 篩選器 */}
+             <div className="flex bg-[#121212] border border-white/10 rounded-xl overflow-hidden shadow-inner">
+               <button 
+                 onClick={() => setFilterType('month')} 
+                 className={`px-4 py-2.5 text-xs font-bold transition-colors ${filterType === 'month' ? 'bg-[#D4AF37] text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+               >
+                 按月
+               </button>
+               <button 
+                 onClick={() => setFilterType('date')} 
+                 className={`px-4 py-2.5 text-xs font-bold transition-colors border-l border-white/5 ${filterType === 'date' ? 'bg-[#D4AF37] text-black' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+               >
+                 按日
+               </button>
+             </div>
+
              <div className="relative bg-[#121212] border border-white/10 px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
                <i className="fa-regular fa-calendar text-[#D4AF37] pointer-events-none"></i>
-               <input 
-                 type="month" 
-                 value={selectedMonth} 
-                 onChange={(e) => setSelectedMonth(e.target.value)} 
-                 className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm custom-month-input" 
-               />
+               {filterType === 'month' ? (
+                 <input 
+                   type="month" 
+                   value={selectedMonth} 
+                   onChange={(e) => setSelectedMonth(e.target.value)} 
+                   className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm custom-date-input w-28" 
+                 />
+               ) : (
+                 <input 
+                   type="date" 
+                   value={selectedDate} 
+                   onChange={(e) => setSelectedDate(e.target.value)} 
+                   className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm custom-date-input w-28" 
+                 />
+               )}
              </div>
           </div>
         </header>
@@ -584,16 +668,12 @@ export default function FinancePage() {
             </div>
             
             <div className="bg-[#121212] rounded-[40px] p-10 border border-white/5 shadow-2xl overflow-hidden">
-              <h3 className="text-xl font-bold text-white mb-8 italic">
-                Recent Transactions 
-                <span className="text-xs font-normal text-gray-500 not-italic ml-2">(共 {filteredTxs.length} 筆)</span>
-              </h3>
-              
+              <h3 className="text-xl font-bold text-white mb-8 italic">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(篩選後共 {transactions.length} 筆)</span></h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/10">
-                      <th className="pb-4 font-bold">時間 (Time)</th>
+                      <th className="pb-4 font-bold min-w-[120px]">時間 (Time)</th>
                       <th className="pb-4 font-bold">門店 (Branch)</th>
                       <th className="pb-4 font-bold">類型 (Type)</th>
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
@@ -604,7 +684,10 @@ export default function FinancePage() {
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {paginatedTxs.map((tx) => (
+                    {transactions
+                      .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
+                      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+                      .slice(0, 50).map((tx) => ( // 顯示前50筆避免畫面過長
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
                         <td className="py-4 text-[10px] text-gray-400 font-bold">{tx.branch || '未指定'}</td>
@@ -625,8 +708,7 @@ export default function FinancePage() {
                         <td className="py-4 text-gray-400">
                           {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
                             <span className="flex items-center gap-2">
-                              {/* 🟢 強制覆寫助手服務名稱 */}
-                              {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || tx.packageName)} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
+                              {tx.service || tx.packageName} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
                         </td>
@@ -634,20 +716,33 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🟢 加入 Admin 專屬的修改按鈕與查帳按鈕 */}
+                        {/* 🟢 Admin 專屬的修改、刪除與查帳按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
-                            <div className="flex flex-col items-center gap-2">
+                            <div className="flex flex-col items-center gap-1.5">
                               {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
-                                <button 
-                                  onClick={() => {
-                                    setEditingTx({...tx}); 
-                                    setOriginalTx(tx); 
-                                  }}
-                                  className="bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-3 py-1.5 rounded-lg text-xs font-bold transition w-full"
-                                >
-                                  <i className="fa-solid fa-pen"></i> 修改
-                                </button>
+                                <div className="flex gap-1.5 w-full justify-center">
+                                  {/* 修改按鈕 */}
+                                  <button 
+                                    onClick={() => {
+                                      setEditingTx({...tx}); 
+                                      setOriginalTx(tx); 
+                                    }}
+                                    className="flex-1 bg-blue-500/10 text-blue-400 hover:bg-blue-500 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
+                                    title="修改單據"
+                                  >
+                                    <i className="fa-solid fa-pen"></i> 改
+                                  </button>
+                                  
+                                  {/* 🟢 新增：刪除按鈕 */}
+                                  <button 
+                                    onClick={() => handleDeleteTransaction(tx)}
+                                    className="flex-1 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
+                                    title="永久刪除"
+                                  >
+                                    <i className="fa-solid fa-trash-can"></i> 刪
+                                  </button>
+                                </div>
                               )}
                               
                               {tx.editHistory && tx.editHistory.length > 0 && (
@@ -663,50 +758,11 @@ export default function FinancePage() {
                         )}
                       </tr>
                     ))}
-                    {paginatedTxs.length === 0 && (
+                    {transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch).length === 0 && (
                       <tr><td colSpan="7" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
                     )}
                   </tbody>
                 </table>
-              </div>
-
-              {/* 🟢 新增：分頁控制項 */}
-              <div className="flex flex-col sm:flex-row justify-between items-center mt-6 text-sm gap-4 border-t border-white/5 pt-4">
-                <div className="flex items-center gap-3 text-gray-400">
-                  <span className="font-bold">每頁顯示:</span>
-                  <select
-                    value={rowsPerPage}
-                    onChange={(e) => setRowsPerPage(e.target.value === 'ALL' ? 'ALL' : Number(e.target.value))}
-                    className="bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-1.5 outline-none focus:border-[#D4AF37] text-white font-bold cursor-pointer"
-                  >
-                    <option value={20}>20 筆</option>
-                    <option value={50}>50 筆</option>
-                    <option value={100}>100 筆</option>
-                    <option value="ALL">全部顯示</option>
-                  </select>
-                </div>
-                
-                {rowsPerPage !== 'ALL' && totalPages > 1 && (
-                  <div className="flex items-center gap-4 bg-[#1a1a1a] p-1 rounded-xl border border-white/5 shadow-inner">
-                    <button 
-                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
-                      className="px-4 py-2 bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition font-bold"
-                    >
-                      <i className="fa-solid fa-chevron-left mr-1"></i> 上一頁
-                    </button>
-                    <span className="text-gray-400 font-mono text-xs">
-                      第 <span className="text-white font-black text-sm">{currentPage}</span> / {totalPages} 頁
-                    </span>
-                    <button 
-                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                      disabled={currentPage === totalPages}
-                      className="px-4 py-2 bg-white/5 rounded-lg hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition font-bold"
-                    >
-                      下一頁 <i className="fa-solid fa-chevron-right ml-1"></i>
-                    </button>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -732,11 +788,11 @@ export default function FinancePage() {
                 <div className="flex flex-wrap gap-6 w-full md:w-auto bg-black/50 p-4 rounded-2xl border border-white/5">
                    <div>
                      <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1">創造產值 (Revenue)</p>
-                     <p className="text-xl font-mono text-white">${(staff.totalRevenue || 0).toLocaleString()}</p>
+                     <p className="text-xl font-mono text-white">${staff.totalRevenue.toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6">
                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實得佣金與獎金</p>
-                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${(staff.totalCommission || 0).toLocaleString()}</p>
+                     <p className={`text-xl font-mono font-black ${staff.totalCommission === 0 && staff.totalRevenue > 0 ? 'text-red-400' : 'text-[#D4AF37]'}`}>${staff.totalCommission.toLocaleString()}</p>
                    </div>
                    <div className="border-l border-white/10 pl-6 flex items-center">
                       <button onClick={() => setSelectedStaffDetail(staff)} className="bg-white/10 hover:bg-white text-white hover:text-black px-4 py-2 rounded-xl text-xs font-bold transition-colors flex items-center gap-2">
@@ -766,21 +822,10 @@ export default function FinancePage() {
                 <span className="text-sm font-bold text-gray-300">人員姓名：{selectedStaffDetail.name}</span>
                 <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-widest w-fit ${selectedStaffDetail.grade.includes('未綁定') ? 'bg-red-500/20 text-red-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>{selectedStaffDetail.grade}</span>
               </div>
-              
-              {/* 🟢 在 Admin 報表中也同步顯示該設計師的動態階梯狀態 */}
-              {selectedStaffDetail.dynamicTierStats && (
-                <div className="flex flex-wrap gap-4 mt-4 bg-green-900/20 p-3 rounded-xl border border-green-500/30">
-                  <span className="text-[10px] text-green-400 font-bold">套票客數: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.scalpClientCount || 0}</span></span>
-                  <span className="text-[10px] text-green-400 font-bold">頭皮總績: <span className="text-white text-sm ml-1">${(selectedStaffDetail.dynamicTierStats.combinedRevenue || 0).toLocaleString()}</span></span>
-                  <span className="text-[10px] text-[#D4AF37] font-bold border-l border-green-500/50 pl-4">當前套票: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalScalpPct || 25}%</span></span>
-                  <span className="text-[10px] text-[#D4AF37] font-bold">當前產品: <span className="text-white text-sm ml-1">{selectedStaffDetail.dynamicTierStats.finalProdPct || 20}%</span></span>
-                </div>
-              )}
             </div>
-            
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
-              {(selectedStaffDetail.details || []).length === 0 ? (
-                 <p className="text-center text-gray-500 py-10">此月份尚無明細</p>
+              {selectedStaffDetail.details.length === 0 ? (
+                 <p className="text-center text-gray-500 py-10">此區間尚無明細</p>
               ) : (
                 selectedStaffDetail.details.map((item, idx) => (
                   <div key={idx} className={`bg-black/50 p-4 md:p-5 rounded-2xl border flex flex-col md:flex-row justify-between items-start md:items-center gap-4 transition-colors ${item.formulaStr.includes('未綁定') || item.formulaStr.includes('未儲存') ? 'border-red-500/30' : 'border-white/5 hover:border-white/20'}`}>
@@ -806,7 +851,7 @@ export default function FinancePage() {
                     <div className="w-full md:w-32 text-right shrink-0">
                       <p className="text-[9px] text-[#D4AF37] uppercase tracking-widest mb-1">實得金額</p>
                       <p className="text-lg font-black text-[#D4AF37] font-mono">
-                        ${(item.commission || 0).toLocaleString()}
+                        ${item.commission.toLocaleString()}
                       </p>
                     </div>
                   </div>
@@ -817,7 +862,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗 */}
+      {/* 🟢 Admin 專屬錯單編輯彈窗：支援修改服務、助手獎金 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -898,7 +943,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬：審計查帳彈窗 */}
+      {/* 🟢 Admin 專屬：審計查帳彈窗 (Audit History Modal) */}
       {viewingHistoryTx && (
         <div className="fixed inset-0 bg-black/90 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[32px] p-8 border border-purple-500/30 shadow-2xl relative animate-fade-in">
@@ -909,7 +954,7 @@ export default function FinancePage() {
             <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-6">單據修改軌跡紀錄 (由新到舊)</p>
             
             <div className="space-y-4">
-              {(viewingHistoryTx.editHistory || []).slice().reverse().map((log, index) => (
+              {viewingHistoryTx.editHistory.slice().reverse().map((log, index) => (
                 <div key={index} className="p-5 bg-white/5 rounded-2xl border border-white/10 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-1 h-full bg-purple-500/50"></div>
                   
@@ -950,8 +995,9 @@ export default function FinancePage() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
-        .custom-month-input { position: relative; }
-        .custom-month-input::-webkit-calendar-picker-indicator {
+        /* 日期選擇器統一自訂樣式 */
+        .custom-date-input { position: relative; }
+        .custom-date-input::-webkit-calendar-picker-indicator {
             position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
         }
       `}</style>
