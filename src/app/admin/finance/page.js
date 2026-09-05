@@ -315,8 +315,17 @@ export default function FinancePage() {
         }
 
         if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
-           const ticketId = `${tx.timestamp}_${tx.phoneNumber || tx.id}`;
-           staff.uniqueClientsSet.add(ticketId);
+           const itemName = tx.service || tx.packageName || '';
+           
+           // 判斷是否為「追加項目」或「購買產品」 (這些不計入主客數)
+           const isAddon = itemName.includes('追加');
+           const isProduct = commCode && String(commCode).startsWith('P'); // 排除 P1, P2 等產品抽成
+
+           if (!isAddon && !isProduct) {
+             // 不再用時間戳合併，而是將每一筆「非追加、非產品」的交易視為 1 個獨立客數
+             staff.uniqueClientsSet.add(tx.id);
+           }
+           // 更新該設計師的總客數
            staff.clientCount = staff.uniqueClientsSet.size;
         }
 
