@@ -23,7 +23,6 @@ export default function SmartPOS() {
   const [packages, setPackages] = useState([]); 
   const [globalSettings, setGlobalSettings] = useState({ validityDays: 365 }); 
   
-  // 🟢 新增：儲存 CMS 設定的分類原始資料 (包含排序權重)
   const [rawCategories, setRawCategories] = useState([]);
 
   const [phone, setPhone] = useState('+852');
@@ -85,7 +84,6 @@ export default function SmartPOS() {
       catch (e) { return { docs: [] }; }
     };
 
-    // 🟢 同步抓取 categories
     const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap, cSnap] = await Promise.all([
       safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches'), safeGet('categories')
     ]);
@@ -118,7 +116,6 @@ export default function SmartPOS() {
     const settingsDoc = setSnap.docs.find(d => d.id === 'global_config');
     if (settingsDoc) setGlobalSettings({ validityDays: Number(settingsDoc.data().validityDays) || 365 });
 
-    // 🟢 儲存分類資料以供排序使用
     const catData = cSnap.docs ? cSnap.docs.map(d => d.data()) : [];
     setRawCategories(catData);
   };
@@ -152,7 +149,6 @@ export default function SmartPOS() {
     .filter(p => !p.branch || p.branch === 'ALL' || p.branch === currentBranch)
     .sort((a, b) => (Number(b.sortWeight) || 0) - (Number(a.sortWeight) || 0));
 
-  // 🟢 根據 CMS 的 sortWeight 動態排序分類
   const uniqueServiceCategories = [...new Set(displayServices.map(s => s.category || '未分類'))];
   const sortedUniqueCategories = uniqueServiceCategories.sort((a, b) => {
     if (a === '未分類') return 1; 
@@ -176,7 +172,6 @@ export default function SmartPOS() {
     let formattedPhone = phoneNum;
     
     if (isAnonymous) {
-       // 🟢 匿名模式：賦予一個專屬的識別字串
        formattedPhone = "Walk-in (無提供電話)";
     } else {
        if (!phoneNum || phoneNum.length < 8) return toast.error("請輸入有效電話，或點擊下方「不留電話」按鈕");
@@ -200,7 +195,6 @@ export default function SmartPOS() {
       }
       toast.success(`${formattedPhone} 已入店服務`);
       
-      // 清空狀態
       setPhone('+852'); 
       setWalkInStylist(''); 
       setWalkInService('');
@@ -215,14 +209,21 @@ export default function SmartPOS() {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {} } : userSnap.docs[0].data();
+      // 🟢 提取客戶姓名
+      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '' } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
       const discountRate = Number(uData.discount) || 1;
       const finalPrice = Math.round(originalPrice * discountRate);
 
       setCheckoutSession({
-        ...session, discountRate, tier: uData.tier || '基本會員', balance: uData.tDollarBalance || 0, userId: userSnap.empty ? null : userSnap.docs[0].id, packageBalances: uData.packageBalances || {}
+        ...session, 
+        discountRate, 
+        tier: uData.tier || '基本會員', 
+        balance: uData.tDollarBalance || 0, 
+        userId: userSnap.empty ? null : userSnap.docs[0].id, 
+        packageBalances: uData.packageBalances || {},
+        customerName: uData.name || '' // 🟢 將姓名存入 session
       });
 
       setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
@@ -407,6 +408,7 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
+      {/* 數字鍵盤 Modal */}
       {numpadConfig.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.2)] flex flex-col animate-fade-in">
@@ -442,6 +444,7 @@ export default function SmartPOS() {
         </div>
       )}
 
+      {/* 智慧選擇器 Modal */}
       {selectorConfig.isOpen && (
         <div className="fixed inset-0 z-[400] flex items-end sm:items-center justify-center bg-black/90 backdrop-blur-sm p-0 sm:p-6 transition-opacity">
           <div className="bg-[#121212] w-full max-w-3xl rounded-t-[40px] sm:rounded-[40px] p-8 border border-white/10 shadow-2xl flex flex-col max-h-[85vh] animate-slide-up">
@@ -455,7 +458,6 @@ export default function SmartPOS() {
 
             {selectorConfig.type === 'service' && (
               <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4 shrink-0 border-b border-white/5">
-                 {/* 🟢 動態渲染並支援 CMS 權重排序的分類 Tabs */}
                  {availableCategories.map(cat => (
                    <button 
                      key={cat} 
@@ -472,7 +474,6 @@ export default function SmartPOS() {
                {selectorConfig.type === 'stylist' && (
                  <div className="col-span-2 md:col-span-3 space-y-6 pb-8">
                    
-                   {/* 🟢 主力髮型師移至上方 */}
                    {otherStylists.length > 0 && (
                      <div>
                        <h4 className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">💇‍♂️ 負責設計師</h4>
@@ -487,7 +488,6 @@ export default function SmartPOS() {
                      </div>
                    )}
 
-                   {/* 🟢 專職助手移至下方 */}
                    {dedicatedAssistants.length > 0 && (
                      <div>
                        <h4 className="text-[10px] text-yellow-500 font-bold uppercase tracking-widest mb-3 border-b border-white/10 pb-2">⭐ 專職助手</h4>
@@ -541,6 +541,7 @@ export default function SmartPOS() {
         </div>
       )}
 
+      {/* 門市選擇 Modal */}
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
            <div className="bg-[#121212] w-full max-w-md rounded-[40px] p-10 border border-[#D4AF37]/50 shadow-[0_0_50px_rgba(212,175,55,0.2)] text-center animate-fade-in">
@@ -564,6 +565,7 @@ export default function SmartPOS() {
         </div>
       )}
       
+      {/* 頂部 Header */}
       <header className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 px-4">
         <div>
           <h1 className="text-3xl font-black tracking-tighter flex items-center gap-3">
@@ -592,8 +594,10 @@ export default function SmartPOS() {
         </div>
       </header>
 
+      {/* 雙欄主畫面 */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
+        {/* 左側：快速報到 */}
         <div className="lg:col-span-4 space-y-8">
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
@@ -624,7 +628,6 @@ export default function SmartPOS() {
                   </button>
                 </div>
                 
-                {/* 🟢 新增：不留電話的非會員快捷鍵 */}
                 <button
                   type="button"
                   onClick={() => handleCheckIn(null, null, true)}
@@ -633,7 +636,6 @@ export default function SmartPOS() {
                   <i className="fa-solid fa-user-ninja mr-2"></i> 不留電話，直接安排入座
                 </button>
                         
-
                 <div className="grid grid-cols-2 gap-3 pt-2">
                   <button 
                     type="button" 
@@ -673,6 +675,7 @@ export default function SmartPOS() {
           </div>
         </div>
 
+        {/* 右側：現場動態 */}
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">本門市現場動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -746,6 +749,7 @@ export default function SmartPOS() {
         </div>
       </div>
 
+      {/* 儲值/套票 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -826,6 +830,7 @@ export default function SmartPOS() {
         </div>
       )}
 
+      {/* Cart Checkout Modal */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
@@ -838,7 +843,14 @@ export default function SmartPOS() {
             <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center mb-6">
               <div>
                 <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
-                <p className="text-lg font-bold text-white">{checkoutSession.phoneNumber}</p>
+                {/* 🟢 優先顯示客人名稱，若無名稱則顯示電話 */}
+                <p className="text-lg font-bold text-white">
+                  {checkoutSession.customerName ? checkoutSession.customerName : checkoutSession.phoneNumber}
+                </p>
+                {/* 如果有名字，在下方小字顯示電話 */}
+                {checkoutSession.customerName && (
+                  <p className="text-[10px] text-gray-500 mt-1 font-mono">{checkoutSession.phoneNumber}</p>
+                )}
               </div>
               <div className="text-right">
                 <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
