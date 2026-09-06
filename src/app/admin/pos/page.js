@@ -209,7 +209,6 @@ export default function SmartPOS() {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      // 🟢 提取客戶姓名
       const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '' } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
@@ -223,7 +222,7 @@ export default function SmartPOS() {
         balance: uData.tDollarBalance || 0, 
         userId: userSnap.empty ? null : userSnap.docs[0].id, 
         packageBalances: uData.packageBalances || {},
-        customerName: uData.name || '' // 🟢 將姓名存入 session
+        customerName: uData.name || '' 
       });
 
       setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
@@ -749,7 +748,7 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 儲值/套票 Modal */}
+      {/* 🟢 儲值/套票 Modal (升級獨立錢包 UI) */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -774,15 +773,34 @@ export default function SmartPOS() {
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
                 </div>
 
-                <div className="bg-white/5 p-4 rounded-2xl flex justify-between items-center">
-                   <div>
-                     <p className="text-white font-bold">{topUpUser.name || topUpUser.phoneNumber}</p>
-                     <p className="text-[10px] text-gray-400 mt-1">目前等級: <span className="text-[#D4AF37] font-bold">{topUpUser.tier || '基本會員 (Basic)'}</span></p>
+                {/* 🟢 獨立顯示 T-Dollar 現金與套票次數 */}
+                <div className="bg-white/5 p-4 rounded-2xl flex flex-col gap-3">
+                   <div className="flex justify-between items-start">
+                     <div>
+                       <p className="text-white font-bold text-lg">{topUpUser.name || topUpUser.phoneNumber}</p>
+                       <p className="text-[10px] text-gray-400 mt-1">目前等級: <span className="text-[#D4AF37] font-bold">{topUpUser.tier || '基本會員 (Basic)'}</span></p>
+                     </div>
+                     <div className="text-right">
+                       <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">💰 現金餘額</p>
+                       <p className="text-2xl text-[#D4AF37] font-black">${topUpUser.tDollarBalance || 0}</p>
+                     </div>
                    </div>
-                   <div className="text-right">
-                     <p className="text-[10px] text-gray-500 font-bold uppercase">累積儲值</p>
-                     <p className="text-white font-bold">${topUpUser.totalTopUp || 0}</p>
-                   </div>
+                   
+                   {/* 獨立區塊：顯示持有的套票 */}
+                   {topUpUser.packageBalances && Object.keys(topUpUser.packageBalances).length > 0 && (
+                     <div className="border-t border-white/10 pt-3 mt-1">
+                       <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest mb-2">🎫 已持有的套票 (獨立扣次)</p>
+                       <div className="flex flex-wrap gap-2">
+                         {Object.entries(topUpUser.packageBalances).map(([pkgName, grids]) => (
+                           grids > 0 && (
+                             <span key={pkgName} className="bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[10px] px-2 py-1 rounded font-bold">
+                               {pkgName}: 剩餘 {grids} 次
+                             </span>
+                           )
+                         ))}
+                       </div>
+                     </div>
+                   )}
                 </div>
 
                 {topUpTab === 'tdollar' ? (
@@ -830,7 +848,7 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* Cart Checkout Modal */}
+      {/* 🟢 Cart Checkout Modal (升級獨立錢包 UI) */}
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
@@ -840,26 +858,47 @@ export default function SmartPOS() {
             
             <h3 className="text-2xl font-black text-white italic mb-6">Cart Checkout <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h3>
             
-            <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 flex justify-between items-center mb-6">
-              <div>
-                <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
-                {/* 🟢 優先顯示客人名稱，若無名稱則顯示電話 */}
-                <p className="text-lg font-bold text-white">
-                  {checkoutSession.customerName ? checkoutSession.customerName : checkoutSession.phoneNumber}
-                </p>
-                {/* 如果有名字，在下方小字顯示電話 */}
-                {checkoutSession.customerName && (
-                  <p className="text-[10px] text-gray-500 mt-1 font-mono">{checkoutSession.phoneNumber}</p>
-                )}
+            <div className="bg-black p-4 rounded-2xl border border-[#D4AF37]/30 mb-6 flex flex-col gap-3">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
+                  <p className="text-lg font-bold text-white">
+                    {checkoutSession.customerName ? checkoutSession.customerName : checkoutSession.phoneNumber}
+                  </p>
+                  {checkoutSession.customerName && (
+                    <p className="text-[10px] text-gray-500 mt-1 font-mono">{checkoutSession.phoneNumber}</p>
+                  )}
+                  <div className="mt-2">
+                    <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest mr-2">
+                      {checkoutSession.tier}
+                    </span>
+                    {checkoutSession.discountRate < 1 && (
+                      <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="text-right">
+                  <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">💰 T-Dollar 餘額</p>
+                  <p className="text-2xl font-black text-[#D4AF37]">${checkoutSession.balance}</p>
+                </div>
               </div>
-              <div className="text-right">
-                <span className="text-[10px] bg-[#D4AF37]/20 text-[#D4AF37] px-2 py-1 rounded-md font-bold uppercase tracking-widest block mb-1">
-                  {checkoutSession.tier}
-                </span>
-                {checkoutSession.discountRate < 1 && (
-                  <span className="text-xs text-green-400 font-bold">{checkoutSession.discountRate * 10} 折優惠</span>
-                )}
-              </div>
+
+              {/* 獨立區塊：顯示可扣抵的套票 */}
+              {checkoutSession.packageBalances && Object.keys(checkoutSession.packageBalances).length > 0 && (
+                <div className="pt-3 border-t border-white/10 mt-1">
+                  <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest mb-2">🎫 可扣抵套票 (獨立扣次)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(checkoutSession.packageBalances).map(([pkgName, grids]) => (
+                      grids > 0 && (
+                        <span key={pkgName} className="bg-purple-500/20 border border-purple-500/30 text-purple-300 text-[10px] px-2 py-1 rounded font-bold">
+                          {pkgName}: 剩餘 {grids} 次
+                        </span>
+                      )
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="space-y-3 mb-6 bg-white/5 p-4 rounded-2xl border border-white/5">
