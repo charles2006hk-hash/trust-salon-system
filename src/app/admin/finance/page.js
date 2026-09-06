@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-// 🟢 引入 deleteDoc 用於刪除功能
-import { collection, getDocs, query, orderBy, doc, getDoc, where, updateDoc, arrayUnion, addDoc, deleteDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, doc, getDoc, where, updateDoc, arrayUnion, addDoc, deleteDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -16,10 +15,8 @@ export default function FinancePage() {
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
   const [currentUserName, setCurrentUserName] = useState(''); 
   
-  // 🟢 時間篩選狀態：支援按「月」或按「日」
-  const [filterType, setFilterType] = useState('month'); // 'month' | 'date'
+  const [filterType, setFilterType] = useState('month'); 
   
-  // 取得當地時間 (HKT) 避免 UTC 時差問題
   const today = new Date();
   const localMonth = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
   const localDate = localMonth + '-' + String(today.getDate()).padStart(2, '0');
@@ -57,21 +54,27 @@ export default function FinancePage() {
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
   const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
 
-  // 🟢 新增：執行「刪除單據」的函數
+  // 🟢 分頁狀態控制
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 50; // 預設每頁顯示數量
+
+  // 🟢 當篩選條件改變時，自動回到第一頁
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedBranch, filterType, selectedMonth, selectedDate]);
+
   const handleDeleteTransaction = async (tx) => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
     
     const itemName = tx.service || tx.packageName || '助手獎金';
     const itemAmount = tx.amount || tx.bonusAmount || 0;
     
-    // 防呆確認視窗
     if (!window.confirm(`⚠️ 警告：您確定要永久刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '未指定'}\n\n❗ 刪除後將無法恢復，且系統會將此操作寫入安全日誌。`)) {
       return;
     }
 
     const toastId = toast.loading("正在刪除單據並寫入安全日誌...");
     try {
-      // 1. 寫入「全局審計日誌 (Global Audit Logs)」
       await addDoc(collection(db, 'audit_logs'), {
         module: 'finance_transactions',
         action: 'delete_transaction',
@@ -90,11 +93,10 @@ export default function FinancePage() {
         }
       });
 
-      // 2. 執行刪除
       await deleteDoc(doc(db, 'transactions', tx.id));
       
       toast.success("✅ 單據已永久刪除！", { id: toastId });
-      fetchFinancialData(); // 重新整理報表
+      fetchFinancialData(); 
     } catch (error) {
       console.error(error);
       toast.error("刪除失敗，請檢查權限或網路", { id: toastId });
@@ -188,16 +190,15 @@ export default function FinancePage() {
     });
     fetchFinancialData();
     return () => unsubscribe();
-  }, [selectedMonth, selectedDate, filterType]); // 🟢 加入篩選依賴
+  }, [selectedMonth, selectedDate, filterType]); 
 
   useEffect(() => {
-    if (transactions.length >= 0) calculateData(); // 即使是 0 也要重算以清空畫面
+    if (transactions.length >= 0) calculateData(); 
   }, [selectedBranch, transactions, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
     try {
-      // 🟢 根據 filterType 決定查詢的時間範圍
       let startTime, endTime;
       if (filterType === 'month') {
         startTime = `${selectedMonth}-01T00:00:00`;
@@ -316,16 +317,12 @@ export default function FinancePage() {
 
         if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
            const itemName = tx.service || tx.packageName || '';
-           
-           // 判斷是否為「追加項目」或「購買產品」 (這些不計入主客數)
            const isAddon = itemName.includes('追加');
-           const isProduct = commCode && String(commCode).startsWith('P'); // 排除 P1, P2 等產品抽成
+           const isProduct = commCode && String(commCode).startsWith('P'); 
 
            if (!isAddon && !isProduct) {
-             // 不再用時間戳合併，而是將每一筆「非追加、非產品」的交易視為 1 個獨立客數
              staff.uniqueClientsSet.add(tx.id);
            }
-           // 更新該設計師的總客數
            staff.clientCount = staff.uniqueClientsSet.size;
         }
 
@@ -383,7 +380,6 @@ export default function FinancePage() {
           const snap = await getDocs(collection(db, colName));
           backupData[colName] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         } catch (e) {
-          console.error(`讀取 ${colName} 失敗:`, e);
           hasError = true;
           errorTables.push(colName);
           backupData[colName] = { error: "權限不足或資料表不存在" };
@@ -412,7 +408,6 @@ export default function FinancePage() {
     try {
       let csvContent = '\uFEFF'; 
       csvContent += `TRUST 沙龍財務報表\n`;
-      // 🟢 匯出時顯示正確的時間區間
       csvContent += `報表日期區間,${filterType === 'month' ? selectedMonth + ' (整月)' : selectedDate + ' (單日)'}\n`;
       csvContent += `篩選門店,${selectedBranch === 'ALL' ? '全線總計' : selectedBranch}\n\n`;
 
@@ -474,6 +469,14 @@ export default function FinancePage() {
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
+  // 🟢 分頁資料計算
+  const filteredAndSortedTx = transactions
+    .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+  const totalPages = Math.ceil(filteredAndSortedTx.length / itemsPerPage);
+  const paginatedTx = filteredAndSortedTx.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
   return (
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 md:p-10 font-sans pb-24 selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -513,7 +516,6 @@ export default function FinancePage() {
                </div>
              )}
 
-             {/* 🟢 升級版：日 / 月 篩選器 */}
              <div className="flex bg-[#121212] border border-white/10 rounded-xl overflow-hidden shadow-inner">
                <button 
                  onClick={() => setFilterType('month')} 
@@ -676,9 +678,10 @@ export default function FinancePage() {
               </div>
             </div>
             
-            <div className="bg-[#121212] rounded-[40px] p-10 border border-white/5 shadow-2xl overflow-hidden">
-              <h3 className="text-xl font-bold text-white mb-8 italic">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(篩選後共 {transactions.length} 筆)</span></h3>
-              <div className="overflow-x-auto">
+            {/* 🟢 交易明細區塊 (含分頁) */}
+            <div className="bg-[#121212] rounded-[40px] pt-10 px-0 pb-0 border border-white/5 shadow-2xl overflow-hidden flex flex-col">
+              <h3 className="text-xl font-bold text-white mb-8 italic px-10">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(篩選後共 {filteredAndSortedTx.length} 筆)</span></h3>
+              <div className="overflow-x-auto px-10 pb-6 flex-1">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/10">
@@ -688,15 +691,12 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right">變動金額</th>
-                      {/* 🟢 Admin 專屬表頭 */}
                       {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {transactions
-                      .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
-                      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-                      .slice(0, 50).map((tx) => ( // 顯示前50筆避免畫面過長
+                    {/* 🟢 改用 paginatedTx 渲染當前頁資料 */}
+                    {paginatedTx.map((tx) => ( 
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
                         <td className="py-4 text-[10px] text-gray-400 font-bold">{tx.branch || '未指定'}</td>
@@ -725,13 +725,11 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🟢 Admin 專屬的修改、刪除與查帳按鈕 */}
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-1.5">
                               {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
                                 <div className="flex gap-1.5 w-full justify-center">
-                                  {/* 修改按鈕 */}
                                   <button 
                                     onClick={() => {
                                       setEditingTx({...tx}); 
@@ -742,8 +740,6 @@ export default function FinancePage() {
                                   >
                                     <i className="fa-solid fa-pen"></i> 改
                                   </button>
-                                  
-                                  {/* 🟢 新增：刪除按鈕 */}
                                   <button 
                                     onClick={() => handleDeleteTransaction(tx)}
                                     className="flex-1 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
@@ -767,12 +763,40 @@ export default function FinancePage() {
                         )}
                       </tr>
                     ))}
-                    {transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch).length === 0 && (
+                    {filteredAndSortedTx.length === 0 && (
                       <tr><td colSpan="7" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
+
+              {/* 🟢 分頁控制區塊 */}
+              {totalPages > 1 && (
+                <div className="p-4 px-10 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 bg-black/20">
+                  <p className="text-[10px] text-gray-500 font-bold tracking-widest uppercase">
+                    顯示 {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, filteredAndSortedTx.length)} 筆，共 {filteredAndSortedTx.length} 筆
+                  </p>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                      className="px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-white/5 rounded-xl text-[10px] font-bold tracking-widest uppercase transition-colors"
+                    >
+                      <i className="fa-solid fa-chevron-left mr-1"></i> 上一頁
+                    </button>
+                    <div className="px-4 py-2 text-[10px] font-bold tracking-widest text-[#D4AF37] border border-[#D4AF37]/30 rounded-xl bg-[#D4AF37]/5">
+                      {currentPage} / {totalPages}
+                    </div>
+                    <button 
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-white/5 rounded-xl text-[10px] font-bold tracking-widest uppercase transition-colors"
+                    >
+                      下一頁 <i className="fa-solid fa-chevron-right ml-1"></i>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1004,7 +1028,6 @@ export default function FinancePage() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
-        /* 日期選擇器統一自訂樣式 */
         .custom-date-input { position: relative; }
         .custom-date-input::-webkit-calendar-picker-indicator {
             position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;
