@@ -261,10 +261,14 @@ export default function StaffPerformancePage() {
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 relative z-10">
            <div>
-             <p className="text-[10px] text-gray-400 uppercase tracking-widest">套票客量</p>
-             <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.scalpClientCount || 0} <span className="text-xs font-normal text-gray-500">位</span></p>
+             <p className="text-[10px] text-gray-400 uppercase tracking-widest">真實套票客量</p>
+             {/* 🌟 顯示報表的真實客數 */}
+             <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.realScalpClientCount || 0} <span className="text-xs font-normal text-gray-500">位</span></p>
+             {/* 🌟 判斷升級時，使用計算出來的隱藏代幣 scalpClientCount */}
              <p className="text-[10px] text-green-500 font-bold mt-1">
-               {dynamicTierStats.scalpClientCount >= 2 ? '✅ 產品基礎提成已達 25%' : '距離升級 25% 還差 ' + (2 - (dynamicTierStats.scalpClientCount || 0)) + ' 位'}
+               {dynamicTierStats.scalpClientCount >= 2 
+                 ? '✅ 產品基礎提成已達 25%' 
+                 : '距離升級 25% 還差 ' + (2 - (dynamicTierStats.scalpClientCount || 0)) + ' 位'}
              </p>
            </div>
            <div>
