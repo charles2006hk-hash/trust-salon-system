@@ -49,6 +49,9 @@ export default function SmartPOS() {
   
   const [serviceFilterTab, setServiceFilterTab] = useState('全部');
 
+  // 🟢 新增：核銷歷史紀錄的狀態
+  const [historyModal, setHistoryModal] = useState({ isOpen: false, logs: [], loading: false });
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => { 
       if (!user) {
@@ -335,6 +338,20 @@ export default function SmartPOS() {
     if (!snap.empty) setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() }); else toast.error("找不到此會員");
   };
 
+  // 🟢 查詢該會員的套票核銷紀錄
+  const fetchPackageHistory = async (userId) => {
+    setHistoryModal({ isOpen: true, logs: [], loading: true });
+    try {
+      const q = query(collection(db, "transactions"), where("userId", "==", userId), where("type", "==", "deduct_package"));
+      const snap = await getDocs(q);
+      const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setHistoryModal({ isOpen: true, logs, loading: false });
+    } catch (e) {
+      toast.error("讀取核銷紀錄失敗");
+      setHistoryModal({ isOpen: false, logs: [], loading: false });
+    }
+  };
+
   const handleStoreAction = async (e) => {
     e.preventDefault();
     if (!currentBranch) return toast.error("系統錯誤：未綁定門市");
@@ -407,7 +424,6 @@ export default function SmartPOS() {
     <div className="bg-[#080808] min-h-screen text-gray-200 p-6 font-sans">
       <Toaster position="top-right" />
 
-      {/* 數字鍵盤 Modal */}
       {numpadConfig.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[300] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-sm rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.2)] flex flex-col animate-fade-in">
@@ -443,7 +459,6 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 智慧選擇器 Modal */}
       {selectorConfig.isOpen && (
         <div className="fixed inset-0 z-[400] flex items-end sm:items-center justify-center bg-black/90 backdrop-blur-sm p-0 sm:p-6 transition-opacity">
           <div className="bg-[#121212] w-full max-w-3xl rounded-t-[40px] sm:rounded-[40px] p-8 border border-white/10 shadow-2xl flex flex-col max-h-[85vh] animate-slide-up">
@@ -564,7 +579,6 @@ export default function SmartPOS() {
         </div>
       )}
       
-      {/* 頂部 Header */}
       <header className="max-w-7xl mx-auto mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 px-4">
         <div>
           <h1 className="text-3xl font-black tracking-tighter flex items-center gap-3">
@@ -593,10 +607,8 @@ export default function SmartPOS() {
         </div>
       </header>
 
-      {/* 雙欄主畫面 */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* 左側：快速報到 */}
         <div className="lg:col-span-4 space-y-8">
           <div className="bg-[#121212] p-8 rounded-[40px] border border-white/5 shadow-2xl">
             <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest mb-6 italic">Quick Check-in (掃碼/路過)</h3>
@@ -674,7 +686,6 @@ export default function SmartPOS() {
           </div>
         </div>
 
-        {/* 右側：現場動態 */}
         <div className="lg:col-span-8 space-y-6">
           <h3 className="text-xs font-black text-[#D4AF37] uppercase tracking-widest px-4">本門市現場動態 (Now Serving)</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -748,7 +759,6 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 儲值/套票 Modal (升級獨立錢包 UI) */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -773,7 +783,6 @@ export default function SmartPOS() {
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
                 </div>
 
-                {/* 🟢 獨立顯示 T-Dollar 現金與套票次數 */}
                 <div className="bg-white/5 p-4 rounded-2xl flex flex-col gap-3">
                    <div className="flex justify-between items-start">
                      <div>
@@ -786,10 +795,19 @@ export default function SmartPOS() {
                      </div>
                    </div>
                    
-                   {/* 獨立區塊：顯示持有的套票 */}
                    {topUpUser.packageBalances && Object.keys(topUpUser.packageBalances).length > 0 && (
                      <div className="border-t border-white/10 pt-3 mt-1">
-                       <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest mb-2">🎫 已持有的套票 (獨立扣次)</p>
+                       {/* 🟢 新增：查閱套票核銷紀錄按鈕 */}
+                       <div className="flex justify-between items-center mb-2">
+                           <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest">🎫 已持有的套票 (獨立扣次)</p>
+                           <button 
+                             type="button" 
+                             onClick={() => fetchPackageHistory(topUpUser.id)} 
+                             className="text-[10px] bg-purple-500/20 hover:bg-purple-500/40 text-purple-300 border border-purple-500/30 px-3 py-1 rounded-full transition-colors flex items-center gap-1 font-bold"
+                           >
+                             📜 查閱核銷紀錄
+                           </button>
+                       </div>
                        <div className="flex flex-wrap gap-2">
                          {Object.entries(topUpUser.packageBalances).map(([pkgName, grids]) => (
                            grids > 0 && (
@@ -848,7 +866,44 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 🟢 Cart Checkout Modal (升級獨立錢包 UI) */}
+      {/* 🟢 新增：核銷歷史紀錄 Modal */}
+      {historyModal.isOpen && (
+        <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
+          <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[40px] p-8 border border-purple-500/50 shadow-[0_0_50px_rgba(168,85,247,0.15)] relative animate-fade-in">
+            <button onClick={() => setHistoryModal({ isOpen: false, logs: [], loading: false })} className="absolute top-6 right-6 text-gray-500 hover:text-white">
+              <i className="fa-solid fa-xmark text-xl"></i>
+            </button>
+            <h3 className="text-xl font-black text-white italic mb-2">Package <span className="text-purple-400">History</span></h3>
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest mb-6">套票核銷扣次紀錄</p>
+
+            {historyModal.loading ? (
+              <div className="py-10 text-center text-purple-400 font-bold text-sm">載入紀錄中...</div>
+            ) : historyModal.logs.length === 0 ? (
+              <div className="py-10 text-center text-gray-600 font-bold text-sm border border-dashed border-white/5 rounded-2xl">尚無核銷紀錄</div>
+            ) : (
+              <div className="space-y-3">
+                {historyModal.logs.map(log => (
+                  <div key={log.id} className="bg-black p-4 rounded-2xl border border-white/10 flex justify-between items-center group hover:border-purple-500/50 transition-colors">
+                    <div>
+                      <p className="text-sm font-bold text-white mb-1">{log.packageName}</p>
+                      <p className="text-[10px] text-gray-500 font-mono flex items-center gap-2">
+                        <span><i className="fa-solid fa-clock text-purple-900 mr-1"></i>{new Date(log.timestamp).toLocaleString('zh-HK')}</span>
+                        <span><i className="fa-solid fa-scissors text-purple-900 mr-1"></i>{log.stylist}</span>
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <span className="bg-red-500/20 text-red-400 px-3 py-1 rounded-lg font-black font-mono text-sm border border-red-500/20">
+                        -{log.deductedGrids} 次
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {checkoutSession && (
         <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-6 backdrop-blur-md overflow-y-auto">
           <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-8 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative my-8">
@@ -884,7 +939,6 @@ export default function SmartPOS() {
                 </div>
               </div>
 
-              {/* 獨立區塊：顯示可扣抵的套票 */}
               {checkoutSession.packageBalances && Object.keys(checkoutSession.packageBalances).length > 0 && (
                 <div className="pt-3 border-t border-white/10 mt-1">
                   <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest mb-2">🎫 可扣抵套票 (獨立扣次)</p>
