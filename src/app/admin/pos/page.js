@@ -786,9 +786,11 @@ export default function SmartPOS() {
         </div>
       </div>
 
+      {/* 🟢 儲值/套票 Modal (升級獨立錢包 UI + 滾動條防溢出) */}
       {showTopUpModal && (
-        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-6 backdrop-blur-sm">
-          <div className="bg-[#121212] w-full max-w-lg rounded-[40px] p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
+        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4 md:p-6 backdrop-blur-sm">
+          {/* 加入 max-h-[90vh] 與 overflow-y-auto 確保內容過多時可以滾動，不會上下頂住 */}
+          <div className="bg-[#121212] w-full max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
             <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852');}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
             
@@ -805,9 +807,13 @@ export default function SmartPOS() {
             {topUpUser && (
               <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
                 
+                {/* 🟢 優化：把 Admin 修正按鈕拉上來做成第 3 個 Tab，切換更直覺不會重疊 */}
                 <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
-                  <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值 T-Dollar</button>
-                  <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-xs font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
+                  <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值餘額</button>
+                  <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
+                  {currentUserRole === 'admin' && (
+                    <button type="button" onClick={() => setTopUpTab('admin_adjust_pkg')} className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-colors ${topUpTab === 'admin_adjust_pkg' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-white'}`}>🔧 修正次數</button>
+                  )}
                 </div>
 
                 <div className="bg-white/5 p-4 rounded-2xl flex flex-col gap-3">
@@ -829,7 +835,7 @@ export default function SmartPOS() {
                            <button 
                              type="button" 
                              onClick={() => fetchPackageHistory(topUpUser.id)} 
-                             className="text-[10px] bg-purple-500/20 hover:bg-purple-500/40 text-purple-300 border border-purple-500/30 px-3 py-1 rounded-full transition-colors flex items-center gap-1 font-bold"
+                             className="text-[10px] bg-purple-500/20 hover:bg-purple-500/40 text-purple-300 border border-purple-500/30 px-3 py-1 rounded-full transition-colors flex items-center gap-1 font-bold shrink-0"
                            >
                              📜 查閱核銷紀錄
                            </button>
@@ -847,7 +853,8 @@ export default function SmartPOS() {
                    )}
                 </div>
 
-                {topUpTab === 'tdollar' ? (
+                {/* 根據選擇的 Tab 顯示對應的輸入框 */}
+                {topUpTab === 'tdollar' && (
                   <div className="space-y-2 animate-fade-in">
                     <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">充值金額 (HKD) - 1:1 兌換 T-Dollar</label>
                     <div className="flex gap-2 mb-2">
@@ -862,7 +869,9 @@ export default function SmartPOS() {
                       {topUpForm.amount ? `$ ${topUpForm.amount}` : <span className="text-gray-600 font-normal">點擊輸入金額...</span>}
                     </div>
                   </div>
-                ) : (
+                )}
+
+                {topUpTab === 'package' && (
                   <div className="space-y-2 animate-fade-in">
                     <label className="text-[10px] font-bold text-purple-400 uppercase tracking-widest ml-1">選擇套票方案</label>
                     <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-purple-500/50 p-4 rounded-2xl text-white outline-none focus:border-purple-400">
@@ -872,53 +881,49 @@ export default function SmartPOS() {
                   </div>
                 )}
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式</label>
-                  <select value={topUpForm.paymentMethod} onChange={e => setTopUpForm({...topUpForm, paymentMethod: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
-                    <option value="Cash">現金 (Cash)</option>
-                    <option value="Credit Card">信用卡 (Visa/Master)</option>
-                    <option value="PayMe">PayMe</option>
-                    <option value="FPS">轉數快 (FPS)</option>
-                    <option value="Alipay">支付寶 (Alipay)</option>
-                  </select>
-                </div>
+                {topUpTab === 'admin_adjust_pkg' && (
+                   <div className="bg-blue-900/20 p-4 rounded-2xl border border-blue-500/30 animate-fade-in">
+                      <p className="text-xs text-blue-300 font-bold mb-4">⚠️ 此功能僅供老闆將舊客人的套票轉移至新系統使用，操作不會產生任何財務流水或業績。</p>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">選擇要修正的套票</label>
+                          <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1">
+                            <option value="">請選擇...</option>
+                            {displayPackages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">設定剩餘總次數</label>
+                          <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1" placeholder="例如：4" />
+                        </div>
+                      </div>
+                   </div>
+                )}
 
-                <button type="submit" className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'bg-purple-500 text-white hover:bg-purple-400'}`}>
-                  確認收款並存入系統
-                </button>
+                {/* 根據 Tab 動態切換送出按鈕與收款方式 */}
+                {(topUpTab === 'tdollar' || topUpTab === 'package') ? (
+                  <>
+                    <div className="space-y-2 animate-fade-in">
+                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">收款方式</label>
+                      <select value={topUpForm.paymentMethod} onChange={e => setTopUpForm({...topUpForm, paymentMethod: e.target.value})} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]">
+                        <option value="Cash">現金 (Cash)</option>
+                        <option value="Credit Card">信用卡 (Visa/Master)</option>
+                        <option value="PayMe">PayMe</option>
+                        <option value="FPS">轉數快 (FPS)</option>
+                        <option value="Alipay">支付寶 (Alipay)</option>
+                      </select>
+                    </div>
 
-                {currentUserRole === 'admin' && (
-                  <div className="mt-4 pt-3 border-t border-white/10 text-center">
-                    <button type="button" onClick={() => setTopUpTab('admin_adjust_pkg')} className="text-[10px] text-blue-400 font-bold uppercase tracking-widest hover:text-blue-300">
-                      <i className="fa-solid fa-wrench mr-1"></i> 🔧 Admin 專屬：無痕補發 / 修正套票次數
+                    <button type="submit" className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl animate-fade-in ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'bg-purple-500 text-white hover:bg-purple-400'}`}>
+                      確認收款並存入系統
                     </button>
-                  </div>
+                  </>
+                ) : (
+                  <button type="submit" className="w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl bg-blue-600 text-white animate-fade-in">
+                     確認修正 (不計入營收)
+                  </button>
                 )}
               </form>
-            )}
-
-            {topUpTab === 'admin_adjust_pkg' && topUpUser && (
-               <form onSubmit={handleStoreAction} className="space-y-4 border-t border-white/10 pt-4 animate-fade-in mt-4">
-                 <div className="bg-blue-900/20 p-4 rounded-2xl border border-blue-500/30">
-                    <p className="text-xs text-blue-300 font-bold mb-4">⚠️ 此功能僅供老闆將舊客人的套票轉移至新系統使用，操作不會產生任何財務流水或業績。</p>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">選擇要修正的套票</label>
-                        <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1">
-                          <option value="">請選擇...</option>
-                          {displayPackages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">設定剩餘總次數</label>
-                        <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1" placeholder="例如：4" />
-                      </div>
-                    </div>
-                 </div>
-                 <button type="submit" className="w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl bg-blue-600 text-white">
-                    確認修正 (不計入營收)
-                 </button>
-               </form>
             )}
           </div>
         </div>
