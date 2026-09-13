@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
 // 🟢 補上了 runTransaction 的引入，用於安全扣款與補發
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc, runTransaction } from 'firebase/firestore'; 
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc, runTransaction, query, where } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
