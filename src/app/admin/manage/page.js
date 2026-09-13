@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc } from 'firebase/firestore'; 
+// 🟢 補上了 runTransaction 的引入，用於安全扣款與補發
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc, runTransaction } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -46,6 +47,11 @@ export default function AdminManagePage() {
   const [newLabelCode, setNewLabelCode] = useState('');
   const [newLabelName, setNewLabelName] = useState('');
 
+  // 🟢 盤點修復工具專屬狀態
+  const [anomalyList, setAnomalyList] = useState([]);
+  const [scanning, setScanning] = useState(false);
+  const [fixPackageId, setFixPackageId] = useState('');
+
   const defaultLabels = {
     W1: '洗剪吹類 (需扣耗材)', W2: '洗剪吹類 (純抽成)', W3: '洗剪吹類 (高階)', 
     R1: '染燙化學類 (需扣耗材)', R2: '染燙化學類 (純抽成)', R3: '染燙化學類 (進階)', 
@@ -83,10 +89,11 @@ export default function AdminManagePage() {
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
   const salonEmojiList = ['🧴', '💆‍♀️', '💆‍♂️', '✂️', '✨', '💧', '🌿', '👑', '🎀', '💅', '🛍️', '🎁'];
 
+  // 🟢 增加了 'tools' 數據盤點模組
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
-    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }] } 
+    { title: "⚙️ 系統與全局設定", items: [{ id: 'branches', label: '門店管理', icon: '📍' }, { id: 'staff', label: '髮型師與專屬拆帳', icon: '✂️' }, { id: 'templates', label: '抽成模板管理', icon: '💰' }, { id: 'settings', label: '系統全局參數', icon: '⚙️' }, { id: 'tools', label: '數據盤點與修復', icon: '🛠️' }] } 
   ];
 
   useEffect(() => {
@@ -125,6 +132,7 @@ export default function AdminManagePage() {
   };
 
   const fetchData = async () => {
+    if (activeTab === 'tools') return; // tools 不需要走一般的 data fetch
     setLoading(true);
     try {
       const querySnapshot = await getDocs(collection(db, activeTab));
@@ -179,6 +187,96 @@ export default function AdminManagePage() {
       toast.success("預設模板已強制覆蓋更新完成！", { id: toastId });
       fetchTemplates(); fetchData(); 
     } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
+  };
+
+  // 🟢 工具一：智能掃描異常的舊客資料
+  const scanAnomalies = async () => {
+    setScanning(true);
+    try {
+      // 1. 從歷史交易找出儲值 $3000 或以上的行為
+      // (舊系統儲值套票時通常入 T-Dollar $3000)
+      const q = query(collection(db, 'transactions'), where('type', '==', 'topup'));
+      const txSnap = await getDocs(q);
+      const suspiciousPhones = new Set();
+      
+      txSnap.docs.forEach(d => {
+          const data = d.data();
+          const amt = Number(data.tDollarAdded) || Number(data.amountPaidHKD) || 0;
+          if (amt >= 3000) {
+              if (data.phoneNumber) suspiciousPhones.add(data.phoneNumber);
+          }
+      });
+
+      // 2. 對比 User 資料表
+      const usersSnap = await getDocs(collection(db, 'users'));
+      const anomalies = [];
+      usersSnap.docs.forEach(d => {
+          const u = d.data();
+          if (suspiciousPhones.has(u.phoneNumber)) {
+              // 檢查他們目前的套票錢包是否為空
+              const hasPackage = Object.keys(u.packageBalances || {}).length > 0;
+              if (!hasPackage) {
+                  anomalies.push({ id: d.id, ...u });
+              }
+          }
+      });
+      
+      setAnomalyList(anomalies);
+      if (anomalies.length === 0) toast.success("掃描完成：未發現異常舊客資料！");
+      else toast.success(`掃描完成：發現 ${anomalies.length} 筆可能異常紀錄`);
+    } catch (e) {
+      toast.error("掃描失敗：" + e.message);
+    }
+    setScanning(false);
+  };
+
+  // 🟢 工具二：一鍵轉移修復
+  const handleFixAnomaly = async (user) => {
+    if (!fixPackageId) return toast.error("請先在上方選擇要【補發的目標套票】方案！");
+    const pkg = packagesList.find(p => p.id === fixPackageId);
+    if (!pkg) return;
+
+    const deductAmt = Number(pkg.price);
+
+    if (!window.confirm(`【系統無痕轉移】\n確定要修復客戶 ${user.name || user.phoneNumber} 的資料嗎？\n\n執行動作：\n1. 從 T-Dollar 現金餘額扣除 $${deductAmt}\n2. 發放獨立套票【${pkg.name}】共 ${pkg.quantity} 次\n\n※ 此操作僅轉移資料架構，不產生任何業績流水。`)) return;
+
+    const toastId = toast.loading("修復轉移中...");
+    try {
+        const userRef = doc(db, 'users', user.id);
+        await runTransaction(db, async (tx) => {
+            const uDoc = await tx.get(userRef);
+            const currentData = uDoc.data();
+            
+            // 扣除現金餘額 (最少扣到0)
+            let newBalance = (currentData.tDollarBalance || 0) - deductAmt;
+            if (newBalance < 0) newBalance = 0; 
+
+            // 增加新架構套票
+            let currentPkgs = currentData.packageBalances || {};
+            let newGrids = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
+
+            tx.update(userRef, {
+                tDollarBalance: newBalance,
+                packageBalances: { ...currentPkgs, [pkg.name]: newGrids }
+            });
+
+            // 寫入審計日誌
+            tx.set(doc(collection(db, "audit_logs")), {
+                module: "data_migration",
+                action: "fix_old_package_anomaly",
+                customerPhone: user.phoneNumber,
+                deductedTDollar: deductAmt,
+                addedPackage: pkg.name,
+                addedGrids: pkg.quantity,
+                timestamp: new Date().toISOString(),
+                adminName: currentUserRole
+            });
+        });
+        toast.success(`修復成功！已將 ${user.phoneNumber} 轉移至新架構。`, { id: toastId });
+        setAnomalyList(prev => prev.filter(u => u.id !== user.id));
+    } catch (e) {
+        toast.error("修復失敗：" + e.message, { id: toastId });
+    }
   };
 
   const handleSave = async (e) => {
@@ -300,7 +398,6 @@ export default function AdminManagePage() {
     setFormData({ ...formData, title: formData.title + emoji });
   };
 
-  // ★ 矩陣編輯器：強制先以 3x4 網格順序排版
   const renderMatrixEditor = () => {
     const sortedCodes = getSortedCodes(globalLabels);
     
@@ -335,7 +432,7 @@ export default function AdminManagePage() {
   };
 
   const visibleMenuGroups = menuGroups.map(group => {
-    if (currentUserRole === 'manager') return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches'].includes(item.id)) };
+    if (currentUserRole === 'manager') return { ...group, items: group.items.filter(item => !['staff', 'settings', 'templates', 'branches', 'tools'].includes(item.id)) };
     return group;
   }).filter(group => group.items.length > 0);
 
@@ -378,252 +475,303 @@ export default function AdminManagePage() {
         <div className="lg:col-span-9">
           <div className={`bg-[#1a1a1a] p-8 rounded-[40px] border-2 ${editingId ? 'border-[#D4AF37]' : 'border-gray-800'} mb-12 shadow-2xl relative transition-all`}>
             <h2 className="text-xl font-bold mb-8 text-white flex items-center gap-2">
-              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : '✨ 新增項目'}
+              {editingId ? '📝 修改項目' : activeTab === 'settings' ? '⚙️ 全局參數設定' : activeTab === 'templates' ? '💰 新增抽成模板' : activeTab === 'branches' ? '📍 新增門店' : activeTab === 'tools' ? '🛠️ 數據盤點與修復' : '✨ 新增項目'}
             </h2>
 
-            {['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin' ? (
+            {['staff', 'settings', 'templates', 'branches', 'tools'].includes(activeTab) && currentUserRole !== 'admin' ? (
                <div className="bg-red-500/10 border border-red-500/30 p-8 rounded-3xl text-center text-red-400 font-bold">
                  ⛔ 權限不足：僅系統管理員 (Admin) 可檢視與修改此機密設定。
                </div>
             ) : (
-              <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                
-                {activeTab === 'branches' && (
-                  <>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">門店名稱</label>
-                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：大埔店、樂富店" />
-                    </div>
-                  </>
-                )}
-
-                {activeTab === 'templates' && (
-                  <>
-                    <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
-                      <div>
-                        <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
-                        <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新預設拆帳公式。</p>
-                      </div>
-                      <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
-                        強制更新預設模板
+              activeTab === 'tools' ? (
+                // 🟢 專屬工具模組 UI
+                <div className="space-y-6">
+                   <div className="bg-blue-900/10 border border-blue-500/30 p-6 rounded-2xl">
+                      <h3 className="text-blue-400 font-bold mb-2 text-lg"><i className="fa-solid fa-radar"></i> 舊制套票異常客戶盤點</h3>
+                      <p className="text-sm text-gray-400 mb-6 leading-relaxed">
+                        系統升級為「雙錢包架構」後，舊客人的 $3000 套票可能會停留在現金餘額中。
+                        點擊下方按鈕，系統將自動比對歷史交易紀錄與客戶錢包，找出目前套票次數為 0 但曾買過套票的客戶。
+                      </p>
+                      <button onClick={scanAnomalies} disabled={scanning} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg flex items-center gap-2">
+                        {scanning ? <><i className="fa-solid fa-spinner fa-spin"></i> 正在掃描資料庫...</> : <><i className="fa-solid fa-magnifying-glass"></i> 開始盤點掃描</>}
                       </button>
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">自訂抽成模板名稱</label>
-                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：A 級師傅、G 級大師、設計助理..." />
-                    </div>
-                    {renderMatrixEditor()}
-                  </>
-                )}
+                   </div>
 
-                {activeTab === 'settings' && (
-                  <>
-                    <div className="space-y-2 col-span-2 mb-4">
-                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
-                      <input type="number" inputMode="decimal" className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-xl text-white focus:border-[#D4AF37] outline-none text-xl font-black" value={formData.validityDays} onChange={e => setFormData({...formData, validityDays: e.target.value})} required />
-                    </div>
-                    
-                    <div className="col-span-2 pt-6 border-t border-gray-800">
-                      <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤庫 (動態擴充)</h3>
-                      <p className="text-xs text-gray-400 mb-4">您可以隨時新增或修改標籤，供服務定價與拆帳矩陣使用。</p>
-                      
-                      <div className="flex flex-wrap gap-2 mb-6 bg-blue-900/20 p-4 rounded-xl border border-blue-800/50 items-end">
-                         <div className="flex-1">
-                           <label className="text-[10px] text-blue-400 uppercase font-bold">新標籤代碼 (如 SCALP_PROD)</label>
-                           <input type="text" value={newLabelCode} onChange={e => setNewLabelCode(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500 uppercase font-mono" placeholder="限英文與底線"/>
+                   {anomalyList.length > 0 && (
+                     <div className="bg-black/40 border border-white/5 p-6 rounded-2xl">
+                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                         <h4 className="text-[#D4AF37] font-bold"><i className="fa-solid fa-triangle-exclamation"></i> 發現 {anomalyList.length} 筆異常紀錄</h4>
+                         <div className="flex items-center gap-2">
+                           <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest shrink-0">指定補發目標套票</span>
+                           <select 
+                             className="bg-black border border-white/10 p-2 rounded-lg text-white text-xs outline-none focus:border-[#D4AF37]"
+                             value={fixPackageId}
+                             onChange={(e) => setFixPackageId(e.target.value)}
+                           >
+                             <option value="">-- 選擇要補發的套票方案 --</option>
+                             {packagesList.map(p => <option key={p.id} value={p.id}>{p.name} (定價 ${p.price})</option>)}
+                           </select>
                          </div>
-                         <div className="flex-[2]">
-                           <label className="text-[10px] text-blue-400 uppercase font-bold">顯示名稱</label>
-                           <input type="text" value={newLabelName} onChange={e => setNewLabelName(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500" placeholder="例如：頭皮專用產品"/>
-                         </div>
-                         <button type="button" onClick={handleAddLabel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors shadow-lg">
-                           + 新增標籤
-                         </button>
-                      </div>
+                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {/* ★ 改用強制排序的 getSortedCodes */}
-                        {getSortedCodes(formData.commissionLabels || globalLabels).map(code => (
-                          <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5 relative group">
-                            <label className="text-[10px] font-bold text-gray-500 uppercase">{code} 標籤名稱</label>
-                            <input 
-                              type="text" 
-                              className="w-full bg-transparent border-b border-white/10 p-1 text-white outline-none text-sm focus:border-[#D4AF37] transition-colors" 
-                              value={formData.commissionLabels?.[code] !== undefined ? formData.commissionLabels[code] : (defaultLabels[code] || '')} 
-                              onChange={e => setFormData({...formData, commissionLabels: {...formData.commissionLabels, [code]: e.target.value}})} 
-                            />
-                            {!Object.keys(defaultLabels).includes(code) && (
-                              <button 
-                                type="button" 
-                                onClick={() => handleRemoveLabel(code)}
-                                className="absolute top-2 right-2 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                                title="刪除此自訂標籤"
-                              >
-                                <i className="fa-solid fa-trash"></i>
-                              </button>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {activeTab === 'services' && (
-                  <>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required /></div>
-                    
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
-                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
-                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
-                      <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
-                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                      </select>
-                    </div>
-                    
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
-                      <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {/* ★ 改用強制排序的 getSortedCodes */}
-                        {getSortedCodes(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
-                      </select>
-                    </div>
-                  </>
-                )}
-
-                {activeTab === 'packages' && (
-                  <>
-                    <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="免費贈送用請填 0" /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" /></div>
-                    
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
-                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
-                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
-                      <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
-                        <option value="">-- 選擇分類 (選填) --</option>
-                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
-                      <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                        {['SCALP'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
-                      </select>
-                    </div>
-                  </>
-                )}
-
-                {activeTab === 'staff' && (
-                  <>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
-                      {!isCustomStaff ? (
-                        <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={registeredStaff.includes(formData.name) ? formData.name : (formData.name ? 'CUSTOM' : '')} onChange={e => { if (e.target.value === 'CUSTOM') { setIsCustomStaff(true); setFormData({...formData, name: ''}); } else { setFormData({...formData, name: e.target.value}); } }} required>
-                          <option value="">-- 請選擇已註冊員工 --</option>{registeredStaff.map(name => <option key={name} value={name}>{name}</option>)}<option value="CUSTOM">➕ 手動輸入 (無帳號的自由業)</option>
-                        </select>
-                      ) : (
-                        <div className="flex gap-2">
-                          <input type="text" className="flex-1 bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="輸入自訂姓名..." />
-                          <button type="button" onClick={() => { setIsCustomStaff(false); setFormData({...formData, name: ''}); }} className="px-6 bg-gray-800 text-gray-400 rounded-xl hover:text-white hover:bg-gray-700 transition-colors font-bold text-sm">返回選單</button>
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">聯絡電話 (Phone)</label>
-                      <input type="tel" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.phoneNumber} onChange={e => setFormData({...formData, phoneNumber: e.target.value})} required placeholder="如: +85298765432" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
-                      <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
-                        <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (跨店支援)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="space-y-2 col-span-2 flex items-center gap-3 bg-gray-900 p-4 rounded-xl border border-white/5">
-                      <input type="checkbox" id="isAssistant" className="w-5 h-5 accent-[#D4AF37]" checked={formData.isAssistant} onChange={e => setFormData({...formData, isAssistant: e.target.checked})} />
-                      <div className="flex flex-col">
-                        <label htmlFor="isAssistant" className="text-sm font-bold text-yellow-500 cursor-pointer tracking-widest">標記為專職助手 (Assistant Tag)</label>
-                        <span className="text-[10px] text-gray-500">勾選後，該員工在 POS 收銀台的「選擇助手」名單中會自動置頂分類。</span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">📥 載入預設抽成模板 (載入後可微調)</label>
-                      <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
-                        <option value="">-- 保持原數值或自訂比例 --</option>{templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-                      {formData.templateName && <p className="text-xs text-green-400 mt-2 bg-green-500/10 p-2 rounded-lg border border-green-500/20">✅ <strong>目前已載入：{formData.templateName} 數值</strong> <br/>(確認無誤後，請務必點擊最下方「儲存」按鈕！)</p>}
-                    </div>
-                    {renderMatrixEditor()}
-                  </>
-                )}
-
-                {activeTab === 'categories' && (
-                  <>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">新分類名稱</label>
-                      <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
-                    </div>
-                    <div className="space-y-2 col-span-2">
-                      <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠左)</label>
-                      <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
-                    </div>
-                  </>
-                )}
-
-                {activeTab === 'promos' && (
-                  <><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2 block">優惠標題</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800"><span className="text-xs text-gray-500 w-full mb-1">快速插入 Emoji:</span>{promoEmojiList.map(e => (<button key={e} type="button" onClick={() => addPromoEmoji(e)} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>))}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required /></div><div className="space-y-2 col-span-2 md:col-span-1"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">有效日期至</label><input type="date" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.expiry} onChange={e => setFormData({...formData, expiry: e.target.value})} required /></div><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">詳細內容</label><textarea className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white h-32 focus:border-[#D4AF37] outline-none" value={formData.content} onChange={e => setFormData({...formData, content: e.target.value})} required /></div></>
-                )}
-                {activeTab === 'rewards' && (
-                  <><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">禮品名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">所需積分 (Points)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">圖標 (Emoji)</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">{salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} /></div></>
-                )}
-
-                {activeTab === 'tiers' && (
-                  <>
-                    <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">累積充值門檻 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單折扣 (例: 0.8 = 8折)</label><input type="number" inputMode="decimal" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required /></div>
-                    <div className="space-y-2 pt-4 border-t border-gray-800 col-span-2"><p className="text-xs font-bold text-purple-400"><i className="fa-solid fa-gift"></i> 達成此門檻的「升級自動派發獎勵」</p></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">1. 額外贈送積分</label><input type="number" inputMode="decimal" className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.upgradeBonus} onChange={e => setFormData({...formData, upgradeBonus: e.target.value})} placeholder="如不贈送請填 0" /></div>
-                    <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">2. 自動派發套票/實體券</label><select className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.giftPackageName} onChange={e => setFormData({...formData, giftPackageName: e.target.value})}><option value="">無贈送套票</option>{packagesList.map(p => <option key={p.id} value={p.name}>{p.name} (含 {p.quantity} 格)</option>)}</select></div>
-                  </>
-                )}
-
-                <div className="flex gap-4 col-span-2 mt-4">
-                  <button type="submit" className="flex-1 bg-white text-black font-black py-4 rounded-2xl hover:bg-[#D4AF37] transition-all shadow-xl active:scale-95 tracking-widest">
-                    {activeTab === 'settings' ? '💾 儲存全局設定' : editingId ? '💾 儲存修改內容' : '➕ 確認新增資料'}
-                  </button>
-                  {editingId && (
-                    <button type="button" onClick={() => {setEditingId(null); setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
-                  )}
+                       <div className="space-y-3">
+                         {anomalyList.map(user => (
+                           <div key={user.id} className="bg-[#121212] p-4 rounded-xl border border-gray-800 flex flex-col md:flex-row justify-between md:items-center gap-4 hover:border-blue-500/30 transition-colors">
+                             <div>
+                               <p className="text-white font-bold">{user.name || '未命名客戶'} <span className="text-xs text-gray-500 font-mono ml-2">{user.phoneNumber}</span></p>
+                               <p className="text-[10px] text-gray-400 mt-1">目前 T-Dollar 現金餘額: <span className="text-[#D4AF37] font-bold">${user.tDollarBalance || 0}</span></p>
+                             </div>
+                             <button 
+                               onClick={() => handleFixAnomaly(user)}
+                               className="bg-purple-600/20 text-purple-400 border border-purple-500/30 hover:bg-purple-600 hover:text-white px-4 py-2 rounded-lg text-xs font-bold transition-all shrink-0"
+                             >
+                               一鍵修復 (扣現補票)
+                             </button>
+                           </div>
+                         ))}
+                       </div>
+                     </div>
+                   )}
                 </div>
-              </form>
+              ) : (
+                // 原始表單 UI
+                <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  
+                  {activeTab === 'branches' && (
+                    <>
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">門店名稱</label>
+                        <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：大埔店、樂富店" />
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'templates' && (
+                    <>
+                      <div className="col-span-2 bg-[#D4AF37]/10 border border-[#D4AF37]/30 p-6 rounded-2xl flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+                        <div>
+                          <h4 className="text-[#D4AF37] font-bold text-sm mb-1"><i className="fa-solid fa-wand-magic-sparkles"></i> 快速初始化模板庫</h4>
+                          <p className="text-xs text-gray-400">點擊右側按鈕，系統將自動覆蓋更新預設拆帳公式。</p>
+                        </div>
+                        <button type="button" onClick={initDefaultTemplates} className="shrink-0 bg-[#D4AF37] text-black px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest hover:scale-105 transition shadow-lg">
+                          強制更新預設模板
+                        </button>
+                      </div>
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">自訂抽成模板名稱</label>
+                        <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：A 級師傅、G 級大師、設計助理..." />
+                      </div>
+                      {renderMatrixEditor()}
+                    </>
+                  )}
+
+                  {activeTab === 'settings' && (
+                    <>
+                      <div className="space-y-2 col-span-2 mb-4">
+                        <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">T-Dollar 與 積分有效期限 (天數)</label>
+                        <input type="number" inputMode="decimal" className="w-full bg-black border border-[#D4AF37]/50 p-4 rounded-xl text-white focus:border-[#D4AF37] outline-none text-xl font-black" value={formData.validityDays} onChange={e => setFormData({...formData, validityDays: e.target.value})} required />
+                      </div>
+                      
+                      <div className="col-span-2 pt-6 border-t border-gray-800">
+                        <h3 className="text-sm font-bold text-[#D4AF37] mb-2"><i className="fa-solid fa-tags"></i> 自訂系統拆帳標籤庫 (動態擴充)</h3>
+                        <p className="text-xs text-gray-400 mb-4">您可以隨時新增或修改標籤，供服務定價與拆帳矩陣使用。</p>
+                        
+                        <div className="flex flex-wrap gap-2 mb-6 bg-blue-900/20 p-4 rounded-xl border border-blue-800/50 items-end">
+                           <div className="flex-1">
+                             <label className="text-[10px] text-blue-400 uppercase font-bold">新標籤代碼 (如 SCALP_PROD)</label>
+                             <input type="text" value={newLabelCode} onChange={e => setNewLabelCode(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500 uppercase font-mono" placeholder="限英文與底線"/>
+                           </div>
+                           <div className="flex-[2]">
+                             <label className="text-[10px] text-blue-400 uppercase font-bold">顯示名稱</label>
+                             <input type="text" value={newLabelName} onChange={e => setNewLabelName(e.target.value)} className="w-full bg-black border border-blue-500/30 p-2 rounded-lg text-white text-sm outline-none focus:border-blue-500" placeholder="例如：頭皮專用產品"/>
+                           </div>
+                           <button type="button" onClick={handleAddLabel} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-500 transition-colors shadow-lg">
+                             + 新增標籤
+                           </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {getSortedCodes(formData.commissionLabels || globalLabels).map(code => (
+                            <div key={code} className="space-y-1 bg-black p-3 rounded-xl border border-white/5 relative group">
+                              <label className="text-[10px] font-bold text-gray-500 uppercase">{code} 標籤名稱</label>
+                              <input 
+                                type="text" 
+                                className="w-full bg-transparent border-b border-white/10 p-1 text-white outline-none text-sm focus:border-[#D4AF37] transition-colors" 
+                                value={formData.commissionLabels?.[code] !== undefined ? formData.commissionLabels[code] : (defaultLabels[code] || '')} 
+                                onChange={e => setFormData({...formData, commissionLabels: {...formData.commissionLabels, [code]: e.target.value}})} 
+                              />
+                              {!Object.keys(defaultLabels).includes(code) && (
+                                <button 
+                                  type="button" 
+                                  onClick={() => handleRemoveLabel(code)}
+                                  className="absolute top-2 right-2 text-gray-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="刪除此自訂標籤"
+                                >
+                                  <i className="fa-solid fa-trash"></i>
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'services' && (
+                    <>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">服務名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">金額 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required /></div>
+                      
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
+                        <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                        <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                          <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
+                        <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                          {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </select>
+                      </div>
+                      
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (給系統結算用)</label>
+                        <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
+                          {getSortedCodes(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'packages' && (
+                    <>
+                      <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">套票/次數券名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：VIP Scalp 3000 (買30送3)" /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">套票總售價 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.price} onChange={e => setFormData({...formData, price: e.target.value})} required placeholder="免費贈送用請填 0" /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">內含總格數 (次數)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.quantity} onChange={e => setFormData({...formData, quantity: e.target.value})} required placeholder="如：33" /></div>
+                      
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠前)</label>
+                        <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                        <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                          <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (所有門店)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">選擇分類</label>
+                        <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                          <option value="">-- 選擇分類 (選填) --</option>
+                          {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
+                        <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
+                          {['SCALP'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'staff' && (
+                    <>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">髮型師姓名</label>
+                        {!isCustomStaff ? (
+                          <select className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={registeredStaff.includes(formData.name) ? formData.name : (formData.name ? 'CUSTOM' : '')} onChange={e => { if (e.target.value === 'CUSTOM') { setIsCustomStaff(true); setFormData({...formData, name: ''}); } else { setFormData({...formData, name: e.target.value}); } }} required>
+                            <option value="">-- 請選擇已註冊員工 --</option>{registeredStaff.map(name => <option key={name} value={name}>{name}</option>)}<option value="CUSTOM">➕ 手動輸入 (無帳號的自由業)</option>
+                          </select>
+                        ) : (
+                          <div className="flex gap-2">
+                            <input type="text" className="flex-1 bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="輸入自訂姓名..." />
+                            <button type="button" onClick={() => { setIsCustomStaff(false); setFormData({...formData, name: ''}); }} className="px-6 bg-gray-800 text-gray-400 rounded-xl hover:text-white hover:bg-gray-700 transition-colors font-bold text-sm">返回選單</button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">聯絡電話 (Phone)</label>
+                        <input type="tel" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.phoneNumber} onChange={e => setFormData({...formData, phoneNumber: e.target.value})} required placeholder="如: +85298765432" />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-blue-400 uppercase tracking-widest">所屬分店綁定</label>
+                        <select className="w-full bg-black border border-blue-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-blue-400" value={formData.branch} onChange={e => setFormData({...formData, branch: e.target.value})} required>
+                          <option value="">-- 請選擇門店 --</option><option value="ALL">🌐 全線通用 (跨店支援)</option>{branchesList.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2 col-span-2 flex items-center gap-3 bg-gray-900 p-4 rounded-xl border border-white/5">
+                        <input type="checkbox" id="isAssistant" className="w-5 h-5 accent-[#D4AF37]" checked={formData.isAssistant} onChange={e => setFormData({...formData, isAssistant: e.target.checked})} />
+                        <div className="flex flex-col">
+                          <label htmlFor="isAssistant" className="text-sm font-bold text-yellow-500 cursor-pointer tracking-widest">標記為專職助手 (Assistant Tag)</label>
+                          <span className="text-[10px] text-gray-500">勾選後，該員工在 POS 收銀台的「選擇助手」名單中會自動置頂分類。</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">📥 載入預設抽成模板 (載入後可微調)</label>
+                        <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none font-bold focus:border-purple-400" value={formData.templateId} onChange={e => applyTemplate(e.target.value)}>
+                          <option value="">-- 保持原數值或自訂比例 --</option>{templatesList.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        </select>
+                        {formData.templateName && <p className="text-xs text-green-400 mt-2 bg-green-500/10 p-2 rounded-lg border border-green-500/20">✅ <strong>目前已載入：{formData.templateName} 數值</strong> <br/>(確認無誤後，請務必點擊最下方「儲存」按鈕！)</p>}
+                      </div>
+                      {renderMatrixEditor()}
+                    </>
+                  )}
+
+                  {activeTab === 'categories' && (
+                    <>
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-gray-400 uppercase tracking-widest">新分類名稱</label>
+                        <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
+                      </div>
+                      <div className="space-y-2 col-span-2">
+                        <label className="text-sm font-bold text-green-400 uppercase tracking-widest">排序權重 (數字越大越靠左)</label>
+                        <input type="number" inputMode="decimal" className="w-full bg-black border border-green-500/50 p-4 rounded-xl text-white outline-none focus:border-green-400 font-bold" value={formData.sortWeight} onChange={e => setFormData({...formData, sortWeight: e.target.value})} placeholder="預設為 0" />
+                      </div>
+                    </>
+                  )}
+
+                  {activeTab === 'promos' && (
+                    <><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2 block">優惠標題</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800"><span className="text-xs text-gray-500 w-full mb-1">快速插入 Emoji:</span>{promoEmojiList.map(e => (<button key={e} type="button" onClick={() => addPromoEmoji(e)} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>))}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required /></div><div className="space-y-2 col-span-2 md:col-span-1"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">有效日期至</label><input type="date" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.expiry} onChange={e => setFormData({...formData, expiry: e.target.value})} required /></div><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">詳細內容</label><textarea className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white h-32 focus:border-[#D4AF37] outline-none" value={formData.content} onChange={e => setFormData({...formData, content: e.target.value})} required /></div></>
+                  )}
+                  {activeTab === 'rewards' && (
+                    <><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">禮品名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">所需積分 (Points)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">圖標 (Emoji)</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">{salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} /></div></>
+                  )}
+
+                  {activeTab === 'tiers' && (
+                    <>
+                      <div className="space-y-2 col-span-2"><label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">等級名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">累積充值門檻 (HKD)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.threshold} onChange={e => setFormData({...formData, threshold: e.target.value})} required /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">全單折扣 (例: 0.8 = 8折)</label><input type="number" inputMode="decimal" step="0.01" max="1" min="0" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.discount} onChange={e => setFormData({...formData, discount: e.target.value})} required /></div>
+                      <div className="space-y-2 pt-4 border-t border-gray-800 col-span-2"><p className="text-xs font-bold text-purple-400"><i className="fa-solid fa-gift"></i> 達成此門檻的「升級自動派發獎勵」</p></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">1. 額外贈送積分</label><input type="number" inputMode="decimal" className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.upgradeBonus} onChange={e => setFormData({...formData, upgradeBonus: e.target.value})} placeholder="如不贈送請填 0" /></div>
+                      <div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">2. 自動派發套票/實體券</label><select className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-white focus:border-purple-400 outline-none" value={formData.giftPackageName} onChange={e => setFormData({...formData, giftPackageName: e.target.value})}><option value="">無贈送套票</option>{packagesList.map(p => <option key={p.id} value={p.name}>{p.name} (含 {p.quantity} 格)</option>)}</select></div>
+                    </>
+                  )}
+
+                  <div className="flex gap-4 col-span-2 mt-4">
+                    <button type="submit" className="flex-1 bg-white text-black font-black py-4 rounded-2xl hover:bg-[#D4AF37] transition-all shadow-xl active:scale-95 tracking-widest">
+                      {activeTab === 'settings' ? '💾 儲存全局設定' : editingId ? '💾 儲存修改內容' : '➕ 確認新增資料'}
+                    </button>
+                    {editingId && (
+                      <button type="button" onClick={() => {setEditingId(null); setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
+                    )}
+                  </div>
+                </form>
+              )
             )}
           </div>
 
-          {activeTab !== 'settings' && (!['staff', 'templates', 'branches'].includes(activeTab) || currentUserRole === 'admin') && (
+          {activeTab !== 'settings' && activeTab !== 'tools' && (!['staff', 'templates', 'branches'].includes(activeTab) || currentUserRole === 'admin') && (
             <div className="space-y-4">
               <h3 className="text-sm font-black text-gray-500 uppercase tracking-widest px-2 mb-4">現有紀錄資料表</h3>
               
