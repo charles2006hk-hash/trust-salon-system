@@ -189,21 +189,26 @@ export default function AdminManagePage() {
     } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
-  // 🟢 工具一：智能掃描異常的舊客資料
+  // 🟢 工具一：智能掃描異常的舊客資料 (升級版：附帶歷史儲值金額與時間)
   const scanAnomalies = async () => {
     setScanning(true);
     try {
       // 1. 從歷史交易找出儲值 $3000 或以上的行為
-      // (舊系統儲值套票時通常入 T-Dollar $3000)
       const q = query(collection(db, 'transactions'), where('type', '==', 'topup'));
       const txSnap = await getDocs(q);
-      const suspiciousPhones = new Set();
+      const suspiciousData = {}; // 改用 Object 儲存電話與對應的交易紀錄
       
       txSnap.docs.forEach(d => {
           const data = d.data();
           const amt = Number(data.tDollarAdded) || Number(data.amountPaidHKD) || 0;
           if (amt >= 3000) {
-              if (data.phoneNumber) suspiciousPhones.add(data.phoneNumber);
+              if (data.phoneNumber) {
+                  if (!suspiciousData[data.phoneNumber]) suspiciousData[data.phoneNumber] = [];
+                  suspiciousData[data.phoneNumber].push({
+                      amount: amt,
+                      timestamp: data.timestamp
+                  });
+              }
           }
       });
 
@@ -212,11 +217,15 @@ export default function AdminManagePage() {
       const anomalies = [];
       usersSnap.docs.forEach(d => {
           const u = d.data();
-          if (suspiciousPhones.has(u.phoneNumber)) {
+          if (suspiciousData[u.phoneNumber]) {
               // 檢查他們目前的套票錢包是否為空
               const hasPackage = Object.keys(u.packageBalances || {}).length > 0;
               if (!hasPackage) {
-                  anomalies.push({ id: d.id, ...u });
+                  anomalies.push({ 
+                      id: d.id, 
+                      ...u,
+                      historyTxs: suspiciousData[u.phoneNumber] // 🟢 附加上歷史疑似買套票的紀錄
+                  });
               }
           }
       });
@@ -519,7 +528,15 @@ export default function AdminManagePage() {
                            <div key={user.id} className="bg-[#121212] p-4 rounded-xl border border-gray-800 flex flex-col md:flex-row justify-between md:items-center gap-4 hover:border-blue-500/30 transition-colors">
                              <div>
                                <p className="text-white font-bold">{user.name || '未命名客戶'} <span className="text-xs text-gray-500 font-mono ml-2">{user.phoneNumber}</span></p>
-                               <p className="text-[10px] text-gray-400 mt-1">目前 T-Dollar 現金餘額: <span className="text-[#D4AF37] font-bold">${user.tDollarBalance || 0}</span></p>
+                               <p className="text-[10px] text-gray-400 mt-1 mb-1">目前 T-Dollar 現金餘額: <span className="text-[#D4AF37] font-bold">${user.tDollarBalance || 0}</span></p>
+                               
+                               {/* 🟢 顯示歷史疑似購買紀錄，幫助判斷是哪個套票 */}
+                               {user.historyTxs && user.historyTxs.map((tx, idx) => (
+                                 <p key={idx} className="text-[10px] text-blue-400 mt-1 bg-blue-900/20 w-fit px-2 py-0.5 rounded border border-blue-500/20">
+                                   <i className="fa-solid fa-clock mr-1"></i>
+                                   舊紀錄線索: {tx.timestamp ? new Date(tx.timestamp).toLocaleDateString('zh-HK') : '時間不詳'} (曾入金 <strong className="text-blue-300">${tx.amount}</strong>)
+                                 </p>
+                               ))}
                              </div>
                              <button 
                                onClick={() => handleFixAnomaly(user)}
