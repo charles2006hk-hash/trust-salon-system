@@ -49,7 +49,6 @@ export default function SmartPOS() {
   
   const [serviceFilterTab, setServiceFilterTab] = useState('全部');
 
-  // 🟢 新增：核銷歷史紀錄的狀態
   const [historyModal, setHistoryModal] = useState({ isOpen: false, logs: [], loading: false });
 
   useEffect(() => {
@@ -338,7 +337,6 @@ export default function SmartPOS() {
     if (!snap.empty) setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() }); else toast.error("找不到此會員");
   };
 
-  // 🟢 查詢該會員的套票核銷紀錄
   const fetchPackageHistory = async (userId) => {
     setHistoryModal({ isOpen: true, logs: [], loading: true });
     try {
@@ -402,7 +400,37 @@ export default function SmartPOS() {
           transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
         toast.success(`成功售出套票：${pkg.name}`);
+        
+      // 🟢 Admin 專屬：無痕補發 / 修正套票次數
+      } else if (topUpTab === 'admin_adjust_pkg') {
+        const pkg = packages.find(p => p.id === topUpForm.packageId);
+        if (!pkg) return toast.error("請選擇套票");
+        const newGrids = Number(topUpForm.amount);
+        if (newGrids < 0) return toast.error("次數不能小於 0");
+        
+        if (!window.confirm(`【系統無痕調整】\n確認將 ${topUpUser.name || topUpUser.phoneNumber} 的【${pkg.name}】次數設定為 ${newGrids} 次？\n(此操作不會產生財務流水業績)`)) return;
+
+        await runTransaction(db, async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+            const currentPkgs = userDoc.data().packageBalances || {};
+            transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newGrids } });
+            
+            transaction.set(doc(collection(db, "audit_logs")), {
+                module: "pos_adjustment",
+                action: "admin_adjust_package",
+                branch: currentBranch, 
+                userId: topUpUser.id, 
+                customerPhone: topUpUser.phoneNumber, 
+                packageName: pkg.name, 
+                oldGrids: currentPkgs[pkg.name] || 0,
+                newGrids: newGrids, 
+                timestamp: new Date().toISOString(), 
+                adminName: currentUserRole
+            });
+        });
+        toast.success(`套票次數已靜默修正為 ${newGrids} 次！`);
       }
+      
       setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852'); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
     } catch (error) { toast.error("操作失敗"); }
   };
@@ -555,7 +583,6 @@ export default function SmartPOS() {
         </div>
       )}
 
-      {/* 門市選擇 Modal */}
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
            <div className="bg-[#121212] w-full max-w-md rounded-[40px] p-10 border border-[#D4AF37]/50 shadow-[0_0_50px_rgba(212,175,55,0.2)] text-center animate-fade-in">
@@ -797,7 +824,6 @@ export default function SmartPOS() {
                    
                    {topUpUser.packageBalances && Object.keys(topUpUser.packageBalances).length > 0 && (
                      <div className="border-t border-white/10 pt-3 mt-1">
-                       {/* 🟢 新增：查閱套票核銷紀錄按鈕 */}
                        <div className="flex justify-between items-center mb-2">
                            <p className="text-[10px] text-purple-400 font-bold uppercase tracking-widest">🎫 已持有的套票 (獨立扣次)</p>
                            <button 
@@ -860,13 +886,44 @@ export default function SmartPOS() {
                 <button type="submit" className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'bg-purple-500 text-white hover:bg-purple-400'}`}>
                   確認收款並存入系統
                 </button>
+
+                {currentUserRole === 'admin' && (
+                  <div className="mt-4 pt-3 border-t border-white/10 text-center">
+                    <button type="button" onClick={() => setTopUpTab('admin_adjust_pkg')} className="text-[10px] text-blue-400 font-bold uppercase tracking-widest hover:text-blue-300">
+                      <i className="fa-solid fa-wrench mr-1"></i> 🔧 Admin 專屬：無痕補發 / 修正套票次數
+                    </button>
+                  </div>
+                )}
               </form>
+            )}
+
+            {topUpTab === 'admin_adjust_pkg' && topUpUser && (
+               <form onSubmit={handleStoreAction} className="space-y-4 border-t border-white/10 pt-4 animate-fade-in mt-4">
+                 <div className="bg-blue-900/20 p-4 rounded-2xl border border-blue-500/30">
+                    <p className="text-xs text-blue-300 font-bold mb-4">⚠️ 此功能僅供老闆將舊客人的套票轉移至新系統使用，操作不會產生任何財務流水或業績。</p>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">選擇要修正的套票</label>
+                        <select required value={topUpForm.packageId} onChange={e => setTopUpForm({...topUpForm, packageId: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1">
+                          <option value="">請選擇...</option>
+                          {displayPackages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-blue-400 uppercase tracking-widest ml-1">設定剩餘總次數</label>
+                        <input type="number" required value={topUpForm.amount} onChange={e => setTopUpForm({...topUpForm, amount: e.target.value})} className="w-full bg-black border border-blue-500/50 p-3 rounded-xl text-white outline-none focus:border-blue-400 mt-1" placeholder="例如：4" />
+                      </div>
+                    </div>
+                 </div>
+                 <button type="submit" className="w-full font-black py-4 rounded-2xl uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl bg-blue-600 text-white">
+                    確認修正 (不計入營收)
+                 </button>
+               </form>
             )}
           </div>
         </div>
       )}
 
-      {/* 🟢 新增：核銷歷史紀錄 Modal */}
       {historyModal.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[70] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[40px] p-8 border border-purple-500/50 shadow-[0_0_50px_rgba(168,85,247,0.15)] relative animate-fade-in">
