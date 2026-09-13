@@ -17,7 +17,6 @@ export default function UserManagementPage() {
   const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  // 🟢 修正：加入 tier 與 discount 供新增會員時使用
   const [newUser, setNewUser] = useState({ name: '', phone: '', email: '', password: '', role: 'member', tDollar: 0, points: 0, branch: 'ALL', tier: '基本會員 (Basic)', discount: 1 });
 
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -35,7 +34,10 @@ export default function UserManagementPage() {
   const [migrateBranch, setMigrateBranch] = useState('ALL');
 
   const [branchesList, setBranchesList] = useState([]);
-  const [tiersList, setTiersList] = useState([]); // 🟢 新增：儲存系統中的會員等級列表
+  const [tiersList, setTiersList] = useState([]); 
+
+  // 🟢 CRM 歷史軌跡專屬狀態
+  const [historyModal, setHistoryModal] = useState({ isOpen: false, logs: [], loading: false, targetUser: null });
 
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
 
@@ -49,7 +51,7 @@ export default function UserManagementPage() {
     });
     fetchUsers();
     fetchBranches(); 
-    fetchTiers(); // 🟢 載入頁面時同步抓取會員等級清單
+    fetchTiers(); 
     return () => unsubscribe();
   }, []);
 
@@ -76,7 +78,6 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 抓取會員等級列表，供新建帳號時選擇
   const fetchTiers = async () => {
     try {
       const snap = await getDocs(collection(db, 'tiers'));
@@ -85,6 +86,20 @@ export default function UserManagementPage() {
       setTiersList(data);
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  // 🟢 撈取該客戶完整歷史軌跡的引擎
+  const fetchUserJourney = async (user) => {
+    setHistoryModal({ isOpen: true, logs: [], loading: true, targetUser: user });
+    try {
+      const q = query(collection(db, "transactions"), where("userId", "==", user.id));
+      const snap = await getDocs(q);
+      const logs = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setHistoryModal(prev => ({ ...prev, logs, loading: false }));
+    } catch (e) {
+      toast.error("讀取歷史紀錄失敗");
+      setHistoryModal(prev => ({ ...prev, loading: false }));
     }
   };
 
@@ -127,17 +142,16 @@ export default function UserManagementPage() {
         finalUid = data.localId;
       }
 
-      // 🟢 修正：建檔時直接寫入指定的會員等級、折扣，與初始餘額 (不影響報表現金流)
       const userData = {
         name: newUser.name,
         phoneNumber: newUser.phone,
         email: loginEmail || '', 
         role: newUser.role,
-        tDollarBalance: Number(newUser.tDollar), // 初始餘額直接發放
+        tDollarBalance: Number(newUser.tDollar),
         points: Number(newUser.points),
-        tier: newUser.tier || '基本會員 (Basic)', // 初始等級
-        discount: Number(newUser.discount) || 1, // 初始折扣
-        totalTopUp: 0, // 歷史充值現金歸零，因為是直接手動給餘額
+        tier: newUser.tier || '基本會員 (Basic)',
+        discount: Number(newUser.discount) || 1,
+        totalTopUp: 0, 
         packageBalances: {},
         createdAt: new Date().toISOString(),
         status: 'active',
@@ -146,7 +160,6 @@ export default function UserManagementPage() {
         branch: newUser.branch || 'ALL'
       };
 
-      // 為了避免系統之後自動將其降級，我們把 totalTopUp 設為對應等級的門檻
       if (newUser.tier !== '基本會員 (Basic)') {
           const matchedTier = tiersList.find(x => x.name === newUser.tier);
           if (matchedTier) userData.totalTopUp = Number(matchedTier.threshold);
@@ -501,6 +514,12 @@ export default function UserManagementPage() {
                   <td className="p-6 text-right flex justify-end gap-2 items-center">
                      {currentAdminRole === 'admin' && (
                        <>
+                         <button 
+                           onClick={() => fetchUserJourney(u)} 
+                           className="text-[10px] bg-blue-900/30 text-blue-400 border border-blue-800/50 hover:bg-blue-600 hover:text-white px-3 py-2 rounded-xl font-bold uppercase tracking-widest transition flex items-center gap-1"
+                         >
+                           <i className="fa-solid fa-clock-rotate-left"></i> 軌跡
+                         </button>
                          <button onClick={() => toggleUserStatus(u)} className={`text-[10px] px-4 py-2 rounded-xl font-bold uppercase tracking-widest transition ${u.status === 'suspended' ? 'bg-green-500/10 text-green-500 hover:bg-green-500 hover:text-white' : 'bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white'}`}>
                            {u.status === 'suspended' ? '復權' : '停用'}
                          </button>
@@ -581,7 +600,6 @@ export default function UserManagementPage() {
                 </div>
               </div>
 
-              {/* 🟢 新增：指定初始等級與餘額，避免污染現金流報表 */}
               {newUser.role === 'member' && (
                 <div className="grid grid-cols-2 gap-4 animate-fade-in border-t border-white/10 pt-4 mt-2">
                   <div className="space-y-1">
@@ -877,6 +895,79 @@ export default function UserManagementPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🟢 後台專屬：CRM 歷史軌跡 Modal */}
+      {historyModal.isOpen && (
+        <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
+          <div className="bg-[#121212] w-full max-w-2xl max-h-[85vh] overflow-y-auto custom-scrollbar rounded-[40px] p-8 border border-blue-500/50 shadow-[0_0_50px_rgba(59,130,246,0.15)] relative animate-fade-in">
+            <button onClick={() => setHistoryModal({ isOpen: false, logs: [], loading: false, targetUser: null })} className="absolute top-6 right-6 text-gray-500 hover:text-white">
+              <i className="fa-solid fa-xmark text-2xl"></i>
+            </button>
+            
+            <div className="mb-8 border-b border-white/10 pb-6">
+               <h3 className="text-2xl font-black text-white italic mb-1">Customer <span className="text-blue-400">Journey</span></h3>
+               <p className="text-xs text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                  <span>稽核對象：{historyModal.targetUser?.name || '未命名客戶'}</span>
+                  <span className="text-[#D4AF37] font-mono font-bold bg-[#D4AF37]/10 px-2 py-0.5 rounded">{historyModal.targetUser?.phoneNumber}</span>
+               </p>
+            </div>
+
+            {historyModal.loading ? (
+              <div className="py-16 text-center text-blue-400 font-bold text-sm"><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>撈取雲端資料庫中...</div>
+            ) : historyModal.logs.length === 0 ? (
+              <div className="py-16 text-center text-gray-600 font-bold text-sm border border-dashed border-white/5 rounded-3xl">該客戶尚無任何交易紀錄</div>
+            ) : (
+              <div className="space-y-4 relative before:absolute before:inset-0 before:ml-6 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-white/10 before:to-transparent">
+                {historyModal.logs.map(log => (
+                  <div key={log.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+                    <div className={`flex items-center justify-center w-12 h-12 rounded-full border-4 border-[#121212] shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow-sm z-10
+                      ${log.type === 'topup' ? 'bg-green-500 text-black' : 
+                        log.type === 'buy_package' ? 'bg-blue-500 text-white' : 
+                        log.type === 'deduct_package' ? 'bg-purple-500 text-white' : 'bg-[#D4AF37] text-black'}`}>
+                      <i className={`fa-solid text-lg ${log.type === 'topup' ? 'fa-money-bill-wave' : log.type === 'buy_package' ? 'fa-ticket' : log.type === 'deduct_package' ? 'fa-scissors' : 'fa-cash-register'}`}></i>
+                    </div>
+                    
+                    <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] bg-black p-5 rounded-3xl border border-white/10 hover:border-blue-500/50 transition-colors shadow-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded 
+                          ${log.type === 'topup' ? 'bg-green-500/20 text-green-400' : 
+                            log.type === 'buy_package' ? 'bg-blue-500/20 text-blue-400' : 
+                            log.type === 'deduct_package' ? 'bg-purple-500/20 text-purple-400' : 'bg-[#D4AF37]/20 text-[#D4AF37]'}`}>
+                          {log.type === 'topup' ? '💰 儲值/贈送' : log.type === 'buy_package' ? '🎫 購買套票' : log.type === 'deduct_package' ? '✂️ 扣次核銷' : '💳 扣額消費'}
+                        </span>
+                        <span className="text-[10px] text-gray-500 font-mono">{new Date(log.timestamp).toLocaleString('zh-HK', {month: 'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}</span>
+                      </div>
+                      
+                      <p className="text-base font-bold text-white mb-3 leading-snug">
+                        {log.type === 'topup' ? `收取 ${log.paymentMethod || '系統'} $${log.amountPaidHKD || log.tDollarAdded}` : 
+                         log.type === 'buy_package' ? `購買 ${log.packageName}` : 
+                         log.type === 'deduct_package' ? `核銷 ${log.packageName}` : (log.service || '一般消費')}
+                      </p>
+                      
+                      <div className="flex justify-between items-end text-xs text-gray-500 bg-white/5 p-3 rounded-xl">
+                         <span><i className="fa-solid fa-user-tie mr-2"></i>{log.stylist || 'System'}</span>
+                         
+                         <span className="font-mono font-black text-right text-sm">
+                           {log.type === 'topup' && (
+                             <>
+                               {log.pointsAdded > log.tDollarAdded && <span className="text-purple-400 block mb-1 text-xs">🎁 贈 {log.pointsAdded - log.tDollarAdded} 積分</span>}
+                               {log.giftPackageAdded && <span className="text-pink-400 block mb-1 text-xs">🎁 贈 {log.giftPackageAdded}</span>}
+                               <span className="text-green-400">+$${log.tDollarAdded}</span>
+                             </>
+                           )}
+                           {log.type === 'buy_package' && <span className="text-blue-400">+{log.gridsAdded} 次</span>}
+                           {log.type === 'deduct_package' && <span className="text-purple-400">-{log.deductedGrids} 次</span>}
+                           {(log.type === 'deduct' || log.type === 'walkin_cash') && <span className="text-[#D4AF37]">-${log.amount}</span>}
+                         </span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
