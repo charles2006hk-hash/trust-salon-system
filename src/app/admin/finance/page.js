@@ -291,8 +291,7 @@ export default function FinancePage() {
         else if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
-            const perGridValue = Number(pkgItem.price) / Number(pkgItem.quantity); 
-            revenue = Number((tx.deductedGrids * perGridValue).toFixed(1)); 
+            revenue = 0; // 🟢 修正：核銷套票只扣格數，絕對不產生任何新營業額
             commCode = pkgItem.commissionCode; 
           }
         }
