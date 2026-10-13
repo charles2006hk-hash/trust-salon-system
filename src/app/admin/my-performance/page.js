@@ -135,7 +135,9 @@ export default function StaffPerformancePage() {
            isMatchDate = (txDay === dateStr);
         }
 
-        if (tx.stylist && tx.stylist.includes(staffName) && isMatchDate) {
+        // 🚀 核心修復：將 tx.stylist 字串切割為陣列，進行「絕對精確比對」，徹底解決 Cha 吃到 Chaco 業績的問題
+        const stylistArray = tx.stylist ? tx.stylist.split(',').map(s => s.trim()) : [];
+        if (stylistArray.includes(staffName) && isMatchDate) {
            targetTxs.push({ id: d.id, ...tx });
         }
       });
