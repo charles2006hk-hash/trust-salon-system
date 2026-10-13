@@ -54,11 +54,9 @@ export default function FinancePage() {
   const [isUpdatingTx, setIsUpdatingTx] = useState(false);
   const [viewingHistoryTx, setViewingHistoryTx] = useState(null);
 
-  // 🟢 分頁狀態控制
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 50; // 預設每頁顯示數量
+  const itemsPerPage = 50; 
 
-  // 🟢 當篩選條件改變時，自動回到第一頁
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
@@ -66,10 +64,11 @@ export default function FinancePage() {
   const handleDeleteTransaction = async (tx) => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
     
-    const itemName = tx.service || tx.packageName || '助手獎金';
-    const itemAmount = tx.amount || tx.bonusAmount || 0;
+    // 🟢 支援抓取所有類型的項目名稱與金額
+    const itemName = tx.service || tx.packageName || (tx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
+    const itemAmount = tx.amount || tx.bonusAmount || tx.amountPaidHKD || tx.tDollarAdded || 0;
     
-    if (!window.confirm(`⚠️ 警告：您確定要永久刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '未指定'}\n\n❗ 刪除後將無法恢復，且系統會將此操作寫入安全日誌。`)) {
+    if (!window.confirm(`⚠️ 警告：您確定要永久刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '無/未指定'}\n\n❗ 刪除後將無法恢復，且系統會將此操作寫入安全日誌。`)) {
       return;
     }
 
@@ -88,7 +87,7 @@ export default function FinancePage() {
           deletedBy: currentUserName || 'Admin',
           amount: itemAmount,
           service: itemName,
-          stylist: tx.stylist || '未指定',
+          stylist: tx.stylist || '無',
           originalTimestamp: tx.timestamp
         }
       });
@@ -111,32 +110,42 @@ export default function FinancePage() {
     setIsUpdatingTx(true);
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
-      const isBonus = editingTx.type === 'assistant_bonus';
       
-      const oldAmount = isBonus ? Number(originalTx.bonusAmount || 0) : Number(originalTx.amount || 0);
-      const newAmount = isBonus ? Number(editingTx.bonusAmount || 0) : Number(editingTx.amount || 0);
+      // 🟢 全面支援所有類型的欄位比對
+      const oldAmount = Number(originalTx.amount || originalTx.bonusAmount || originalTx.amountPaidHKD || originalTx.tDollarAdded || 0);
+      const newAmount = Number(editingTx.amount || editingTx.bonusAmount || editingTx.amountPaidHKD || editingTx.tDollarAdded || 0);
       
-      const oldItem = isBonus ? '🤝 助手特別獎金' : (originalTx.service || originalTx.packageName || '未指定');
-      const newItem = isBonus ? '🤝 助手特別獎金' : (editingTx.service || editingTx.packageName || '未指定');
+      const oldItem = originalTx.service || originalTx.packageName || (originalTx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
+      const newItem = editingTx.service || editingTx.packageName || (editingTx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
 
       const auditLog = {
         editedAt: new Date().toISOString(),
         editedBy: currentUserName || 'Admin', 
         oldAmount: oldAmount,
         newAmount: newAmount,
-        oldStylist: originalTx.stylist || '未指定',
-        newStylist: editingTx.stylist || '未指定',
+        oldStylist: originalTx.stylist || '無',
+        newStylist: editingTx.stylist || '無',
         oldService: oldItem,
         newService: newItem
       };
 
       const updatePayload = {
-        stylist: editingTx.stylist || '未指定',
         editHistory: arrayUnion(auditLog)
       };
+      
+      if (editingTx.stylist !== undefined) {
+         updatePayload.stylist = editingTx.stylist;
+      }
 
-      if (isBonus) {
+      // 🟢 根據不同類型更新正確的財務欄位
+      if (editingTx.type === 'assistant_bonus') {
          updatePayload.bonusAmount = newAmount;
+      } else if (editingTx.type === 'buy_package') {
+         updatePayload.amountPaidHKD = newAmount;
+         updatePayload.packageName = editingTx.packageName;
+      } else if (editingTx.type === 'topup') {
+         updatePayload.amountPaidHKD = newAmount;
+         updatePayload.tDollarAdded = newAmount; // 假設增值修改比例為 1:1
       } else {
          updatePayload.amount = newAmount;
          if (editingTx.packageName !== undefined) {
@@ -291,7 +300,7 @@ export default function FinancePage() {
         else if (tx.type === 'deduct_package') {
           const pkgItem = packagesData.find(p => p.name === tx.packageName);
           if (pkgItem) {
-            revenue = 0; // 🟢 修正：核銷套票只扣格數，絕對不產生任何新營業額
+            revenue = 0; 
             commCode = pkgItem.commissionCode; 
           }
         }
@@ -468,7 +477,6 @@ export default function FinancePage() {
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
-  // 🟢 分頁資料計算
   const filteredAndSortedTx = transactions
     .filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'))
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
@@ -677,7 +685,6 @@ export default function FinancePage() {
               </div>
             </div>
             
-            {/* 🟢 交易明細區塊 (含分頁) */}
             <div className="bg-[#121212] rounded-[40px] pt-10 px-0 pb-0 border border-white/5 shadow-2xl overflow-hidden flex flex-col">
               <h3 className="text-xl font-bold text-white mb-8 italic px-10">Recent Transactions <span className="text-xs font-normal text-gray-500 not-italic ml-2">(篩選後共 {filteredAndSortedTx.length} 筆)</span></h3>
               <div className="overflow-x-auto px-10 pb-6 flex-1">
@@ -694,7 +701,6 @@ export default function FinancePage() {
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {/* 🟢 改用 paginatedTx 渲染當前頁資料 */}
                     {paginatedTx.map((tx) => ( 
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
@@ -714,20 +720,20 @@ export default function FinancePage() {
                         </td>
                         <td className="py-4 text-white font-bold">{tx.phoneNumber}</td>
                         <td className="py-4 text-gray-400">
-                          {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD}` : (
+                          {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD || 0}` : (
                             <span className="flex items-center gap-2">
                               {tx.service || tx.packageName} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
                         </td>
                         <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : tx.type === 'assistant_bonus' ? 'text-yellow-400' : 'text-white'}`}>
-                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? tx.tDollarAdded : tx.type === 'buy_package' ? tx.amountPaidHKD : tx.type === 'assistant_bonus' ? tx.bonusAmount : (tx.amount || 0)}
+                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? (tx.tDollarAdded || 0) : tx.type === 'buy_package' ? (tx.amountPaidHKD || 0) : tx.type === 'assistant_bonus' ? (tx.bonusAmount || 0) : (tx.amount || 0)}
                         </td>
                         
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-1.5">
-                              {(tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') && (
+                                {/* 🟢 移除了之前的條件限制，全類型解鎖編輯與刪除 */}
                                 <div className="flex gap-1.5 w-full justify-center">
                                   <button 
                                     onClick={() => {
@@ -747,7 +753,6 @@ export default function FinancePage() {
                                     <i className="fa-solid fa-trash-can"></i> 刪
                                   </button>
                                 </div>
-                              )}
                               
                               {tx.editHistory && tx.editHistory.length > 0 && (
                                 <button 
@@ -769,7 +774,6 @@ export default function FinancePage() {
                 </table>
               </div>
 
-              {/* 🟢 分頁控制區塊 */}
               {totalPages > 1 && (
                 <div className="p-4 px-10 border-t border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 bg-black/20">
                   <p className="text-[10px] text-gray-500 font-bold tracking-widest uppercase">
@@ -894,7 +898,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬錯單編輯彈窗：支援修改服務、助手獎金 */}
+      {/* 🟢 修改單據：適配全類型資料結構 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
@@ -907,16 +911,17 @@ export default function FinancePage() {
               <div className="p-4 bg-white/5 rounded-xl border border-white/5 mb-4">
                  <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">單據建立時間</p>
                  <p className="text-sm font-mono text-gray-300">{new Date(editingTx.timestamp).toLocaleString('zh-HK')}</p>
+                 <p className="text-[10px] text-blue-400 mt-1 uppercase tracking-widest font-bold">TYPE: {editingTx.type}</p>
               </div>
 
-              {editingTx.type !== 'assistant_bonus' && (
+              {editingTx.type !== 'assistant_bonus' && editingTx.type !== 'topup' && (
                 <div className="space-y-1">
-                  <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改服務項目</label>
+                  <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'buy_package' ? '套票項目' : '服務項目'}</label>
                   <select 
                     required 
                     value={editingTx.service || editingTx.packageName || ''} 
                     onChange={(e) => {
-                      if (editingTx.packageName !== undefined) {
+                      if (editingTx.type === 'buy_package' || editingTx.type === 'deduct_package') {
                           setEditingTx({...editingTx, packageName: e.target.value});
                       } else {
                           setEditingTx({...editingTx, service: e.target.value});
@@ -925,8 +930,12 @@ export default function FinancePage() {
                     className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-sm font-bold"
                   >
                     <option value="" disabled>請選擇正確項目</option>
-                    {servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                    {packagesData.map(p => <option key={p.id} value={p.name}>{p.name} (套票)</option>)}
+                    {editingTx.type === 'buy_package' || editingTx.type === 'deduct_package' ? (
+                      packagesData.map(p => <option key={p.id} value={p.name}>{p.name}</option>)
+                    ) : (
+                      servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)
+                    )}
+                    {/* 保留舊項目名稱防呆 */}
                     {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
                       <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
                     )}
@@ -935,33 +944,41 @@ export default function FinancePage() {
               )}
 
               <div className="space-y-1">
-                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '獎金金額' : '結帳金額'} (HKD)</label>
+                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '獎金金額' : (editingTx.type === 'topup' || editingTx.type === 'buy_package') ? '實收現金' : '結帳金額'} (HKD)</label>
                 <input 
                   type="number" 
                   required 
-                  value={editingTx.type === 'assistant_bonus' ? (editingTx.bonusAmount || 0) : (editingTx.amount || 0)} 
+                  value={
+                    editingTx.type === 'assistant_bonus' ? (editingTx.bonusAmount || 0) : 
+                    (editingTx.type === 'topup' || editingTx.type === 'buy_package') ? (editingTx.amountPaidHKD || 0) :
+                    (editingTx.amount || 0)
+                  } 
                   onChange={(e) => {
+                    const val = e.target.value;
                     if (editingTx.type === 'assistant_bonus') {
-                      setEditingTx({...editingTx, bonusAmount: e.target.value});
+                      setEditingTx({...editingTx, bonusAmount: val});
+                    } else if (editingTx.type === 'topup' || editingTx.type === 'buy_package') {
+                      setEditingTx({...editingTx, amountPaidHKD: val});
                     } else {
-                      setEditingTx({...editingTx, amount: e.target.value});
+                      setEditingTx({...editingTx, amount: val});
                     }
                   }}
                   className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500 text-lg font-mono font-bold" 
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '助手名稱' : '負責設計師'}</label>
-                <input 
-                  type="text" 
-                  required 
-                  value={editingTx.stylist || ''} 
-                  onChange={(e) => setEditingTx({...editingTx, stylist: e.target.value})}
-                  className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500" 
-                  placeholder={editingTx.type === 'assistant_bonus' ? "輸入正確的助手名字" : "輸入正確的設計師名字"}
-                />
-              </div>
+              {editingTx.type !== 'topup' && (
+                <div className="space-y-1">
+                  <label className="text-[10px] text-blue-400 font-bold uppercase tracking-widest ml-1">修改{editingTx.type === 'assistant_bonus' ? '助手名稱' : '負責設計師'}</label>
+                  <input 
+                    type="text" 
+                    value={editingTx.stylist || ''} 
+                    onChange={(e) => setEditingTx({...editingTx, stylist: e.target.value})}
+                    className="w-full bg-black border border-blue-500/30 p-3 rounded-xl text-white outline-none focus:border-blue-500" 
+                    placeholder={editingTx.type === 'assistant_bonus' ? "輸入助手名字" : "輸入設計師名字 (如為空可不填)"}
+                  />
+                </div>
+              )}
 
               <button 
                 type="submit" 
@@ -975,7 +992,6 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 Admin 專屬：審計查帳彈窗 (Audit History Modal) */}
       {viewingHistoryTx && (
         <div className="fixed inset-0 bg-black/90 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg max-h-[80vh] overflow-y-auto custom-scrollbar rounded-[32px] p-8 border border-purple-500/30 shadow-2xl relative animate-fade-in">
