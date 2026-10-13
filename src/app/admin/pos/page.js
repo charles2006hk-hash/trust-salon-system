@@ -38,6 +38,10 @@ export default function SmartPOS() {
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [newItemStylist, setNewItemStylist] = useState('');
 
+  // 🟢 新增：歷史結帳日期與 T-Point 使用狀態
+  const [customHistoryDate, setCustomHistoryDate] = useState('');
+  const [usePoints, setUsePoints] = useState('');
+
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('+852');
   const [topUpUser, setTopUpUser] = useState(null);
@@ -48,7 +52,6 @@ export default function SmartPOS() {
   const [selectorConfig, setSelectorConfig] = useState({ isOpen: false, type: '', title: '', onSelect: null });
   
   const [serviceFilterTab, setServiceFilterTab] = useState('全部');
-
   const [historyModal, setHistoryModal] = useState({ isOpen: false, logs: [], loading: false });
 
   useEffect(() => {
@@ -211,7 +214,8 @@ export default function SmartPOS() {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '' } : userSnap.docs[0].data();
+      // 🟢 讀取會員點數
+      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '', points: 0 } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
       const discountRate = Number(uData.discount) || 1;
@@ -222,6 +226,7 @@ export default function SmartPOS() {
         discountRate, 
         tier: uData.tier || '基本會員', 
         balance: uData.tDollarBalance || 0, 
+        points: uData.points || 0, // 儲存客人積分
         userId: userSnap.empty ? null : userSnap.docs[0].id, 
         packageBalances: uData.packageBalances || {},
         customerName: uData.name || '' 
@@ -231,6 +236,8 @@ export default function SmartPOS() {
       setAddItemMode('pay'); 
       setNewItemStylist(''); 
       setSelectedCategory('全部');
+      setCustomHistoryDate(''); // 重置自訂日期
+      setUsePoints(''); // 重置 T-Point
       toast.dismiss(toastId);
     } catch (error) { toast.error("讀取帳單失敗", { id: toastId }); }
   };
@@ -272,6 +279,28 @@ export default function SmartPOS() {
       if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
     });
 
+    // 🟢 計算扣除 T-Point 後的實付餘額
+    const pointsDeducted = Number(usePoints) || 0;
+    const finalCashToPay = totalPay - pointsDeducted;
+
+    if (pointsDeducted > (checkoutSession.points || 0)) {
+       setIsProcessing(false);
+       return toast.error("可用積分不足！", { id: toastId });
+    }
+    if (finalCashToPay < 0) {
+       setIsProcessing(false);
+       return toast.error("抵扣積分不能超過總金額！", { id: toastId });
+    }
+
+    // 🟢 處理自訂歷史日期補單時間戳
+    let finalTimestamp = new Date().toISOString();
+    if (customHistoryDate) {
+        const today = new Date();
+        const historyDate = new Date(customHistoryDate);
+        historyDate.setHours(today.getHours(), today.getMinutes(), today.getSeconds());
+        finalTimestamp = historyDate.toISOString();
+    }
+
     try {
       if (checkoutSession.userId) {
         const userRef = doc(db, "users", checkoutSession.userId);
@@ -279,10 +308,15 @@ export default function SmartPOS() {
           const uDoc = await tx.get(userRef);
           const currentData = uDoc.data();
 
-          if (totalPay > 0) {
-            const newBal = (currentData.tDollarBalance || 0) - totalPay;
+          if (finalCashToPay > 0) {
+            const newBal = (currentData.tDollarBalance || 0) - finalCashToPay;
             if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
             tx.update(userRef, { tDollarBalance: newBal });
+          }
+
+          if (pointsDeducted > 0) {
+            const newPoints = (currentData.points || 0) - pointsDeducted;
+            tx.update(userRef, { points: newPoints });
           }
 
           let newPackageBalances = { ...(currentData.packageBalances || {}) };
@@ -296,13 +330,18 @@ export default function SmartPOS() {
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: new Date().toISOString() });
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: finalTimestamp, pointsUsed: pointsDeducted > 0 });
              } else if (item.type === 'deduct') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: new Date().toISOString() });
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: finalTimestamp });
              } else if (item.type === 'assistant') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: new Date().toISOString() });
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: finalTimestamp });
              }
           });
+          
+          if (pointsDeducted > 0) {
+             tx.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, pointsDeducted: pointsDeducted, service: 'T-Point 折抵現金', type: "deduct_points", timestamp: finalTimestamp });
+          }
+
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
@@ -311,16 +350,16 @@ export default function SmartPOS() {
           cart.forEach(item => {
             const newTxRef = doc(collection(db, "transactions"));
             if (item.type === 'pay') {
-              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: new Date().toISOString() });
+              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: finalTimestamp });
             } else if (item.type === 'assistant') {
-              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: new Date().toISOString() });
+              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: finalTimestamp });
             }
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       }
 
-      toast.success("結帳完成，業績已分發！", { id: toastId });
+      toast.success(customHistoryDate ? "補單結帳完成！" : "結帳完成，業績已分發！", { id: toastId });
       setCheckoutSession(null);
     } catch (e) { toast.error(e.message, { id: toastId }); } finally { setIsProcessing(false); }
   };
@@ -400,8 +439,6 @@ export default function SmartPOS() {
           transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
         });
         toast.success(`成功售出套票：${pkg.name}`);
-        
-      // 🟢 Admin 專屬：無痕補發 / 修正套票次數
       } else if (topUpTab === 'admin_adjust_pkg') {
         const pkg = packages.find(p => p.id === topUpForm.packageId);
         if (!pkg) return toast.error("請選擇套票");
@@ -414,23 +451,12 @@ export default function SmartPOS() {
             const userDoc = await transaction.get(userRef);
             const currentPkgs = userDoc.data().packageBalances || {};
             transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newGrids } });
-            
             transaction.set(doc(collection(db, "audit_logs")), {
-                module: "pos_adjustment",
-                action: "admin_adjust_package",
-                branch: currentBranch, 
-                userId: topUpUser.id, 
-                customerPhone: topUpUser.phoneNumber, 
-                packageName: pkg.name, 
-                oldGrids: currentPkgs[pkg.name] || 0,
-                newGrids: newGrids, 
-                timestamp: new Date().toISOString(), 
-                adminName: currentUserRole
+                module: "pos_adjustment", action: "admin_adjust_package", branch: currentBranch, userId: topUpUser.id, customerPhone: topUpUser.phoneNumber, packageName: pkg.name, oldGrids: currentPkgs[pkg.name] || 0, newGrids: newGrids, timestamp: new Date().toISOString(), adminName: currentUserRole
             });
         });
         toast.success(`套票次數已靜默修正為 ${newGrids} 次！`);
       }
-      
       setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852'); setTopUpForm({ amount: '', paymentMethod: 'Cash', packageId: '' });
     } catch (error) { toast.error("操作失敗"); }
   };
@@ -786,10 +812,9 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 儲值/套票 Modal (升級獨立錢包 UI + 滾動條防溢出) */}
+      {/* 🟢 儲值/套票 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4 md:p-6 backdrop-blur-sm">
-          {/* 加入 max-h-[90vh] 與 overflow-y-auto 確保內容過多時可以滾動，不會上下頂住 */}
           <div className="bg-[#121212] w-full max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
             <button onClick={() => {setShowTopUpModal(false); setTopUpUser(null); setTopUpPhone('+852');}} className="absolute top-6 right-6 text-gray-500 hover:text-white"><i className="fa-solid fa-xmark text-xl"></i></button>
             <h2 className="text-2xl font-black text-white italic mb-6">Store Action <span className="text-xs text-[#D4AF37] ml-2 not-italic">@{currentBranch}</span></h2>
@@ -807,7 +832,6 @@ export default function SmartPOS() {
             {topUpUser && (
               <form onSubmit={handleStoreAction} className="space-y-6 border-t border-white/10 pt-6 animate-fade-in">
                 
-                {/* 🟢 優化：把 Admin 修正按鈕拉上來做成第 3 個 Tab，切換更直覺不會重疊 */}
                 <div className="flex gap-2 p-1 bg-black rounded-2xl border border-white/5">
                   <button type="button" onClick={() => setTopUpTab('tdollar')} className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-colors ${topUpTab === 'tdollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500 hover:text-white'}`}>💰 儲值餘額</button>
                   <button type="button" onClick={() => setTopUpTab('package')} className={`flex-1 py-3 rounded-xl text-[10px] font-bold transition-colors ${topUpTab === 'package' ? 'bg-purple-500 text-white' : 'text-gray-500 hover:text-white'}`}>🎫 售賣套票</button>
@@ -853,7 +877,6 @@ export default function SmartPOS() {
                    )}
                 </div>
 
-                {/* 根據選擇的 Tab 顯示對應的輸入框 */}
                 {topUpTab === 'tdollar' && (
                   <div className="space-y-2 animate-fade-in">
                     <label className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest ml-1">充值金額 (HKD) - 1:1 兌換 T-Dollar</label>
@@ -900,7 +923,6 @@ export default function SmartPOS() {
                    </div>
                 )}
 
-                {/* 根據 Tab 動態切換送出按鈕與收款方式 */}
                 {(topUpTab === 'tdollar' || topUpTab === 'package') ? (
                   <>
                     <div className="space-y-2 animate-fade-in">
@@ -998,6 +1020,7 @@ export default function SmartPOS() {
                 <div className="text-right">
                   <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">💰 T-Dollar 餘額</p>
                   <p className="text-2xl font-black text-[#D4AF37]">${checkoutSession.balance}</p>
+                  <p className="text-[10px] text-blue-400 mt-1 font-bold">🎁 T-Point: {checkoutSession.points || 0}</p>
                 </div>
               </div>
 
@@ -1059,13 +1082,33 @@ export default function SmartPOS() {
                  </div>
                ))}
                
-               <div className="pt-4 border-t border-white/10 flex justify-between items-end">
-                 <div className="text-purple-400 text-xs font-bold">
-                    {cart.filter(i => i.type === 'deduct').length > 0 && `共扣除 ${cart.filter(i => i.type === 'deduct').reduce((a, b) => a + b.grids, 0)} 格`}
-                 </div>
-                 <div className="text-right">
-                   <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">應付總額 (T-Dollar / Cash)</p>
-                   <p className="text-3xl font-black text-white">${cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0)}</p>
+               <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
+                 {/* 🟢 T-Point 折抵區塊 */}
+                 {checkoutSession.userId && (checkoutSession.points || 0) > 0 && cart.filter(i => i.type === 'pay').length > 0 && (
+                   <div className="flex justify-between items-center bg-blue-900/20 p-3 rounded-xl border border-blue-500/30">
+                     <div>
+                       <span className="text-xs text-blue-400 font-bold block mb-1">💎 使用 T-Point 折抵</span>
+                       <span className="text-[9px] text-gray-500 block">匯率: 1分 = $1 (最多折抵 ${Math.min(checkoutSession.points, cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0))})</span>
+                     </div>
+                     <input 
+                       type="number" 
+                       value={usePoints} 
+                       onChange={e => setUsePoints(e.target.value)}
+                       placeholder="輸入分數"
+                       className="bg-black border border-blue-500/50 rounded-lg w-24 p-2 text-center text-white outline-none focus:border-blue-400"
+                     />
+                   </div>
+                 )}
+                 <div className="flex justify-between items-end">
+                    <div className="text-purple-400 text-xs font-bold">
+                      {cart.filter(i => i.type === 'deduct').length > 0 && `共扣除 ${cart.filter(i => i.type === 'deduct').reduce((a, b) => a + b.grids, 0)} 格`}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實付總額 (T-Dollar / Cash)</p>
+                      <p className="text-3xl font-black text-white">
+                        ${Math.max(0, cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0) - (Number(usePoints) || 0))}
+                      </p>
+                    </div>
                  </div>
                </div>
             </div>
@@ -1134,10 +1177,23 @@ export default function SmartPOS() {
             </div>
 
             <form onSubmit={processSettlement}>
-              {checkoutSession.userId && <p className="text-[10px] text-gray-500 text-center mb-2">該會員目前 T-Dollar 餘額: <span className="text-[#D4AF37] font-bold">${checkoutSession.balance}</span></p>}
-              {!checkoutSession.userId && <p className="text-[10px] text-red-400 text-center mb-2 bg-red-500/10 py-1 rounded">此客為非會員(Walk-in)，請向客人收取現金或刷卡</p>}
+              {/* 🟢 歷史日期補單功能 */}
+              <div className="mb-6 bg-[#1a1a1a] p-4 rounded-xl border border-white/5 shadow-inner">
+                <label className="text-[10px] text-gray-400 uppercase tracking-widest font-bold flex items-center gap-2 mb-2">
+                  <i className="fa-regular fa-calendar-days text-[#D4AF37]"></i> 自訂結帳日期 (若為補單請選擇)
+                </label>
+                <input 
+                  type="date" 
+                  value={customHistoryDate} 
+                  onChange={e => setCustomHistoryDate(e.target.value)}
+                  className="w-full bg-black border border-white/10 p-3 rounded-lg text-white text-sm outline-none focus:border-[#D4AF37] transition-colors" 
+                />
+              </div>
+
+              {!checkoutSession.userId && <p className="text-[10px] text-red-400 text-center mb-3 bg-red-500/10 py-1.5 rounded-lg font-bold">此客為非會員(Walk-in)，請向客人收取現金或刷卡</p>}
+              
               <button type="submit" disabled={isProcessing || cart.length === 0} className={`w-full font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl bg-[#D4AF37] text-black hover:scale-105 disabled:opacity-30 disabled:hover:scale-100`}>
-                {isProcessing ? "Processing..." : "確認綜合結帳"}
+                {isProcessing ? "Processing..." : (customHistoryDate ? "補單結帳並分發業績" : "確認綜合結帳")}
               </button>
             </form>
 
