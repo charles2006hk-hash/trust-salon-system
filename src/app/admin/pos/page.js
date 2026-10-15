@@ -38,9 +38,11 @@ export default function SmartPOS() {
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [newItemStylist, setNewItemStylist] = useState('');
 
-  // 🟢 新增：歷史結帳日期與 T-Point 使用狀態
+  // 🟢 新增：歷史結帳日期與 T-Point 使用狀態[cite: 16]
   const [customHistoryDate, setCustomHistoryDate] = useState('');
   const [usePoints, setUsePoints] = useState('');
+  // 🟢 新增：會員結帳支付方式狀態[cite: 16]
+  const [checkoutPaymentMethod, setCheckoutPaymentMethod] = useState('t_dollar');
 
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpPhone, setTopUpPhone] = useState('+852');
@@ -226,7 +228,7 @@ export default function SmartPOS() {
         discountRate, 
         tier: uData.tier || '基本會員', 
         balance: uData.tDollarBalance || 0, 
-        points: uData.points || 0, // 儲存客人積分
+        points: uData.points || 0, // 儲存客人積分[cite: 16]
         userId: userSnap.empty ? null : userSnap.docs[0].id, 
         packageBalances: uData.packageBalances || {},
         customerName: uData.name || '' 
@@ -238,6 +240,7 @@ export default function SmartPOS() {
       setSelectedCategory('全部');
       setCustomHistoryDate(''); // 重置自訂日期
       setUsePoints(''); // 重置 T-Point
+      setCheckoutPaymentMethod('t_dollar'); // 預設使用 T-Dollar[cite: 16]
       toast.dismiss(toastId);
     } catch (error) { toast.error("讀取帳單失敗", { id: toastId }); }
   };
@@ -279,7 +282,7 @@ export default function SmartPOS() {
       if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
     });
 
-    // 🟢 計算扣除 T-Point 後的實付餘額
+    // 🟢 計算扣除 T-Point 後的實付餘額[cite: 16]
     const pointsDeducted = Number(usePoints) || 0;
     const finalCashToPay = totalPay - pointsDeducted;
 
@@ -292,7 +295,7 @@ export default function SmartPOS() {
        return toast.error("抵扣積分不能超過總金額！", { id: toastId });
     }
 
-    // 🟢 處理自訂歷史日期補單時間戳
+    // 🟢 處理自訂歷史日期補單時間戳[cite: 16]
     let finalTimestamp = new Date().toISOString();
     if (customHistoryDate) {
         const today = new Date();
@@ -309,9 +312,16 @@ export default function SmartPOS() {
           const currentData = uDoc.data();
 
           if (finalCashToPay > 0) {
-            const newBal = (currentData.tDollarBalance || 0) - finalCashToPay;
-            if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
-            tx.update(userRef, { tDollarBalance: newBal });
+            // 🟢 會員結帳分流：檢查是扣餘額還是直接付現[cite: 16]
+            if (checkoutPaymentMethod === 't_dollar') {
+               const newBal = (currentData.tDollarBalance || 0) - finalCashToPay;
+               if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
+               tx.update(userRef, { tDollarBalance: newBal });
+            } else {
+               // 會員付現金/刷卡：增加對應的 T-Point 積分
+               const newPoints = (currentData.points || 0) + finalCashToPay;
+               tx.update(userRef, { points: newPoints });
+            }
           }
 
           if (pointsDeducted > 0) {
@@ -330,7 +340,9 @@ export default function SmartPOS() {
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: "deduct", timestamp: finalTimestamp, pointsUsed: pointsDeducted > 0 });
+               // 🟢 若選擇現金結帳，寫入 member_cash 類型[cite: 16]
+               const isCashPayment = checkoutPaymentMethod === 'cash' && finalCashToPay > 0;
+               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: isCashPayment ? "member_cash" : "deduct", timestamp: finalTimestamp, pointsUsed: pointsDeducted > 0 });
              } else if (item.type === 'deduct') {
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: finalTimestamp });
              } else if (item.type === 'assistant') {
@@ -1083,7 +1095,7 @@ export default function SmartPOS() {
                ))}
                
                <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
-                 {/* 🟢 T-Point 折抵區塊 */}
+                 {/* 🟢 T-Point 折抵區塊[cite: 16] */}
                  {checkoutSession.userId && (checkoutSession.points || 0) > 0 && cart.filter(i => i.type === 'pay').length > 0 && (
                    <div className="flex justify-between items-center bg-blue-900/20 p-3 rounded-xl border border-blue-500/30">
                      <div>
@@ -1099,12 +1111,20 @@ export default function SmartPOS() {
                      />
                    </div>
                  )}
-                 <div className="flex justify-between items-end">
-                    <div className="text-purple-400 text-xs font-bold">
-                      {cart.filter(i => i.type === 'deduct').length > 0 && `共扣除 ${cart.filter(i => i.type === 'deduct').reduce((a, b) => a + b.grids, 0)} 格`}
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">實付總額 (T-Dollar / Cash)</p>
+                 
+                 {/* 🟢 會員結帳支付方式切換：允許基本會員選擇付現，跳過餘額檢查[cite: 16] */}
+                 {checkoutSession.userId && cart.filter(i => i.type === 'pay').length > 0 && (
+                   <div className="flex justify-between items-center bg-[#1a1a1a] p-2 rounded-xl border border-white/10">
+                     <button type="button" onClick={() => setCheckoutPaymentMethod('t_dollar')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${checkoutPaymentMethod === 't_dollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500'}`}>T-Dollar 餘額扣帳</button>
+                     <button type="button" onClick={() => setCheckoutPaymentMethod('cash')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${checkoutPaymentMethod === 'cash' ? 'bg-green-600 text-white' : 'text-gray-500'}`}>現金 / 刷卡結帳</button>
+                   </div>
+                 )}
+
+                 <div className="flex justify-between items-end mt-2">
+                    <div className="text-right w-full">
+                      <p className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest mb-1">
+                         實付總額 ({checkoutPaymentMethod === 'cash' ? 'Cash / Card' : 'T-Dollar'})
+                      </p>
                       <p className="text-3xl font-black text-white">
                         ${Math.max(0, cart.filter(i => i.type === 'pay').reduce((a, b) => a + b.finalPrice, 0) - (Number(usePoints) || 0))}
                       </p>
