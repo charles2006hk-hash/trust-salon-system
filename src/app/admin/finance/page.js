@@ -64,7 +64,6 @@ export default function FinancePage() {
   const handleDeleteTransaction = async (tx) => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
     
-    // 🟢 支援抓取所有類型的項目名稱與金額[cite: 15]
     const itemName = tx.service || tx.packageName || (tx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
     const itemAmount = tx.amount || tx.bonusAmount || tx.amountPaidHKD || tx.tDollarAdded || 0;
     
@@ -111,7 +110,6 @@ export default function FinancePage() {
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
       
-      // 🟢 全面支援所有類型的欄位比對[cite: 15]
       const oldAmount = Number(originalTx.amount || originalTx.bonusAmount || originalTx.amountPaidHKD || originalTx.tDollarAdded || 0);
       const newAmount = Number(editingTx.amount || editingTx.bonusAmount || editingTx.amountPaidHKD || editingTx.tDollarAdded || 0);
       
@@ -137,7 +135,6 @@ export default function FinancePage() {
          updatePayload.stylist = editingTx.stylist;
       }
 
-      // 🟢 根據不同類型更新正確的財務欄位[cite: 15]
       if (editingTx.type === 'assistant_bonus') {
          updatePayload.bonusAmount = newAmount;
       } else if (editingTx.type === 'buy_package') {
@@ -270,12 +267,20 @@ export default function FinancePage() {
     });
 
     filteredTx.forEach(tx => {
+      // 🟢 全局現金流統計：加入購物車產生的實收現金 (member_cash / walkin_cash)
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      // 🟢 將 member_cash 也加入計算[cite: 15]
-      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus' || tx.type === 'member_cash') {
+      else if (tx.type === 'walkin_cash' || tx.type === 'member_cash') {
+        cashIn += Number(tx.amount || 0);
+      }
+      else if (tx.type === 'deduct_points') {
+        cashIn -= Number(tx.pointsDeducted || 0);
+      }
+
+      // 🟢 業績產值計算邏輯
+      if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
           stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
@@ -292,8 +297,12 @@ export default function FinancePage() {
         } 
         else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash') {
           revenue = Number(tx.amount || 0);
-          const serviceItem = servicesData.find(s => s.name === tx.service);
-          commCode = serviceItem ? serviceItem.commissionCode : null;
+          
+          // 如果是購物車賣出的套票，需要去 packagesData 找 commissionCode，否則去 servicesData 找
+          let itemObj = servicesData.find(s => s.name === tx.service);
+          if (!itemObj) itemObj = packagesData.find(p => p.name === tx.service);
+          
+          commCode = itemObj ? itemObj.commissionCode : null;
           services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
           
           if (tx.type === 'deduct') tDollarDeducted += revenue;
@@ -324,7 +333,7 @@ export default function FinancePage() {
           }
         }
 
-        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'member_cash') {
+        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash' || tx.type === 'deduct_package') {
            const itemName = tx.service || tx.packageName || '';
            const isAddon = itemName.includes('追加');
            const isProduct = commCode && String(commCode).startsWith('P'); 
@@ -717,8 +726,10 @@ export default function FinancePage() {
                             <span className="text-[9px] bg-yellow-500/10 text-yellow-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Bonus</span>
                           ) : tx.type === 'member_cash' ? (
                             <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Mem Cash</span>
+                          ) : tx.type === 'walkin_cash' ? (
+                            <span className="text-[9px] bg-gray-500/10 text-gray-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Walk-in</span>
                           ) : (
-                            <span className="text-[9px] bg-gray-500/10 text-gray-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
+                            <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
                           )}
                         </td>
                         <td className="py-4 text-white font-bold">{tx.phoneNumber}</td>
@@ -729,8 +740,8 @@ export default function FinancePage() {
                             </span>
                           )}
                         </td>
-                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' ? 'text-green-500' : tx.type === 'assistant_bonus' ? 'text-yellow-400' : 'text-white'}`}>
-                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? (tx.tDollarAdded || 0) : tx.type === 'buy_package' ? (tx.amountPaidHKD || 0) : tx.type === 'assistant_bonus' ? (tx.bonusAmount || 0) : (tx.amount || 0)}
+                        <td className={`py-4 font-mono font-bold text-right ${tx.type === 'topup' || tx.type === 'buy_package' || tx.type === 'member_cash' || tx.type === 'walkin_cash' || tx.type === 'assistant_bonus' ? 'text-green-500' : 'text-white'}`}>
+                          {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'member_cash' ? '+' : tx.type === 'walkin_cash' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? (tx.tDollarAdded || 0) : tx.type === 'buy_package' ? (tx.amountPaidHKD || 0) : tx.type === 'assistant_bonus' ? (tx.bonusAmount || 0) : (tx.amount || 0)}
                         </td>
                         
                         {currentAdminRole === 'admin' && (
