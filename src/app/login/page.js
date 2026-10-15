@@ -30,13 +30,17 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
 
-  // 🟢 支援動態區號選擇
   const [countryCode, setCountryCode] = useState('+852');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pin, setPin] = useState('');
   
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
+
+  // 🟢 密碼可視狀態 (眼睛切換)
+  const [showPin, setShowPin] = useState(false);
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [showConfirmPin, setShowConfirmPin] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '', birthMonth: '', gender: '', interest: ''
@@ -77,7 +81,6 @@ export default function LoginPage() {
     return () => unsubscribe();
   }, [router, step]);
 
-  // 🛠️ 核心優化：動態區號與電話號碼的精準合併
   const getFormattedData = () => {
     const cleanPhone = phoneNumber.replace(/\D/g, ''); 
     const cleanCountry = countryCode.replace(/\D/g, ''); 
@@ -111,7 +114,6 @@ export default function LoginPage() {
     } catch (error) {
       if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/invalid-login-credentials') {
         try {
-          // 🚀 核心升級：使用 'in' 查詢，同時防範舊資料中的 "+號", "-號", "無符號" 等手誤格式
           const q = query(
             collection(db, 'users'), 
             where('phoneNumber', 'in', [`+${fullPhone}`, `-${fullPhone}`, fullPhone])
@@ -131,7 +133,6 @@ export default function LoginPage() {
             
             await setDoc(doc(db, 'users', newCred.user.uid), {
               ...oldData,
-              // 確保升級後強制覆蓋成標準的 + 號格式，修正舊資料錯誤
               phoneNumber: formattedPhoneForDB,
               isFirstLogin: true, 
               migratedAt: new Date().toISOString()
@@ -141,7 +142,7 @@ export default function LoginPage() {
               await deleteDoc(doc(db, 'users', oldDoc.id));
             }
 
-            toast.success("✅ 帳號安全升級成功！請設定您的專屬密碼。", { id: toastId });
+            toast.success("✅ 帳號安全升級成功！", { id: toastId });
             setStep('forceChange');
 
           } else {
@@ -184,7 +185,29 @@ export default function LoginPage() {
       router.push('/dashboard');
     } catch (error) {
       console.error(error);
-      toast.error(`密碼更新失敗，請重試`, { id: toastId });
+      toast.error(`密碼更新失敗，請稍後再試`, { id: toastId });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 🟢 允許會員跳過修改密碼，直接進入系統
+  const handleSkipChangePin = async () => {
+    setLoading(true);
+    const toastId = toast.loading("載入中...");
+    try {
+      const user = auth.currentUser;
+      if (user) {
+        await updateDoc(doc(db, 'users', user.uid), {
+          isFirstLogin: false, // 標記為 false，下次就不會再彈出來煩客人了
+          updatedAt: new Date().toISOString()
+        });
+      }
+      toast.success("已跳過設定！", { id: toastId });
+      router.push('/dashboard');
+    } catch (error) {
+      console.error(error);
+      router.push('/dashboard'); // 就算更新失敗也強行放行
     } finally {
       setLoading(false);
     }
@@ -261,7 +284,6 @@ export default function LoginPage() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Phone Number</label>
                   <div className="flex gap-2">
-                    {/* 🟢 動態區號選擇器 */}
                     <select 
                       value={countryCode} 
                       onChange={e => setCountryCode(e.target.value)}
@@ -271,7 +293,7 @@ export default function LoginPage() {
                       <option value="+853">+853</option>
                       <option value="+886">+886</option>
                       <option value="+86">+86</option>
-                      <option value="+452">+452</option> {/* 相容舊資料打錯的區號 */}
+                      <option value="+452">+452</option> 
                     </select>
                     <input type="tel" required value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-widest" placeholder="98765432" />
                   </div>
@@ -279,7 +301,24 @@ export default function LoginPage() {
 
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">6-Digit PIN</label>
-                  <input type="password" required maxLength={6} value={pin} onChange={e => setPin(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-[0.5em] text-center text-lg" placeholder="••••••" />
+                  <div className="relative">
+                    <input 
+                      type={showPin ? "text" : "password"} 
+                      required 
+                      maxLength={6} 
+                      value={pin} 
+                      onChange={e => setPin(e.target.value)} 
+                      className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-[0.5em] text-center text-lg pr-12" 
+                      placeholder="••••••" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setShowPin(!showPin)} 
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#D4AF37] transition-colors"
+                    >
+                      <i className={`fa-solid ${showPin ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -295,27 +334,73 @@ export default function LoginPage() {
                 <div className="w-12 h-12 rounded-full bg-[#D4AF37]/20 text-[#D4AF37] flex items-center justify-center mx-auto mb-3 text-xl">
                   <i className="fa-solid fa-lock"></i>
                 </div>
-                <h3 className="text-xl font-black text-white italic">首次登入安全設定</h3>
+                <h3 className="text-xl font-black text-white italic">首次登入安全建議</h3>
                 <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                  為保護您的資產，請設定一組只有您自己知道的專屬 6 位數 PIN 碼。
+                  為保護您的資產，強烈建議您設定一組只有您自己知道的專屬 6 位數 PIN 碼。
                 </p>
               </div>
 
               <div className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">設定全新 6 位數字</label>
-                  <input type="password" required maxLength={6} value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder="••••••" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors" />
+                  <div className="relative">
+                    <input 
+                      type={showNewPin ? "text" : "password"} 
+                      required 
+                      maxLength={6} 
+                      value={newPin} 
+                      onChange={(e) => setNewPin(e.target.value)} 
+                      placeholder="••••••" 
+                      className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors pr-12" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setShowNewPin(!showNewPin)} 
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#D4AF37] transition-colors"
+                    >
+                      <i className={`fa-solid ${showNewPin ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">再次確認新密碼</label>
-                  <input type="password" required maxLength={6} value={confirmPin} onChange={(e) => setConfirmPin(e.target.value)} placeholder="••••••" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors" />
+                  <div className="relative">
+                    <input 
+                      type={showConfirmPin ? "text" : "password"} 
+                      required 
+                      maxLength={6} 
+                      value={confirmPin} 
+                      onChange={(e) => setConfirmPin(e.target.value)} 
+                      placeholder="••••••" 
+                      className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors pr-12" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={() => setShowConfirmPin(!showConfirmPin)} 
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-[#D4AF37] transition-colors"
+                    >
+                      <i className={`fa-solid ${showConfirmPin ? 'fa-eye-slash' : 'fa-eye'}`}></i>
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <button type="submit" disabled={loading} className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all mt-6 shadow-[0_0_20px_rgba(212,175,55,0.2)] disabled:opacity-50">
-                {loading ? "加密儲存中..." : "儲存專屬密碼並進入系統"}
-              </button>
+              <div className="pt-2">
+                <button type="submit" disabled={loading} className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all shadow-[0_0_20px_rgba(212,175,55,0.2)] disabled:opacity-50">
+                  {loading ? "加密儲存中..." : "儲存專屬密碼並進入系統"}
+                </button>
+                
+                {/* 🟢 允許客人跳過修改密碼 */}
+                <button 
+                  type="button" 
+                  onClick={handleSkipChangePin} 
+                  disabled={loading}
+                  className="w-full mt-4 bg-transparent border border-white/10 text-gray-400 font-bold py-3.5 rounded-2xl uppercase tracking-widest text-[10px] hover:text-white hover:bg-white/5 transition-all disabled:opacity-50"
+                >
+                  稍後再說 (跳過設定)
+                </button>
+              </div>
             </form>
           )}
 
