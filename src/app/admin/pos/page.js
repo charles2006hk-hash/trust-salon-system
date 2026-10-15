@@ -38,10 +38,8 @@ export default function SmartPOS() {
   const [selectedCategory, setSelectedCategory] = useState('全部');
   const [newItemStylist, setNewItemStylist] = useState('');
 
-  // 🟢 新增：歷史結帳日期與 T-Point 使用狀態[cite: 16]
   const [customHistoryDate, setCustomHistoryDate] = useState('');
   const [usePoints, setUsePoints] = useState('');
-  // 🟢 新增：會員結帳支付方式狀態[cite: 16]
   const [checkoutPaymentMethod, setCheckoutPaymentMethod] = useState('t_dollar');
 
   const [showTopUpModal, setShowTopUpModal] = useState(false);
@@ -216,7 +214,6 @@ export default function SmartPOS() {
       const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
       const userSnap = await getDocs(userQ);
       
-      // 🟢 讀取會員點數
       const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '', points: 0 } : userSnap.docs[0].data();
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
@@ -228,7 +225,7 @@ export default function SmartPOS() {
         discountRate, 
         tier: uData.tier || '基本會員', 
         balance: uData.tDollarBalance || 0, 
-        points: uData.points || 0, // 儲存客人積分[cite: 16]
+        points: uData.points || 0, 
         userId: userSnap.empty ? null : userSnap.docs[0].id, 
         packageBalances: uData.packageBalances || {},
         customerName: uData.name || '' 
@@ -238,9 +235,9 @@ export default function SmartPOS() {
       setAddItemMode('pay'); 
       setNewItemStylist(''); 
       setSelectedCategory('全部');
-      setCustomHistoryDate(''); // 重置自訂日期
-      setUsePoints(''); // 重置 T-Point
-      setCheckoutPaymentMethod('t_dollar'); // 預設使用 T-Dollar[cite: 16]
+      setCustomHistoryDate(''); 
+      setUsePoints(''); 
+      setCheckoutPaymentMethod('t_dollar'); 
       toast.dismiss(toastId);
     } catch (error) { toast.error("讀取帳單失敗", { id: toastId }); }
   };
@@ -250,7 +247,7 @@ export default function SmartPOS() {
     const orig = Number(price);
     const fin = Math.round(orig * checkoutSession.discountRate);
     setCart([...cart, { id: Date.now().toString() + Math.random(), type: 'pay', name: itemName, stylist: itemStylist, originalPrice: orig, finalPrice: fin, grids: 0 }]);
-    toast.success(`✅ 已加入購物車：${itemName}`);
+    toast.success(`✅ 已加入：${itemName}`);
   };
 
   const handleQuickAddDeduct = (itemName) => {
@@ -282,7 +279,6 @@ export default function SmartPOS() {
       if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
     });
 
-    // 🟢 計算扣除 T-Point 後的實付餘額[cite: 16]
     const pointsDeducted = Number(usePoints) || 0;
     const finalCashToPay = totalPay - pointsDeducted;
 
@@ -295,7 +291,6 @@ export default function SmartPOS() {
        return toast.error("抵扣積分不能超過總金額！", { id: toastId });
     }
 
-    // 🟢 處理自訂歷史日期補單時間戳[cite: 16]
     let finalTimestamp = new Date().toISOString();
     if (customHistoryDate) {
         const today = new Date();
@@ -312,13 +307,11 @@ export default function SmartPOS() {
           const currentData = uDoc.data();
 
           if (finalCashToPay > 0) {
-            // 🟢 會員結帳分流：檢查是扣餘額還是直接付現[cite: 16]
             if (checkoutPaymentMethod === 't_dollar') {
                const newBal = (currentData.tDollarBalance || 0) - finalCashToPay;
                if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
                tx.update(userRef, { tDollarBalance: newBal });
             } else {
-               // 會員付現金/刷卡：增加對應的 T-Point 積分
                const newPoints = (currentData.points || 0) + finalCashToPay;
                tx.update(userRef, { points: newPoints });
             }
@@ -330,17 +323,33 @@ export default function SmartPOS() {
           }
 
           let newPackageBalances = { ...(currentData.packageBalances || {}) };
+          
+          // 1. 處理扣除套票
           for (const [pkgName, grids] of Object.entries(deductMap)) {
             const currentGrids = newPackageBalances[pkgName] || 0;
             if (currentGrids < grids) throw new Error(`套票【${pkgName}】格數不足！剩餘 ${currentGrids} 格`);
             newPackageBalances[pkgName] = currentGrids - grids;
           }
-          if (Object.keys(deductMap).length > 0) tx.update(userRef, { packageBalances: newPackageBalances });
+          
+          // 2. 🚀 核心修復：處理「在購物車買套票」，自動加入格數到帳戶
+          let hasPackageBuy = false;
+          cart.forEach(item => {
+             if (item.type === 'pay') {
+                 const pkg = packages.find(p => p.name === item.name);
+                 if (pkg) {
+                     newPackageBalances[pkg.name] = (newPackageBalances[pkg.name] || 0) + Number(pkg.quantity);
+                     hasPackageBuy = true;
+                 }
+             }
+          });
+
+          if (Object.keys(deductMap).length > 0 || hasPackageBuy) {
+             tx.update(userRef, { packageBalances: newPackageBalances });
+          }
 
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
-               // 🟢 若選擇現金結帳，寫入 member_cash 類型[cite: 16]
                const isCashPayment = checkoutPaymentMethod === 'cash' && finalCashToPay > 0;
                tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: isCashPayment ? "member_cash" : "deduct", timestamp: finalTimestamp, pointsUsed: pointsDeducted > 0 });
              } else if (item.type === 'deduct') {
@@ -357,7 +366,13 @@ export default function SmartPOS() {
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
-        if (Object.keys(deductMap).length > 0) throw new Error("非會員無法扣除套票");
+        // Walk-in 防呆：不允許散客買套票或扣套票
+        let hasPackageBuy = cart.some(item => item.type === 'pay' && packages.find(p => p.name === item.name));
+        if (Object.keys(deductMap).length > 0 || hasPackageBuy) {
+           setIsProcessing(false);
+           return toast.error("非會員無法購買或扣除套票，請先替客人建立檔案！");
+        }
+
         await runTransaction(db, async (tx) => {
           cart.forEach(item => {
             const newTxRef = doc(collection(db, "transactions"));
@@ -1095,7 +1110,7 @@ export default function SmartPOS() {
                ))}
                
                <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
-                 {/* 🟢 T-Point 折抵區塊[cite: 16] */}
+                 {/* 🟢 T-Point 折抵區塊 */}
                  {checkoutSession.userId && (checkoutSession.points || 0) > 0 && cart.filter(i => i.type === 'pay').length > 0 && (
                    <div className="flex justify-between items-center bg-blue-900/20 p-3 rounded-xl border border-blue-500/30">
                      <div>
@@ -1112,7 +1127,7 @@ export default function SmartPOS() {
                    </div>
                  )}
                  
-                 {/* 🟢 會員結帳支付方式切換：允許基本會員選擇付現，跳過餘額檢查[cite: 16] */}
+                 {/* 🟢 會員結帳支付方式切換 */}
                  {checkoutSession.userId && cart.filter(i => i.type === 'pay').length > 0 && (
                    <div className="flex justify-between items-center bg-[#1a1a1a] p-2 rounded-xl border border-white/10">
                      <button type="button" onClick={() => setCheckoutPaymentMethod('t_dollar')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${checkoutPaymentMethod === 't_dollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500'}`}>T-Dollar 餘額扣帳</button>
@@ -1179,7 +1194,7 @@ export default function SmartPOS() {
                       }}
                       className="col-span-2 w-full bg-[#121212] border border-white/10 hover:border-[#D4AF37] p-4 rounded-xl text-sm font-bold text-left outline-none transition-colors text-gray-400 flex justify-between items-center"
                     >
-                      {addItemMode === 'pay' ? '➕ 點擊選擇加購服務...' : '🎫 點擊選擇扣除套票...'}
+                      {addItemMode === 'pay' ? '➕ 點擊選擇加購項目/套票...' : '🎫 點擊選擇扣除套票...'}
                       <i className="fa-solid fa-chevron-right text-gray-600"></i>
                     </button>
                     
