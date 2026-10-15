@@ -3,22 +3,41 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { auth, db } from '@/lib/firebase';
-import { RecaptchaVerifier, signInWithPhoneNumber, onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  onAuthStateChanged,
+  updatePassword
+} from 'firebase/auth';
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc,
+  deleteDoc
+} from 'firebase/firestore';
 import { Toaster, toast } from 'react-hot-toast';
-import Link from 'next/link'; // 🟢 確保引入了 Link
+import Link from 'next/link';
 
 export default function LoginPage() {
   const router = useRouter();
   
-  const [step, setStep] = useState('phone'); 
+  const [step, setStep] = useState('login'); // login | register | forceChange
   const [loading, setLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
 
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [otp, setOtp] = useState('');
-  const [confirmationResult, setConfirmationResult] = useState(null);
+  const [pin, setPin] = useState('');
+  
+  // 強制改密碼狀態
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
 
+  // 註冊狀態
   const [formData, setFormData] = useState({
     name: '',
     birthMonth: '',
@@ -28,26 +47,31 @@ export default function LoginPage() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user && step !== 'register') {
+      // 避免在註冊或強制改密碼流程中被自動導向
+      if (user && step === 'login') {
         try {
-          const docRef = doc(db, 'users', user.uid);
-          const docSnap = await getDoc(docRef);
-          
+          const docSnap = await getDoc(doc(db, 'users', user.uid));
           if (docSnap.exists()) {
-            const role = docSnap.data().role;
-            // 🟢 如果是內部管理人員，自動導向大後台首頁
-            if (['admin', 'manager', 'staff', 'reception'].includes(role)) {
+            const userData = docSnap.data();
+            
+            if (userData.isFirstLogin === true) {
+              setStep('forceChange');
+              setLoading(false);
+              setPageLoading(false);
+              return;
+            }
+
+            if (['admin', 'manager', 'staff', 'reception'].includes(userData.role)) {
               router.push('/admin'); 
             } else {
               router.push('/dashboard'); 
             }
           } else {
-            setStep('register');
-            setLoading(false); 
-            setPageLoading(false);
+             // 邊界防護：有 Auth 卻無 Firestore 文件
+             setPageLoading(false);
           }
         } catch (error) {
-          console.error("權限讀取失敗", error);
+          console.error("資料讀取失敗", error);
           setLoading(false);
           setPageLoading(false);
         }
@@ -58,91 +82,165 @@ export default function LoginPage() {
     return () => unsubscribe();
   }, [router, step]);
 
-  const setupRecaptcha = () => {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-        size: 'invisible',
-      });
-    }
+  // 🛠️ 核心輔助：電話號碼格式化與虛擬 Email 生成
+  const getFormattedData = () => {
+    const cleanPhone = phoneNumber.replace(/\D/g, '');
+    const fullPhone = cleanPhone.startsWith('852') ? cleanPhone : `852${cleanPhone}`;
+    const formattedPhoneForDB = `+${fullPhone}`;
+    const virtualEmail = `${fullPhone}@trustsalon.com`;
+    return { cleanPhone, fullPhone, formattedPhoneForDB, virtualEmail };
   };
 
-  const handleSendOtp = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
-    if (!phoneNumber) return toast.error("請輸入手機號碼");
-    
-    const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+852${phoneNumber}`;
-    
+    if (!phoneNumber || phoneNumber.length < 8) return toast.error("請輸入有效的手機號碼");
+    if (!pin || pin.length !== 6) return toast.error("PIN 碼必須為 6 位數字");
+
     setLoading(true);
-    const toastId = toast.loading("正在發送 SMS 驗證碼...");
+    const toastId = toast.loading("安全驗證中...");
+    const { cleanPhone, formattedPhoneForDB, virtualEmail } = getFormattedData();
+
     try {
-      setupRecaptcha();
-      const appVerifier = window.recaptchaVerifier;
-      const result = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
-      setConfirmationResult(result);
-      setStep('otp');
-      toast.success("驗證碼已發送！", { id: toastId });
+      // 1. 正常嘗試使用虛擬 Email 與 PIN 登入
+      const userCredential = await signInWithEmailAndPassword(auth, virtualEmail, pin);
+      
+      // 檢查是否為首次登入 (舊會員移轉後)
+      const d = await getDoc(doc(db, 'users', userCredential.user.uid));
+      if (d.exists() && d.data().isFirstLogin === true) {
+         toast.dismiss(toastId);
+         setStep('forceChange');
+      } else {
+         toast.success("登入成功！", { id: toastId });
+         // onAuthStateChanged 會接手導向
+      }
     } catch (error) {
-      console.error(error);
-      toast.error("發送失敗，請確認號碼格式", { id: toastId });
+      // 2. Auth 中查無此人，進入「舊客移轉」或「新客註冊」判定邏輯
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/invalid-login-credentials') {
+        try {
+          const q = query(collection(db, 'users'), where('phoneNumber', '==', formattedPhoneForDB));
+          const snap = await getDocs(q);
+
+          if (!snap.empty) {
+            // 🟢 找到舊會員檔案：進行 Lazy Migration
+            const expectedTempPin = cleanPhone.slice(-6); // 預設密碼為手機後 6 碼
+            
+            if (pin !== expectedTempPin) {
+               return toast.error(`舊會員首次升級：請輸入手機號碼「最後 6 碼」作為密碼`, { id: toastId });
+            }
+
+            // 密碼正確，自動在背景建立 Auth 帳戶並轉移資料
+            const oldDoc = snap.docs[0];
+            const oldData = oldDoc.data();
+            const newCred = await createUserWithEmailAndPassword(auth, virtualEmail, pin);
+            
+            await setDoc(doc(db, 'users', newCred.user.uid), {
+              ...oldData,
+              isFirstLogin: true, // 標記為需強制改密
+              migratedAt: new Date().toISOString()
+            });
+
+            // 為了防呆與維持資料庫整潔，刪除舊的 (以舊 UID 為名) 的 Document
+            if (oldDoc.id !== newCred.user.uid) {
+              await deleteDoc(doc(db, 'users', oldDoc.id));
+            }
+
+            toast.success("✅ 帳號安全升級成功！請設定您的專屬密碼。", { id: toastId });
+            setStep('forceChange');
+
+          } else {
+            // 🔵 找不到舊檔案，屬於全新客戶
+            toast.dismiss(toastId);
+            setStep('register');
+          }
+        } catch (migrationErr) {
+          console.error(migrationErr);
+          toast.error("系統升級異常，請聯繫櫃檯人員協助", { id: toastId });
+        }
+      } else if (error.code === 'auth/wrong-password') {
+        toast.error("密碼錯誤，請重新輸入", { id: toastId });
+      } else {
+        toast.error(`驗證失敗: ${error.message}`, { id: toastId });
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifyOtp = async (e) => {
+  const handleForceChangePin = async (e) => {
     e.preventDefault();
-    if (!otp || !confirmationResult) return;
-    
+    if (newPin.length !== 6 || isNaN(newPin)) return toast.error("新密碼必須為 6 位數字");
+    if (newPin === pin) return toast.error("新密碼不能與預設密碼相同");
+    if (newPin !== confirmPin) return toast.error("兩次輸入的密碼不一致");
+
     setLoading(true);
-    const toastId = toast.loading("驗證中...");
+    const toastId = toast.loading("正在為您加密並綁定專屬密碼...");
     try {
-      await confirmationResult.confirm(otp);
-      toast.success("手機驗證成功！", { id: toastId });
-      setLoading(false); 
+      const user = auth.currentUser;
+      if (!user) throw new Error("遺失登入狀態，請重新整理");
+
+      await updatePassword(user, newPin);
+      await updateDoc(doc(db, 'users', user.uid), {
+        isFirstLogin: false,
+        updatedAt: new Date().toISOString()
+      });
+
+      toast.success("🔒 密碼設定成功！請妥善保存。", { id: toastId });
+      router.push('/dashboard');
     } catch (error) {
-      toast.error("驗證碼錯誤", { id: toastId });
+      console.error(error);
+      toast.error(`密碼更新失敗，請重試`, { id: toastId });
+    } finally {
       setLoading(false);
     }
   };
 
   const handleRegister = async (e) => {
     e.preventDefault();
-    const user = auth.currentUser;
-    if (!user) return toast.error("系統錯誤：遺失登入狀態");
     if (!formData.name || !formData.birthMonth || !formData.gender || !formData.interest) {
       return toast.error("請填寫完整資料以領取迎新獎勵");
     }
 
     setLoading(true);
     const toastId = toast.loading("正在為您建立專屬檔案...");
+    const { formattedPhoneForDB, virtualEmail } = getFormattedData();
+
     try {
-      await setDoc(doc(db, 'users', user.uid), {
-        phoneNumber: user.phoneNumber,
+      // 全新註冊，直接使用客人自訂的 PIN 碼建立帳號
+      const newCred = await createUserWithEmailAndPassword(auth, virtualEmail, pin);
+      
+      await setDoc(doc(db, 'users', newCred.user.uid), {
+        phoneNumber: formattedPhoneForDB,
         name: formData.name,
         birthMonth: formData.birthMonth,
         gender: formData.gender,
         interest: formData.interest,
-        tDollarBalance: 100,
+        tDollarBalance: 100, // 迎新獎勵
         points: 0,
         role: 'member',
+        isFirstLogin: false, // 註冊時就是自己設的密碼，不用再強制改
         createdAt: new Date().toISOString()
       });
+      
       toast.success("註冊成功！已將 $100 迎新存入您的帳戶", { id: toastId });
       router.push('/dashboard');
     } catch (error) {
-      toast.error("註冊失敗，請重試", { id: toastId });
+      if (error.code === 'auth/email-already-in-use') {
+        toast.error("此號碼已被註冊，請返回登入", { id: toastId });
+        setStep('login');
+      } else {
+        toast.error(`註冊失敗：${error.message}`, { id: toastId });
+      }
     } finally {
       setLoading(false); 
     }
   };
 
-  if (pageLoading) return <div className="min-h-screen flex items-center justify-center bg-[#080808] text-[#D4AF37] tracking-widest text-xs uppercase">Connecting...</div>;
+  if (pageLoading) return <div className="min-h-screen flex items-center justify-center bg-[#080808] text-[#D4AF37] tracking-widest text-xs uppercase">Security Check...</div>;
 
   return (
     <div className="bg-[#080808] min-h-screen text-gray-100 flex items-center justify-center p-6 font-sans selection:bg-[#D4AF37] selection:text-black">
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
       <Toaster position="top-right" />
-      <div id="recaptcha-container"></div>
       
       <div className="w-full max-w-md">
         
@@ -151,44 +249,67 @@ export default function LoginPage() {
           <p className="text-[10px] text-gray-500 uppercase tracking-[0.4em] font-bold">Member Portal</p>
         </div>
 
-        <div className="bg-[#121212] p-10 rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden">
+        <div className="bg-[#121212] p-8 md:p-10 rounded-[40px] border border-white/5 shadow-2xl relative overflow-hidden">
           <div className="absolute -top-10 -right-10 w-32 h-32 bg-[#D4AF37] opacity-10 rounded-full blur-3xl"></div>
           
-          {step === 'phone' && (
-            <form onSubmit={handleSendOtp} className="space-y-6 relative z-10 animate-fade-in">
+          {step === 'login' && (
+            <form onSubmit={handleLogin} className="space-y-6 relative z-10 animate-fade-in">
               <div>
                 <h2 className="text-xl font-bold text-white mb-2 tracking-widest">Welcome</h2>
-                <p className="text-xs text-gray-500 leading-relaxed">請輸入您的手機號碼。<br/>新客戶註冊即享 <span className="text-[#D4AF37] font-bold">$100 迎新 T-Dollar</span>。</p>
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  請輸入電話與 6 位數 PIN 碼登入。<br/>
+                  舊會員首次登入密碼為 <span className="text-[#D4AF37]">「手機號碼後 6 碼」</span>。
+                </p>
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Phone Number</label>
-                <div className="flex gap-2">
-                  <div className="bg-black border border-white/10 p-4 rounded-2xl text-white text-sm font-mono flex items-center justify-center w-20 shrink-0">+852</div>
-                  <input type="tel" required value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-widest" placeholder="98765432" />
+              
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Phone Number</label>
+                  <div className="flex gap-2">
+                    <div className="bg-black border border-white/10 p-4 rounded-2xl text-white text-sm font-mono flex items-center justify-center w-20 shrink-0">+852</div>
+                    <input type="tel" required value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-widest" placeholder="98765432" />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">6-Digit PIN</label>
+                  <input type="password" required maxLength={6} value={pin} onChange={e => setPin(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-[0.5em] text-center text-lg" placeholder="••••••" />
                 </div>
               </div>
-              <button type="submit" disabled={loading} className="w-full bg-white text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:bg-[#D4AF37] transition-all shadow-xl disabled:opacity-50">
-                {loading ? "處理中..." : "獲取 SMS 驗證碼"}
+
+              <button type="submit" disabled={loading} className="w-full bg-white text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:bg-[#D4AF37] transition-all shadow-xl disabled:opacity-50 active:scale-95">
+                {loading ? "安全驗證中..." : "驗證並登入"}
               </button>
             </form>
           )}
 
-          {step === 'otp' && (
-            <form onSubmit={handleVerifyOtp} className="space-y-6 relative z-10 animate-fade-in">
-              <div>
-                <h2 className="text-xl font-bold text-white mb-2 tracking-widest">Verify</h2>
-                <p className="text-xs text-gray-500 leading-relaxed">我們已發送 6 位數驗證碼至 <br/><span className="text-[#D4AF37] font-mono tracking-widest">{phoneNumber}</span></p>
+          {step === 'forceChange' && (
+            <form onSubmit={handleForceChangePin} className="space-y-5 relative z-10 animate-fade-in">
+              <div className="text-center mb-6">
+                <div className="w-12 h-12 rounded-full bg-[#D4AF37]/20 text-[#D4AF37] flex items-center justify-center mx-auto mb-3 text-xl">
+                  <i className="fa-solid fa-lock"></i>
+                </div>
+                <h3 className="text-xl font-black text-white italic">首次登入安全設定</h3>
+                <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                  為保護您的資產，請設定一組只有您自己知道的專屬 6 位數 PIN 碼。
+                </p>
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">SMS 驗證碼</label>
-                <input type="text" required value={otp} onChange={e => setOtp(e.target.value)} className="w-full bg-black border border-white/10 p-4 rounded-2xl text-center text-white outline-none focus:border-[#D4AF37] transition-colors font-mono tracking-[1em] text-xl" placeholder="••••••" maxLength={6} />
+
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">設定全新 6 位數字</label>
+                  <input type="password" required maxLength={6} value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder="••••••" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors" />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">再次確認新密碼</label>
+                  <input type="password" required maxLength={6} value={confirmPin} onChange={(e) => setConfirmPin(e.target.value)} placeholder="••••••" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white text-center font-mono font-bold text-xl tracking-[0.5em] outline-none focus:border-[#D4AF37] transition-colors" />
+                </div>
               </div>
-              <div className="flex gap-4">
-                <button type="button" onClick={() => setStep('phone')} className="px-6 bg-white/5 text-gray-400 font-bold py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:text-white transition-all">返回</button>
-                <button type="submit" disabled={loading} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all shadow-xl disabled:opacity-50">
-                  {loading ? "驗證中..." : "登入 / 註冊"}
-                </button>
-              </div>
+
+              <button type="submit" disabled={loading} className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-2xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all mt-6 shadow-[0_0_20px_rgba(212,175,55,0.2)] disabled:opacity-50">
+                {loading ? "加密儲存中..." : "儲存專屬密碼並進入系統"}
+              </button>
             </form>
           )}
 
@@ -237,16 +358,18 @@ export default function LoginPage() {
                 </select>
               </div>
 
-              <button type="submit" disabled={loading} className="w-full bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all mt-4 shadow-[0_0_20px_rgba(212,175,55,0.2)] disabled:opacity-50">
-                {loading ? "處理中..." : "完成註冊並進入"}
-              </button>
+              <div className="flex gap-3 mt-4">
+                <button type="button" onClick={() => setStep('login')} className="px-5 bg-white/5 text-gray-400 font-bold py-4 rounded-xl uppercase tracking-widest text-[10px] hover:text-white transition-all">返回</button>
+                <button type="submit" disabled={loading} className="flex-1 bg-[#D4AF37] text-black font-black py-4 rounded-xl uppercase tracking-widest text-[10px] hover:scale-105 transition-all shadow-[0_0_20px_rgba(212,175,55,0.2)] disabled:opacity-50">
+                  {loading ? "處理中..." : "完成註冊並進入"}
+                </button>
+              </div>
             </form>
           )}
 
         </div>
         
         <div className="text-center mt-8">
-           {/* 🟢 這裡精準重定向到「內部員工登入頁」路徑 */}
            <Link href="/admin/login" className="text-[10px] text-gray-600 uppercase tracking-[0.3em] hover:text-[#D4AF37] transition-colors border-b border-white/5 pb-1">內部員工通道 (Staff Only)</Link>
         </div>
       </div>
