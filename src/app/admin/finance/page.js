@@ -64,7 +64,7 @@ export default function FinancePage() {
   const handleDeleteTransaction = async (tx) => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
     
-    // 🟢 支援抓取所有類型的項目名稱與金額
+    // 🟢 支援抓取所有類型的項目名稱與金額[cite: 15]
     const itemName = tx.service || tx.packageName || (tx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
     const itemAmount = tx.amount || tx.bonusAmount || tx.amountPaidHKD || tx.tDollarAdded || 0;
     
@@ -111,7 +111,7 @@ export default function FinancePage() {
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
       
-      // 🟢 全面支援所有類型的欄位比對
+      // 🟢 全面支援所有類型的欄位比對[cite: 15]
       const oldAmount = Number(originalTx.amount || originalTx.bonusAmount || originalTx.amountPaidHKD || originalTx.tDollarAdded || 0);
       const newAmount = Number(editingTx.amount || editingTx.bonusAmount || editingTx.amountPaidHKD || editingTx.tDollarAdded || 0);
       
@@ -137,7 +137,7 @@ export default function FinancePage() {
          updatePayload.stylist = editingTx.stylist;
       }
 
-      // 🟢 根據不同類型更新正確的財務欄位
+      // 🟢 根據不同類型更新正確的財務欄位[cite: 15]
       if (editingTx.type === 'assistant_bonus') {
          updatePayload.bonusAmount = newAmount;
       } else if (editingTx.type === 'buy_package') {
@@ -274,7 +274,8 @@ export default function FinancePage() {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
       } 
-      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
+      // 🟢 將 member_cash 也加入計算[cite: 15]
+      else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus' || tx.type === 'member_cash') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
           stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
@@ -289,7 +290,7 @@ export default function FinancePage() {
           formulaStr = `店家發放定額獎金 ($${commission})`;
           commCode = 'BONUS';
         } 
-        else if (tx.type === 'deduct' || tx.type === 'walkin_cash') {
+        else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash') {
           revenue = Number(tx.amount || 0);
           const serviceItem = servicesData.find(s => s.name === tx.service);
           commCode = serviceItem ? serviceItem.commissionCode : null;
@@ -323,7 +324,7 @@ export default function FinancePage() {
           }
         }
 
-        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package') {
+        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'deduct_package' || tx.type === 'member_cash') {
            const itemName = tx.service || tx.packageName || '';
            const isAddon = itemName.includes('追加');
            const isProduct = commCode && String(commCode).startsWith('P'); 
@@ -714,6 +715,8 @@ export default function FinancePage() {
                             <span className="text-[9px] bg-purple-500/10 text-purple-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Use Pkg</span>
                           ) : tx.type === 'assistant_bonus' ? (
                             <span className="text-[9px] bg-yellow-500/10 text-yellow-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Bonus</span>
+                          ) : tx.type === 'member_cash' ? (
+                            <span className="text-[9px] bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Mem Cash</span>
                           ) : (
                             <span className="text-[9px] bg-gray-500/10 text-gray-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Service</span>
                           )}
@@ -733,7 +736,6 @@ export default function FinancePage() {
                         {currentAdminRole === 'admin' && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-1.5">
-                                {/* 🟢 移除了之前的條件限制，全類型解鎖編輯與刪除 */}
                                 <div className="flex gap-1.5 w-full justify-center">
                                   <button 
                                     onClick={() => {
