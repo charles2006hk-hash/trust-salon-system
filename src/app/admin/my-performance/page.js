@@ -114,9 +114,10 @@ export default function StaffPerformancePage() {
     try {
       if (!staffName) return;
       
+      // 🟢 核心修改：加入 'member_cash' 類型，確保能讀取到會員現金結帳的業績[cite: 10]
       const q = query(
         collection(db, 'transactions'), 
-        where('type', 'in', ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus'])
+        where('type', 'in', ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus', 'member_cash'])
       );
       
       const snap = await getDocs(q);
