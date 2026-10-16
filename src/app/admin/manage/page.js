@@ -2,16 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-// 🟢 補上了 runTransaction 的引入，用於安全扣款與補發
 import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, getDoc, runTransaction, query, where } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
-// ★ 定義 UI 強制排序規則，確保前 12 個標籤永遠維持熟悉的 3x4 網格佈局
+// ★ 定義 UI 強制排序規則
 const PREFERRED_ORDER = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'];
 
-// ★ 排序函式：優先按照 PREFERRED_ORDER 排序，不在清單內的自訂標籤放後面並按字母排序
+// ★ 排序函式
 const getSortedCodes = (labelsObj) => {
   const keys = Object.keys(labelsObj || {});
   return keys.sort((a, b) => {
@@ -47,7 +46,7 @@ export default function AdminManagePage() {
   const [newLabelCode, setNewLabelCode] = useState('');
   const [newLabelName, setNewLabelName] = useState('');
 
-  // 🟢 盤點修復工具專屬狀態
+  // 盤點修復工具狀態
   const [anomalyList, setAnomalyList] = useState([]);
   const [scanning, setScanning] = useState(false);
   const [fixPackageId, setFixPackageId] = useState('');
@@ -89,7 +88,6 @@ export default function AdminManagePage() {
   const promoEmojiList = ['🎁', '🔥', '✨', '📢', '📅', '🎉', '⚡', '🏆'];
   const salonEmojiList = ['🧴', '💆‍♀️', '💆‍♂️', '✂️', '✨', '💧', '🌿', '👑', '🎀', '💅', '🛍️', '🎁'];
 
-  // 🟢 增加了 'tools' 數據盤點模組
   const menuGroups = [
     { title: "🛍️ 營運與商品定價", items: [{ id: 'services', label: '服務定價', icon: '💇‍♂️' }, { id: 'categories', label: '分類設定', icon: '🏷️' }, { id: 'packages', label: '套票與次數券', icon: '🎫' }] },
     { title: "👑 會員與行銷模組", items: [{ id: 'tiers', label: '會員等級與升級', icon: '👑' }, { id: 'rewards', label: '積分換領商城', icon: '🎁' }, { id: 'promos', label: '前台網頁公告', icon: '📢' }] },
@@ -132,7 +130,7 @@ export default function AdminManagePage() {
   };
 
   const fetchData = async () => {
-    if (activeTab === 'tools') return; // tools 不需要走一般的 data fetch
+    if (activeTab === 'tools') return; 
     setLoading(true);
     try {
       const querySnapshot = await getDocs(collection(db, activeTab));
@@ -189,14 +187,12 @@ export default function AdminManagePage() {
     } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
-  // 🟢 工具一：智能掃描異常的舊客資料 (升級版：附帶歷史儲值金額與時間)
   const scanAnomalies = async () => {
     setScanning(true);
     try {
-      // 1. 從歷史交易找出儲值 $3000 或以上的行為
       const q = query(collection(db, 'transactions'), where('type', '==', 'topup'));
       const txSnap = await getDocs(q);
-      const suspiciousData = {}; // 改用 Object 儲存電話與對應的交易紀錄
+      const suspiciousData = {}; 
       
       txSnap.docs.forEach(d => {
           const data = d.data();
@@ -204,28 +200,19 @@ export default function AdminManagePage() {
           if (amt >= 3000) {
               if (data.phoneNumber) {
                   if (!suspiciousData[data.phoneNumber]) suspiciousData[data.phoneNumber] = [];
-                  suspiciousData[data.phoneNumber].push({
-                      amount: amt,
-                      timestamp: data.timestamp
-                  });
+                  suspiciousData[data.phoneNumber].push({ amount: amt, timestamp: data.timestamp });
               }
           }
       });
 
-      // 2. 對比 User 資料表
       const usersSnap = await getDocs(collection(db, 'users'));
       const anomalies = [];
       usersSnap.docs.forEach(d => {
           const u = d.data();
           if (suspiciousData[u.phoneNumber]) {
-              // 檢查他們目前的套票錢包是否為空
               const hasPackage = Object.keys(u.packageBalances || {}).length > 0;
               if (!hasPackage) {
-                  anomalies.push({ 
-                      id: d.id, 
-                      ...u,
-                      historyTxs: suspiciousData[u.phoneNumber] // 🟢 附加上歷史疑似買套票的紀錄
-                  });
+                  anomalies.push({ id: d.id, ...u, historyTxs: suspiciousData[u.phoneNumber] });
               }
           }
       });
@@ -239,7 +226,6 @@ export default function AdminManagePage() {
     setScanning(false);
   };
 
-  // 🟢 工具二：一鍵轉移修復
   const handleFixAnomaly = async (user) => {
     if (!fixPackageId) return toast.error("請先在上方選擇要【補發的目標套票】方案！");
     const pkg = packagesList.find(p => p.id === fixPackageId);
@@ -256,11 +242,9 @@ export default function AdminManagePage() {
             const uDoc = await tx.get(userRef);
             const currentData = uDoc.data();
             
-            // 扣除現金餘額 (最少扣到0)
             let newBalance = (currentData.tDollarBalance || 0) - deductAmt;
             if (newBalance < 0) newBalance = 0; 
 
-            // 增加新架構套票
             let currentPkgs = currentData.packageBalances || {};
             let newGrids = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
 
@@ -269,7 +253,6 @@ export default function AdminManagePage() {
                 packageBalances: { ...currentPkgs, [pkg.name]: newGrids }
             });
 
-            // 寫入審計日誌
             tx.set(doc(collection(db, "audit_logs")), {
                 module: "data_migration",
                 action: "fix_old_package_anomaly",
@@ -297,7 +280,6 @@ export default function AdminManagePage() {
       }
 
       let dataToSave = { ...formData };
-      
       const dynamicValidCodes = Object.keys(globalLabels);
       
       if (activeTab === 'packages') {
@@ -493,7 +475,6 @@ export default function AdminManagePage() {
                </div>
             ) : (
               activeTab === 'tools' ? (
-                // 🟢 專屬工具模組 UI
                 <div className="space-y-6">
                    <div className="bg-blue-900/10 border border-blue-500/30 p-6 rounded-2xl">
                       <h3 className="text-blue-400 font-bold mb-2 text-lg"><i className="fa-solid fa-radar"></i> 舊制套票異常客戶盤點</h3>
@@ -529,8 +510,6 @@ export default function AdminManagePage() {
                              <div>
                                <p className="text-white font-bold">{user.name || '未命名客戶'} <span className="text-xs text-gray-500 font-mono ml-2">{user.phoneNumber}</span></p>
                                <p className="text-[10px] text-gray-400 mt-1 mb-1">目前 T-Dollar 現金餘額: <span className="text-[#D4AF37] font-bold">${user.tDollarBalance || 0}</span></p>
-                               
-                               {/* 🟢 顯示歷史疑似購買紀錄，幫助判斷是哪個套票 */}
                                {user.historyTxs && user.historyTxs.map((tx, idx) => (
                                  <p key={idx} className="text-[10px] text-blue-400 mt-1 bg-blue-900/20 w-fit px-2 py-0.5 rounded border border-blue-500/20">
                                    <i className="fa-solid fa-clock mr-1"></i>
@@ -551,7 +530,6 @@ export default function AdminManagePage() {
                    )}
                 </div>
               ) : (
-                // 原始表單 UI
                 <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   
                   {activeTab === 'branches' && (
@@ -760,8 +738,33 @@ export default function AdminManagePage() {
                   {activeTab === 'promos' && (
                     <><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-2 block">優惠標題</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800"><span className="text-xs text-gray-500 w-full mb-1">快速插入 Emoji:</span>{promoEmojiList.map(e => (<button key={e} type="button" onClick={() => addPromoEmoji(e)} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>))}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} required /></div><div className="space-y-2 col-span-2 md:col-span-1"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">有效日期至</label><input type="date" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.expiry} onChange={e => setFormData({...formData, expiry: e.target.value})} required /></div><div className="space-y-2 col-span-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">詳細內容</label><textarea className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white h-32 focus:border-[#D4AF37] outline-none" value={formData.content} onChange={e => setFormData({...formData, content: e.target.value})} required /></div></>
                   )}
+                  
                   {activeTab === 'rewards' && (
-                    <><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">禮品名稱</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest">所需積分 (Points)</label><input type="number" inputMode="decimal" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">圖標 (Emoji)</label><div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">{salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}</div><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required /></div><div className="space-y-2"><label className="text-sm font-bold text-gray-400 uppercase tracking-widest block mb-1">標籤 (Tag - 選填)</label><input type="text" className="w-full bg-gray-900 p-4 rounded-xl border border-gray-700 text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} /></div></>
+                    // 🟢 修改點：為 Rewards 積分商城表單加入響應式 Grid 排版
+                    <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">禮品名稱</label>
+                        <input type="text" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="例如: 洗髮水" />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">所需積分 (Points)</label>
+                        <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white outline-none focus:border-[#D4AF37]" value={formData.points} onChange={e => setFormData({...formData, points: e.target.value})} required placeholder="例如: 3000" />
+                      </div>
+                      
+                      <div className="space-y-2 col-span-1 md:col-span-2">
+                        <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1 block mb-1">圖標 (Emoji)</label>
+                        <div className="flex flex-wrap gap-2 mb-3 bg-black/40 p-3 rounded-xl border border-gray-800">
+                          {salonEmojiList.map(e => <button key={e} type="button" onClick={() => setFormData({...formData, icon: e})} className="text-2xl hover:scale-125 transition active:scale-90">{e}</button>)}
+                        </div>
+                        <input type="text" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white focus:border-[#D4AF37] outline-none" value={formData.icon} onChange={e => setFormData({...formData, icon: e.target.value})} required placeholder="可點擊上方選擇或手動輸入" />
+                      </div>
+                      
+                      <div className="space-y-2 col-span-1 md:col-span-2">
+                        <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1 block mb-1">標籤 (Tag - 選填)</label>
+                        <input type="text" className="w-full bg-black border border-white/10 p-4 rounded-2xl text-white focus:border-[#D4AF37] outline-none" value={formData.tag} onChange={e => setFormData({...formData, tag: e.target.value})} placeholder="例如: 推薦, 限定" />
+                      </div>
+                    </div>
                   )}
 
                   {activeTab === 'tiers' && (
