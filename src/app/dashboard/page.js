@@ -263,10 +263,6 @@ export default function DashboardPage() {
                 )}
              </div>
           </div>
-
-          <div onClick={() => setShowQRModal(true)} className="bg-white hover:bg-gray-200 text-black p-4 rounded-2xl flex items-center justify-center gap-3 cursor-pointer transition-all shadow-xl font-black uppercase tracking-widest text-xs relative z-10">
-            <i className="fa-solid fa-qrcode text-lg"></i> 出示結帳條碼 (Checkout)
-          </div>
         </div>
 
         {/* 我的預約 */}
@@ -294,19 +290,11 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* 快捷操作 */}
-        <div className="grid grid-cols-2 gap-4">
-          <button onClick={() => setShowBooking(true)} className="flex flex-col items-center justify-center bg-[#121212] rounded-[32px] p-6 border border-white/5 hover:border-[#D4AF37]/50 transition-all group shadow-lg">
-            <div className="w-12 h-12 rounded-full bg-[#D4AF37]/10 flex items-center justify-center mb-3 group-hover:bg-[#D4AF37] transition-colors">
-              <i className="fa-regular fa-calendar-check text-xl text-[#D4AF37] group-hover:text-black"></i>
-            </div>
-            <span className="text-xs font-bold text-white uppercase tracking-widest">預約服務</span>
-          </button>
-          <button onClick={loadHistory} className="flex flex-col items-center justify-center bg-[#121212] rounded-[32px] p-6 border border-white/5 hover:border-white/30 transition-all group shadow-lg">
-             <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-3 group-hover:bg-white transition-colors">
-               <i className="fa-solid fa-clock-rotate-left text-xl text-gray-400 group-hover:text-black"></i>
-             </div>
-            <span className="text-xs font-bold text-gray-400 group-hover:text-white uppercase tracking-widest">消費紀錄</span>
+        {/* 消費紀錄 */}
+        <div className="mt-4">
+          <button onClick={loadHistory} className="w-full bg-[#1a1a1a] border border-white/10 py-5 rounded-2xl flex flex-col items-center justify-center gap-2 hover:border-[#D4AF37]/50 transition-colors">
+            <i className="fa-solid fa-clock-rotate-left text-[#D4AF37] text-xl"></i>
+            <span className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">消費紀錄</span>
           </button>
         </div>
 
@@ -352,7 +340,7 @@ export default function DashboardPage() {
                      <p className={`font-bold ${tier === t.name ? 'text-[#D4AF37]' : 'text-white'}`}>{t.name}</p>
                      {tier === t.name && <span className="text-[8px] bg-[#D4AF37] text-black px-2 py-0.5 rounded-md font-black uppercase">當前等級</span>}
                    </div>
-                   <p className="text-[10px] text-gray-400">歷史累積充值滿 <span className="text-white font-bold">${t.threshold}</span> HKD</p>
+                   <p className="text-[10px] text-gray-400">充值滿 <span className="text-white font-bold">${t.threshold}</span> HKD</p>
                  </div>
                  <div className="text-right">
                    <p className={`text-xl font-black ${Number(t.discount) < 1 ? 'text-green-400' : 'text-gray-500'}`}>
