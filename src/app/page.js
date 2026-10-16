@@ -15,15 +15,19 @@ export default function HomePage() {
       try {
         const today = new Date().toISOString().split('T')[0];
         
-        // 抓取優惠 (過濾掉過期的)
+        // 🟢 抓取優惠：過濾掉過期的，但「未設定過期日」的優惠將被視為永久有效並顯示
         const promoSnap = await getDocs(collection(db, 'promos'));
-        setPromos(promoSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.expiry >= today));
+        setPromos(
+          promoSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(p => !p.expiry || p.expiry >= today) 
+        );
 
         // 抓取服務清單
         const serviceSnap = await getDocs(collection(db, 'services'));
         setServices(serviceSnap.docs.map(d => ({ id: d.id, ...d.data() })));
       } catch (error) { 
-        console.error(error); 
+        console.error("Fetch Data Error:", error); 
       } finally { 
         setLoading(false); 
       }
@@ -72,7 +76,6 @@ export default function HomePage() {
             Japanese & Korean Professional Salon
           </p>
           
-          {/* 修正了 leading (行距) 與排版，讓中文字不再擠在一起 */}
           <h1 className="text-5xl md:text-7xl lg:text-[90px] font-light text-white mb-12 tracking-wide leading-[1.3] md:leading-[1.2]">
             塑造 <span className="italic font-serif text-[#D4AF37] mx-2">靈魂</span> 的 <br className="hidden md:block" />
             <span className="font-black mt-2 md:mt-4 block">新輪廓<span className="text-[#D4AF37]">。</span></span>
@@ -117,14 +120,15 @@ export default function HomePage() {
       </section>
 
       {/* 4. CMS 動態優惠：優化卡片比例與質感 */}
-      {promos.length > 0 && (
-        <section id="promos" className="py-32 px-6 md:px-12 border-t border-white/5 relative">
-          <div className="max-w-7xl mx-auto">
-            <div className="mb-16">
-              <h2 className="text-3xl font-black text-white italic mb-3 tracking-wide">Limited <span className="text-[#D4AF37]">Offers</span></h2>
-              <p className="text-gray-500 text-[10px] tracking-[0.5em] uppercase">最新會員專屬禮遇</p>
-            </div>
-            
+      {/* 🟢 修改：移除 promos.length > 0 的條件包覆，確保 id="promos" 始終存在 */}
+      <section id="promos" className="py-32 px-6 md:px-12 border-t border-white/5 relative min-h-[400px]">
+        <div className="max-w-7xl mx-auto">
+          <div className="mb-16">
+            <h2 className="text-3xl font-black text-white italic mb-3 tracking-wide">Limited <span className="text-[#D4AF37]">Offers</span></h2>
+            <p className="text-gray-500 text-[10px] tracking-[0.5em] uppercase">最新會員專屬禮遇</p>
+          </div>
+          
+          {promos.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
               {promos.map(promo => (
                 <div key={promo.id} className="bg-[#121212] border border-white/5 p-10 md:p-14 rounded-[40px] relative overflow-hidden group hover:border-[#D4AF37]/30 transition-colors duration-500">
@@ -133,15 +137,23 @@ export default function HomePage() {
                   </div>
                   <h3 className="text-2xl font-bold text-white mb-6 leading-relaxed tracking-widest">{promo.title}</h3>
                   <p className="text-gray-400 text-sm leading-[2] mb-12 font-light">{promo.content}</p>
+                  
+                  {/* 🟢 修改：若無期限，顯示 Long-term Offer */}
                   <div className="inline-flex items-center bg-white/5 px-4 py-2 rounded-full text-[9px] text-[#D4AF37] font-bold tracking-widest uppercase">
-                    <i className="fa-regular fa-clock mr-2"></i> Valid until {promo.expiry}
+                    <i className="fa-regular fa-clock mr-2"></i> 
+                    {promo.expiry ? `Valid until ${promo.expiry}` : 'Long-term Offer'}
                   </div>
                 </div>
               ))}
             </div>
-          </div>
-        </section>
-      )}
+          ) : (
+            <div className="text-center py-20 border border-dashed border-white/10 rounded-[40px] bg-white/[0.02]">
+               <p className="text-gray-500 text-xs tracking-widest uppercase font-bold">目前暫無進行中的優惠活動</p>
+               <p className="text-gray-600 text-[10px] mt-2 tracking-widest">請隨時關注我們的最新消息</p>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* 5. 服務頻道：菜單式精緻排版 */}
       <section id="services" className="py-32 px-6 md:px-12 border-t border-white/5 bg-[#0a0a0a]">
@@ -204,7 +216,6 @@ export default function HomePage() {
             <div>
               <h3 className="text-[10px] font-bold tracking-[0.6em] text-[#D4AF37] uppercase mb-16 italic">The Studios</h3>
               <div className="space-y-16">
-                {/* 🟢 大埔店地址已更新為 88 廣場 */}
                 <div className="group">
                   <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-4">Tai Po • 大埔旗艦店</h4>
                   <p className="text-xl md:text-2xl font-light text-white leading-loose tracking-widest mb-4 group-hover:text-[#D4AF37] transition-colors">
@@ -223,14 +234,12 @@ export default function HomePage() {
               </div>
             </div>
             
-            {/* 社群連結 */}
             <div className="flex gap-10">
               <a href="https://www.facebook.com/Trust.HairSalon.TaiPo/" target="_blank" rel="noreferrer" className="text-[10px] font-bold tracking-[0.3em] text-gray-500 hover:text-white transition-colors uppercase border-b border-white/10 pb-2">Facebook</a>
               <a href="https://www.instagram.com/trust_hairsalon_taipo/" target="_blank" rel="noreferrer" className="text-[10px] font-bold tracking-[0.3em] text-gray-500 hover:text-white transition-colors uppercase border-b border-white/10 pb-2">Instagram</a>
             </div>
           </div>
 
-          {/* 右側視覺區：品牌形象 */}
           <div className="relative aspect-[4/5] md:aspect-[3/4] bg-[#121212] rounded-[60px] overflow-hidden group border border-white/5 order-1 lg:order-2 shadow-2xl">
             <img src="https://images.unsplash.com/photo-1562322140-8baeececf3df?auto=format&fit=crop&q=80&w=1000" alt="Salon Vibe" className="w-full h-full object-cover opacity-50 grayscale group-hover:grayscale-0 transition-all duration-1000 scale-105 group-hover:scale-100" />
             <div className="absolute inset-0 bg-gradient-to-t from-[#080808] via-[#080808]/20 to-transparent"></div>
