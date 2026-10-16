@@ -10,15 +10,7 @@ import {
   updatePassword
 } from 'firebase/auth';
 import { 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc,
-  deleteDoc
+  collection, query, where, getDocs, doc, getDoc, setDoc, updateDoc, deleteDoc
 } from 'firebase/firestore';
 import { Toaster, toast } from 'react-hot-toast';
 import Link from 'next/link';
@@ -37,7 +29,6 @@ export default function LoginPage() {
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
 
-  // 🟢 密碼可視狀態 (眼睛切換)
   const [showPin, setShowPin] = useState(false);
   const [showNewPin, setShowNewPin] = useState(false);
   const [showConfirmPin, setShowConfirmPin] = useState(false);
@@ -191,7 +182,6 @@ export default function LoginPage() {
     }
   };
 
-  // 🟢 允許會員跳過修改密碼，直接進入系統
   const handleSkipChangePin = async () => {
     setLoading(true);
     const toastId = toast.loading("載入中...");
@@ -199,7 +189,7 @@ export default function LoginPage() {
       const user = auth.currentUser;
       if (user) {
         await updateDoc(doc(db, 'users', user.uid), {
-          isFirstLogin: false, // 標記為 false，下次就不會再彈出來煩客人了
+          isFirstLogin: false, 
           updatedAt: new Date().toISOString()
         });
       }
@@ -207,7 +197,7 @@ export default function LoginPage() {
       router.push('/dashboard');
     } catch (error) {
       console.error(error);
-      router.push('/dashboard'); // 就算更新失敗也強行放行
+      router.push('/dashboard'); 
     } finally {
       setLoading(false);
     }
@@ -216,7 +206,7 @@ export default function LoginPage() {
   const handleRegister = async (e) => {
     e.preventDefault();
     if (!formData.name || !formData.birthMonth || !formData.gender || !formData.interest) {
-      return toast.error("請填寫完整資料以領取迎新獎勵");
+      return toast.error("請填寫完整資料以完成註冊");
     }
 
     setLoading(true);
@@ -232,14 +222,14 @@ export default function LoginPage() {
         birthMonth: formData.birthMonth,
         gender: formData.gender,
         interest: formData.interest,
-        tDollarBalance: 100, 
+        tDollarBalance: 0, // 🟢 移除迎新獎勵，改為 0
         points: 0,
         role: 'member',
         isFirstLogin: false, 
         createdAt: new Date().toISOString()
       });
       
-      toast.success("註冊成功！已將 $100 迎新存入您的帳戶", { id: toastId });
+      toast.success("註冊成功！歡迎加入會員", { id: toastId }); // 🟢 修改提示文字
       router.push('/dashboard');
     } catch (error) {
       if (error.code === 'auth/email-already-in-use') {
@@ -391,7 +381,6 @@ export default function LoginPage() {
                   {loading ? "加密儲存中..." : "儲存專屬密碼並進入系統"}
                 </button>
                 
-                {/* 🟢 允許客人跳過修改密碼 */}
                 <button 
                   type="button" 
                   onClick={handleSkipChangePin} 
@@ -408,7 +397,7 @@ export default function LoginPage() {
             <form onSubmit={handleRegister} className="space-y-5 relative z-10 animate-fade-in">
               <div className="border-b border-white/10 pb-4 mb-2">
                 <h2 className="text-xl font-bold text-[#D4AF37] mb-1 tracking-widest italic">Create Profile</h2>
-                <p className="text-[10px] text-gray-400 uppercase tracking-widest">完成檔案以領取 $100 迎新獎勵</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-widest">完成填寫基本檔案</p> 
               </div>
               
               <div className="space-y-1">
