@@ -93,7 +93,10 @@ export default function HomePage() {
             <div className="w-14 h-14 md:w-16 md:h-16 rounded-full border border-white/20 flex items-center justify-center group-hover:bg-[#D4AF37] group-hover:border-[#D4AF37] transition-all duration-500">
               <i className="fa-solid fa-arrow-right text-white group-hover:text-black transition-colors"></i>
             </div>
-            <span className="text-[10px] md:text-xs font-black tracking-[0.4em] uppercase text-white group-hover:text-[#D4AF37] transition-colors">立即登記領取迎新 $100</span>
+            {/* 🟢 修改：改為中性的註冊/登入引導 */}
+            <span className="text-[10px] md:text-xs font-black tracking-[0.4em] uppercase text-white group-hover:text-[#D4AF37] transition-colors">
+              立即登入 / 登記成為會員
+            </span>
           </Link>
         </div>
       </section>
