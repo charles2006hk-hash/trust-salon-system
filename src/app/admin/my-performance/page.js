@@ -165,33 +165,11 @@ export default function StaffPerformancePage() {
       setStats(result.stats || { totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
 
       // ==========================================
-      // 🟢 智能標籤拆解邏輯
+      // 🟢 智能分類邏輯 (尊重 CMS 自訂命名，僅攔截「追加」項目不計單數)
       // ==========================================
       const breakdown = {};
       
-      // 1. 擴充關鍵字，減少「未定細項」的發生
-      const determineSubCode = (originalCode, serviceName = '') => {
-        const sName = serviceName.toUpperCase();
-        
-        if (originalCode === 'R2' || originalCode === 'W2') {
-          const prefix = originalCode === 'R2' ? 'R' : 'W';
-          if (sName.includes('染') || sName.includes('COLOR') || sName.includes('漂') || sName.includes('HIGHLIGHT')) return `${prefix} COLOR`;
-          if (sName.includes('燙') || sName.includes('PERM') || sName.includes('曲') || sName.includes('直')) return `${prefix} PERM`;
-          if (sName.includes('護') || sName.includes('TREATMENT') || sName.includes('焗油') || sName.includes('CARE') || sName.includes('京喚羽')) return `${prefix} TREATMENT`;
-          return `${originalCode} (未定細項)`; 
-        }
-        
-        if (originalCode === 'R1' || originalCode === 'W1') {
-          const prefix = originalCode === 'R1' ? 'R' : 'W';
-          if (sName.includes('剪') || sName.includes('CUT')) return `${prefix} CUT`;
-          if (sName.includes('吹') || sName.includes('洗') || sName.includes('BLOW') || sName.includes('WASH') || sName.includes('SHAMPOO')) return `${prefix} BLOW`;
-          return `${originalCode} (未定細項)`; 
-        }
-
-        return originalCode;
-      };
-
-      // 2. 🟢 定義「追加項目」過濾器
+      // 🟢 定義「追加項目」過濾器
       // 如果服務名稱包含這些字眼，則不列入單數計算
       const isAddonService = (serviceName = '') => {
         const sName = serviceName.toUpperCase();
@@ -204,21 +182,21 @@ export default function StaffPerformancePage() {
       };
 
       (result.processedTransactions || []).forEach(tx => {
+         // 🚀 核心修改：直接使用綁定的標籤 Code，不再強迫改名。
+         // 讓畫面讀取 CMS 設定好的 GlobalLabels。
          const code = tx.computedCode || '未綁定參數';
          const amt = Number(tx.amount || 0);
-         
-         const finalCode = determineSubCode(code, tx.service || '');
 
-         if (!breakdown[finalCode]) {
-           breakdown[finalCode] = { amount: 0, count: 0 };
+         if (!breakdown[code]) {
+           breakdown[code] = { amount: 0, count: 0 };
          }
          
          // 營業額照樣加上去
-         breakdown[finalCode].amount += amt;
+         breakdown[code].amount += amt;
          
          // 🟢 如果「不是」追加項目，單數才 +1
          if (!isAddonService(tx.service)) {
-           breakdown[finalCode].count += 1;
+           breakdown[code].count += 1;
          }
       });
 
@@ -379,7 +357,7 @@ export default function StaffPerformancePage() {
       </section>
 
       {/* ========================================================= */}
-      {/* 🟢 各項服務大數拆解 (已套用智能拆細邏輯與過濾追加項目單數) */}
+      {/* 🟢 各項服務大數拆解 (支援 CMS 動態命名與追加項目過濾) */}
       {/* ========================================================= */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
@@ -395,10 +373,12 @@ export default function StaffPerformancePage() {
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
                     <div className="relative z-10 flex flex-col h-full justify-between gap-3">
                        
-                       <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest truncate">
+                       {/* 🚀 核心修改：讀取 globalLabels 對應的 CMS 設定名稱 */}
+                       <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest truncate" title={globalLabels[code]}>
                          {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : 
                           code === 'SCALP_PROD' ? '🌱 頭皮產品' : 
-                          code}
+                          code === '未綁定參數' ? '⚠️ 未綁定參數' : 
+                          `${code} - ${globalLabels[code] || '自訂項目'}`}
                        </p>
                        
                        <div>
