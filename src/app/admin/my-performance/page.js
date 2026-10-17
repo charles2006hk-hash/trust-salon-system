@@ -22,9 +22,12 @@ export default function StaffPerformancePage() {
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
 
-  // 接收自核心引擎的回傳狀態 (加入預設值防呆，避免 undefined 崩潰)
+  // 接收自核心引擎的回傳狀態
   const [myTransactions, setMyTransactions] = useState([]);
-  const [categoryBreakdown, setCategoryBreakdown] = useState({});
+  
+  // 🟢 替換原本的 categoryBreakdown，改為包含數量與金額的細化結構
+  const [detailedBreakdown, setDetailedBreakdown] = useState({});
+
   const [stats, setStats] = useState({ 
     totalRevenue: 0, 
     totalCommission: 0, 
@@ -114,7 +117,6 @@ export default function StaffPerformancePage() {
     try {
       if (!staffName) return;
       
-      // 🟢 核心修改：加入 'member_cash' 類型，確保能讀取到會員現金結帳的業績[cite: 10]
       const q = query(
         collection(db, 'transactions'), 
         where('type', 'in', ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus', 'member_cash'])
@@ -136,7 +138,6 @@ export default function StaffPerformancePage() {
            isMatchDate = (txDay === dateStr);
         }
 
-        // 🚀 核心修復：將 tx.stylist 字串切割為陣列，進行「絕對精確比對」，徹底解決 Cha 吃到 Chaco 業績的問題
         const stylistArray = tx.stylist ? tx.stylist.split(',').map(s => s.trim()) : [];
         if (stylistArray.includes(staffName) && isMatchDate) {
            targetTxs.push({ id: d.id, ...tx });
@@ -152,7 +153,7 @@ export default function StaffPerformancePage() {
       }
       setMyCommissionRules(userCommissionsRule);
 
-      // 🚀 核心邏輯：呼叫共用財務引擎，一秒取得所有完美計算好的階梯式數據
+      // 🚀 呼叫共用財務引擎
       const result = calculateStaffCommissions(
         targetTxs, 
         userCommissionsRule, 
@@ -160,11 +161,53 @@ export default function StaffPerformancePage() {
         globalLabels
       );
 
-      // 將引擎算好的數據綁定到畫面狀態 (加入空值防呆保護)
       setMyTransactions(result.processedTransactions || []);
       setDynamicTierStats(result.dynamicTierStats || { scalpClientCount: 0, combinedRevenue: 0, finalScalpPct: 25, finalProdPct: 20 });
-      setCategoryBreakdown(result.categoryBreakdown || {});
       setStats(result.stats || { totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
+
+      // ==========================================
+      // 🟢 智能標籤拆解邏輯 (由後端回傳的原始分類，在此根據服務名稱字眼進行細拆)
+      // ==========================================
+      const breakdown = {};
+      
+      const determineSubCode = (originalCode, serviceName = '') => {
+        const sName = serviceName.toUpperCase();
+        
+        if (originalCode === 'R2' || originalCode === 'W2') {
+          const prefix = originalCode === 'R2' ? 'R' : 'W';
+          if (sName.includes('染') || sName.includes('COLOR')) return `${prefix} COLOR`;
+          if (sName.includes('燙') || sName.includes('PERM')) return `${prefix} PERM`;
+          if (sName.includes('護') || sName.includes('TREATMENT')) return `${prefix} TREATMENT`;
+          return `${originalCode} (未定細項)`; // 防呆
+        }
+        
+        if (originalCode === 'R1' || originalCode === 'W1') {
+          const prefix = originalCode === 'R1' ? 'R' : 'W';
+          if (sName.includes('剪') || sName.includes('CUT')) return `${prefix} CUT`;
+          if (sName.includes('吹') || sName.includes('洗') || sName.includes('BLOW')) return `${prefix} BLOW`;
+          return `${originalCode} (未定細項)`; // 防呆
+        }
+
+        // 其餘保持不變 (例如 SCALP, P1)
+        return originalCode;
+      };
+
+      (result.processedTransactions || []).forEach(tx => {
+         const code = tx.computedCode || '未綁定參數';
+         const amt = Number(tx.amount || 0);
+         
+         // 透過智能判斷決定最終的子分類代碼
+         const finalCode = determineSubCode(code, tx.service || '');
+
+         if (!breakdown[finalCode]) {
+           breakdown[finalCode] = { amount: 0, count: 0 };
+         }
+         
+         breakdown[finalCode].amount += amt;
+         breakdown[finalCode].count += 1;
+      });
+
+      setDetailedBreakdown(breakdown);
 
     } catch (error) {
       console.error(error);
@@ -265,9 +308,7 @@ export default function StaffPerformancePage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 relative z-10">
            <div>
              <p className="text-[10px] text-gray-400 uppercase tracking-widest">真實套票客量</p>
-             {/* 🌟 顯示報表的真實客數 */}
              <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.realScalpClientCount || 0} <span className="text-xs font-normal text-gray-500">位</span></p>
-             {/* 🌟 判斷升級時，使用計算出來的隱藏代幣 scalpClientCount */}
              <p className="text-[10px] text-green-500 font-bold mt-1">
                {dynamicTierStats.scalpClientCount >= 2 
                  ? '✅ 產品基礎提成已達 25%' 
@@ -328,31 +369,43 @@ export default function StaffPerformancePage() {
         </div>
       </section>
 
+      {/* ========================================================= */}
+      {/* 🟢 各項服務大數拆解 (已套用智能拆細邏輯) */}
+      {/* ========================================================= */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
            📊 各項服務大數拆解 (Gross Revenue Breakdown)
          </h3>
          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {/* 🛡️ 這裡加入了 categoryBreakdown || {} 防呆保護，解決您截圖中的報錯 */}
-            {Object.keys(categoryBreakdown || {}).length === 0 ? (
+            {Object.keys(detailedBreakdown || {}).length === 0 ? (
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
-               Object.entries(categoryBreakdown || {})
-                 .sort((a, b) => Number(b[1]) - Number(a[1])) 
-                 .map(([code, amount]) => (
+               Object.entries(detailedBreakdown || {})
+                 .sort((a, b) => Number(b[1].amount) - Number(a[1].amount)) 
+                 .map(([code, data]) => (
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
-                    <div className="relative z-10">
-                       <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mb-1 truncate">
+                    <div className="relative z-10 flex flex-col h-full justify-between gap-3">
+                       
+                       <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest truncate">
                          {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : 
                           code === 'SCALP_PROD' ? '🌱 頭皮產品' : 
-                          code === '未綁定參數' ? '⚠️ 未綁定參數' : 
-                          `${code} - ${globalLabels[code] || '未知標籤'}`}
+                          code}
                        </p>
-                       <p className="text-xl font-black text-white font-mono tracking-tighter">
-                         <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(Number(amount)).toLocaleString()}
-                       </p>
+                       
+                       {/* 🌟 顯示金額與單數 */}
+                       <div>
+                         <p className="text-xl font-black text-[#D4AF37] font-mono tracking-tighter">
+                           <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(Number(data.amount)).toLocaleString()}
+                         </p>
+                         <p className="text-[10px] text-gray-400 font-bold mt-1">
+                           共 <span className="text-white">{data.count}</span> 筆服務
+                         </p>
+                       </div>
+
                     </div>
-                    <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic">
+                    
+                    {/* 背景浮水印 */}
+                    <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic pointer-events-none">
                       {code.substring(0, 2)}
                     </div>
                  </div>
@@ -399,13 +452,11 @@ export default function StaffPerformancePage() {
                       </td>
                       <td className="p-5">
                         <div className="flex flex-col gap-1">
-                          {/* 🌟 強制覆寫助手服務名稱 */}
                           <span className={`text-sm ${tx.type === 'assistant_bonus' ? 'text-[#D4AF37] font-bold' : 'text-gray-200'}`}>
                             {tx.type === 'assistant_bonus' ? '助手服務' : (tx.service || '未知項目')}
                           </span>
                           <div className="flex gap-2 items-center mt-0.5">
                             {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
-                            {/* 標籤顯示引擎算出來的專屬 % */}
                             {tx.computedCode === 'SCALP' && <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 uppercase font-mono">套票 {dynamicTierStats.finalScalpPct}%</span>}
                             {tx.computedCode === 'SCALP_PROD' && <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded border border-teal-500/30 uppercase font-mono">產品 {dynamicTierStats.finalProdPct}%</span>}
                           </div>
@@ -415,7 +466,6 @@ export default function StaffPerformancePage() {
                         ${Math.round(Number(tx.amount || 0)).toLocaleString()}
                       </td>
                       <td className="p-5 text-[#D4AF37] font-black font-mono text-right">
-                        {/* ✅ 直接引用引擎計算完並修正過浮點數精度的提成結果 */}
                         ${Math.round(tx.computedCommission || 0).toLocaleString()}
                       </td>
                     </tr>
