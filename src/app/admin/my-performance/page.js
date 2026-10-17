@@ -25,7 +25,7 @@ export default function StaffPerformancePage() {
   // 接收自核心引擎的回傳狀態
   const [myTransactions, setMyTransactions] = useState([]);
   
-  // 🟢 替換原本的 categoryBreakdown，改為包含數量與金額的細化結構
+  // 🟢 包含數量與金額的細化結構
   const [detailedBreakdown, setDetailedBreakdown] = useState({});
 
   const [stats, setStats] = useState({ 
@@ -144,7 +144,6 @@ export default function StaffPerformancePage() {
         }
       });
 
-      // 取得員工個人設定的抽成百分比
       const staffConfigQ = query(collection(db, 'staff'), where('name', '==', staffName));
       const staffConfigSnap = await getDocs(staffConfigQ);
       let userCommissionsRule = {};
@@ -166,45 +165,61 @@ export default function StaffPerformancePage() {
       setStats(result.stats || { totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
 
       // ==========================================
-      // 🟢 智能標籤拆解邏輯 (由後端回傳的原始分類，在此根據服務名稱字眼進行細拆)
+      // 🟢 智能標籤拆解邏輯
       // ==========================================
       const breakdown = {};
       
+      // 1. 擴充關鍵字，減少「未定細項」的發生
       const determineSubCode = (originalCode, serviceName = '') => {
         const sName = serviceName.toUpperCase();
         
         if (originalCode === 'R2' || originalCode === 'W2') {
           const prefix = originalCode === 'R2' ? 'R' : 'W';
-          if (sName.includes('染') || sName.includes('COLOR')) return `${prefix} COLOR`;
-          if (sName.includes('燙') || sName.includes('PERM')) return `${prefix} PERM`;
-          if (sName.includes('護') || sName.includes('TREATMENT')) return `${prefix} TREATMENT`;
-          return `${originalCode} (未定細項)`; // 防呆
+          if (sName.includes('染') || sName.includes('COLOR') || sName.includes('漂') || sName.includes('HIGHLIGHT')) return `${prefix} COLOR`;
+          if (sName.includes('燙') || sName.includes('PERM') || sName.includes('曲') || sName.includes('直')) return `${prefix} PERM`;
+          if (sName.includes('護') || sName.includes('TREATMENT') || sName.includes('焗油') || sName.includes('CARE') || sName.includes('京喚羽')) return `${prefix} TREATMENT`;
+          return `${originalCode} (未定細項)`; 
         }
         
         if (originalCode === 'R1' || originalCode === 'W1') {
           const prefix = originalCode === 'R1' ? 'R' : 'W';
           if (sName.includes('剪') || sName.includes('CUT')) return `${prefix} CUT`;
-          if (sName.includes('吹') || sName.includes('洗') || sName.includes('BLOW')) return `${prefix} BLOW`;
-          return `${originalCode} (未定細項)`; // 防呆
+          if (sName.includes('吹') || sName.includes('洗') || sName.includes('BLOW') || sName.includes('WASH') || sName.includes('SHAMPOO')) return `${prefix} BLOW`;
+          return `${originalCode} (未定細項)`; 
         }
 
-        // 其餘保持不變 (例如 SCALP, P1)
         return originalCode;
+      };
+
+      // 2. 🟢 定義「追加項目」過濾器
+      // 如果服務名稱包含這些字眼，則不列入單數計算
+      const isAddonService = (serviceName = '') => {
+        const sName = serviceName.toUpperCase();
+        return sName.includes('加') || 
+               sName.includes('追加') || 
+               sName.includes('ADD-ON') || 
+               sName.includes('ADD ON') || 
+               sName.includes('升級') || 
+               sName.includes('UPGRADE');
       };
 
       (result.processedTransactions || []).forEach(tx => {
          const code = tx.computedCode || '未綁定參數';
          const amt = Number(tx.amount || 0);
          
-         // 透過智能判斷決定最終的子分類代碼
          const finalCode = determineSubCode(code, tx.service || '');
 
          if (!breakdown[finalCode]) {
            breakdown[finalCode] = { amount: 0, count: 0 };
          }
          
+         // 營業額照樣加上去
          breakdown[finalCode].amount += amt;
-         breakdown[finalCode].count += 1;
+         
+         // 🟢 如果「不是」追加項目，單數才 +1
+         if (!isAddonService(tx.service)) {
+           breakdown[finalCode].count += 1;
+         }
       });
 
       setDetailedBreakdown(breakdown);
@@ -242,7 +257,6 @@ export default function StaffPerformancePage() {
         </div>
         
         <div className="flex flex-col lg:flex-row items-start lg:items-center gap-3">
-          {/* Admin 切換員工下拉選單 */}
           {isAdmin && staffList.length > 0 && (
             <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
               <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
@@ -257,7 +271,6 @@ export default function StaffPerformancePage() {
             </div>
           )}
 
-          {/* 日期統計類型切換 */}
           <div className="flex bg-[#121212] p-1 rounded-xl border border-white/10 shadow-inner">
             <button 
               onClick={() => setFilterType('day')}
@@ -273,7 +286,6 @@ export default function StaffPerformancePage() {
             </button>
           </div>
           
-          {/* 日期選擇器 */}
           <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
             <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest pointer-events-none">
               {filterType === 'month' ? '結算月份' : '結算日期'}
@@ -297,9 +309,6 @@ export default function StaffPerformancePage() {
         </div>
       </header>
 
-      {/* ========================================================= */}
-      {/* 🟢 動態階梯激勵狀態面板 (引擎數據綁定) */}
-      {/* ========================================================= */}
       <section className="mb-6 animate-fade-in bg-gradient-to-br from-green-900/30 to-[#121212] border border-green-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 blur-3xl rounded-full"></div>
         <h3 className="text-sm font-black text-green-400 mb-3 flex items-center gap-2">
@@ -370,7 +379,7 @@ export default function StaffPerformancePage() {
       </section>
 
       {/* ========================================================= */}
-      {/* 🟢 各項服務大數拆解 (已套用智能拆細邏輯) */}
+      {/* 🟢 各項服務大數拆解 (已套用智能拆細邏輯與過濾追加項目單數) */}
       {/* ========================================================= */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
@@ -392,19 +401,17 @@ export default function StaffPerformancePage() {
                           code}
                        </p>
                        
-                       {/* 🌟 顯示金額與單數 */}
                        <div>
                          <p className="text-xl font-black text-[#D4AF37] font-mono tracking-tighter">
                            <span className="text-gray-500 text-sm mr-1">$</span>{Math.round(Number(data.amount)).toLocaleString()}
                          </p>
                          <p className="text-[10px] text-gray-400 font-bold mt-1">
-                           共 <span className="text-white">{data.count}</span> 筆服務
+                           共 <span className="text-white">{data.count}</span> 單
                          </p>
                        </div>
 
                     </div>
                     
-                    {/* 背景浮水印 */}
                     <div className="absolute right-[-10px] bottom-[-10px] text-5xl opacity-[0.03] font-black italic pointer-events-none">
                       {code.substring(0, 2)}
                     </div>
