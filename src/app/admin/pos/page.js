@@ -10,6 +10,7 @@ import { Toaster, toast } from 'react-hot-toast';
 export default function SmartPOS() {
   const router = useRouter();
   const [currentUserRole, setCurrentUserRole] = useState(null);
+  const [currentUserBranch, setCurrentUserBranch] = useState(''); // 🟢 記錄員工所屬分店
   const [branches, setBranches] = useState([]);
   const [currentBranch, setCurrentBranch] = useState('');
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -61,13 +62,25 @@ export default function SmartPOS() {
       } else {
         try {
           const docSnap = await getDoc(doc(db, 'users', user.uid));
-          if (docSnap.exists()) setCurrentUserRole(docSnap.data().role);
+          if (docSnap.exists()) {
+              const uData = docSnap.data();
+              setCurrentUserRole(uData.role);
+              const branch = uData.branch || 'ALL';
+              setCurrentUserBranch(branch);
+
+              // 🟢 權限鎖定：如果是 staff 或 manager 且不是 ALL，強制綁定門店
+              if (['staff', 'manager'].includes(uData.role) && branch !== 'ALL') {
+                  setCurrentBranch(branch);
+                  localStorage.setItem('pos_branch', branch);
+              } else {
+                  // Admin 或 全域通員工，讀取本地暫存
+                  const savedBranch = localStorage.getItem('pos_branch');
+                  if (savedBranch) setCurrentBranch(savedBranch);
+              }
+          }
         } catch(e) { console.error(e); }
       }
     });
-    
-    const savedBranch = localStorage.getItem('pos_branch');
-    if (savedBranch) setCurrentBranch(savedBranch);
     
     const unsubActive = onSnapshot(collection(db, "active_sessions"), (snap) => {
       setActiveSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -95,7 +108,8 @@ export default function SmartPOS() {
     
     const branchList = bSnap.docs.map(d => d.data().name);
     setBranches(branchList);
-    if (!localStorage.getItem('pos_branch') && branchList.length > 0) {
+    // 只有在還沒綁定門市且需要選擇時才跳出
+    if (!localStorage.getItem('pos_branch') && branchList.length > 0 && currentUserBranch === 'ALL') {
       setShowBranchModal(true);
     }
 
@@ -211,10 +225,30 @@ export default function SmartPOS() {
   const openCheckout = async (session) => {
     const toastId = toast.loading("正在載入結帳單...");
     try {
-      const userQ = query(collection(db, "users"), where("phoneNumber", "==", session.phoneNumber));
-      const userSnap = await getDocs(userQ);
-      
-      const uData = userSnap.empty ? { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '', points: 0 } : userSnap.docs[0].data();
+      // 🚀 核心優化：改用 Exact Match 避免 Firebase Quota 爆炸
+      let uData = { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '', points: 0, branch: 'ALL' };
+      let userId = null;
+
+      if (session.phoneNumber !== "Walk-in (無提供電話)") {
+          const searchPhones = [
+              session.phoneNumber,
+              session.phoneNumber.startsWith('+852') ? session.phoneNumber.replace('+852', '') : `+852${session.phoneNumber}`
+          ];
+          
+          const q1 = query(collection(db, "users"), where("phoneNumber", "==", searchPhones[0]));
+          let userSnap = await getDocs(q1);
+
+          if (userSnap.empty && searchPhones[1]) {
+             const q2 = query(collection(db, "users"), where("phoneNumber", "==", searchPhones[1]));
+             userSnap = await getDocs(q2);
+          }
+
+          if (!userSnap.empty) {
+              uData = userSnap.docs[0].data();
+              userId = userSnap.docs[0].id;
+          }
+      }
+
       const serviceItem = services.find(s => s.name === session.service);
       const originalPrice = serviceItem ? Number(serviceItem.price) : 0;
       const discountRate = Number(uData.discount) || 1;
@@ -226,9 +260,10 @@ export default function SmartPOS() {
         tier: uData.tier || '基本會員', 
         balance: uData.tDollarBalance || 0, 
         points: uData.points || 0, 
-        userId: userSnap.empty ? null : userSnap.docs[0].id, 
+        userId: userId, 
         packageBalances: uData.packageBalances || {},
-        customerName: uData.name || '' 
+        customerName: uData.name || '',
+        customerBranch: uData.branch || 'ALL' // 🟢 抓取開戶分店
       });
 
       setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
@@ -324,14 +359,12 @@ export default function SmartPOS() {
 
           let newPackageBalances = { ...(currentData.packageBalances || {}) };
           
-          // 1. 處理扣除套票
           for (const [pkgName, grids] of Object.entries(deductMap)) {
             const currentGrids = newPackageBalances[pkgName] || 0;
             if (currentGrids < grids) throw new Error(`套票【${pkgName}】格數不足！剩餘 ${currentGrids} 格`);
             newPackageBalances[pkgName] = currentGrids - grids;
           }
           
-          // 2. 🚀 核心修復：處理「在購物車買套票」，自動加入格數到帳戶
           let hasPackageBuy = false;
           cart.forEach(item => {
              if (item.type === 'pay') {
@@ -366,7 +399,6 @@ export default function SmartPOS() {
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
         });
       } else {
-        // Walk-in 防呆：不允許散客買套票或扣套票
         let hasPackageBuy = cart.some(item => item.type === 'pay' && packages.find(p => p.name === item.name));
         if (Object.keys(deductMap).length > 0 || hasPackageBuy) {
            setIsProcessing(false);
@@ -398,9 +430,22 @@ export default function SmartPOS() {
 
   const searchTopUpUser = async () => {
     if(!topUpPhone) return;
-    const q = query(collection(db, "users"), where("phoneNumber", "==", topUpPhone));
-    const snap = await getDocs(q);
-    if (!snap.empty) setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() }); else toast.error("找不到此會員");
+    // 🚀 核心優化：改用 Exact Match 避免 Firebase Quota 爆炸
+    let searchPhones = [
+        topUpPhone,
+        topUpPhone.startsWith('+852') ? topUpPhone.replace('+852', '') : `+852${topUpPhone}`
+    ];
+    
+    const q1 = query(collection(db, "users"), where("phoneNumber", "==", searchPhones[0]));
+    let snap = await getDocs(q1);
+
+    if (snap.empty && searchPhones[1]) {
+       const q2 = query(collection(db, "users"), where("phoneNumber", "==", searchPhones[1]));
+       snap = await getDocs(q2);
+    }
+
+    if (!snap.empty) setTopUpUser({ id: snap.docs[0].id, ...snap.docs[0].data() }); 
+    else toast.error("找不到此會員");
   };
 
   const fetchPackageHistory = async (userId) => {
@@ -668,7 +713,8 @@ export default function SmartPOS() {
             <span className="bg-blue-600/20 border border-blue-500/50 text-blue-400 px-3 py-1 rounded-md text-xs font-bold uppercase tracking-widest">
               <i className="fa-solid fa-location-dot mr-1"></i> {currentBranch || '未選門市'}
             </span>
-            {['admin', 'manager'].includes(currentUserRole) && (
+            {/* 🟢 權限鎖定：只有 admin 和 沒綁定分店的 manager 才能看到切換按鈕 */}
+            {(currentUserRole === 'admin' || (currentUserRole === 'manager' && currentUserBranch === 'ALL')) && (
               <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">
                 切換門市
               </button>
@@ -870,7 +916,15 @@ export default function SmartPOS() {
                 <div className="bg-white/5 p-4 rounded-2xl flex flex-col gap-3">
                    <div className="flex justify-between items-start">
                      <div>
-                       <p className="text-white font-bold text-lg">{topUpUser.name || topUpUser.phoneNumber}</p>
+                       <p className="text-white font-bold text-lg flex items-center gap-2">
+                         {topUpUser.name || topUpUser.phoneNumber}
+                         {/* 🟢 顯示開戶門店標籤 */}
+                         {topUpUser.branch && topUpUser.branch !== 'ALL' && (
+                           <span className="text-[9px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded uppercase tracking-widest">
+                             {topUpUser.branch} 開戶
+                           </span>
+                         )}
+                       </p>
                        <p className="text-[10px] text-gray-400 mt-1">目前等級: <span className="text-[#D4AF37] font-bold">{topUpUser.tier || '基本會員 (Basic)'}</span></p>
                      </div>
                      <div className="text-right">
@@ -1028,8 +1082,14 @@ export default function SmartPOS() {
               <div className="flex justify-between items-start">
                 <div>
                   <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
-                  <p className="text-lg font-bold text-white">
+                  <p className="text-lg font-bold text-white flex items-center gap-2">
                     {checkoutSession.customerName ? checkoutSession.customerName : checkoutSession.phoneNumber}
+                    {/* 🟢 結帳時顯示開戶分店 */}
+                    {checkoutSession.customerBranch && checkoutSession.customerBranch !== 'ALL' && (
+                      <span className="text-[9px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded uppercase tracking-widest font-bold">
+                        {checkoutSession.customerBranch} 開戶
+                      </span>
+                    )}
                   </p>
                   {checkoutSession.customerName && (
                     <p className="text-[10px] text-gray-500 mt-1 font-mono">{checkoutSession.phoneNumber}</p>
@@ -1212,7 +1272,6 @@ export default function SmartPOS() {
             </div>
 
             <form onSubmit={processSettlement}>
-              {/* 🟢 歷史日期補單功能 */}
               <div className="mb-6 bg-[#1a1a1a] p-4 rounded-xl border border-white/5 shadow-inner">
                 <label className="text-[10px] text-gray-400 uppercase tracking-widest font-bold flex items-center gap-2 mb-2">
                   <i className="fa-regular fa-calendar-days text-[#D4AF37]"></i> 自訂結帳日期 (若為補單請選擇)
