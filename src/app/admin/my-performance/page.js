@@ -9,14 +9,17 @@ import { Toaster, toast } from 'react-hot-toast';
 // 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 同步
 import { calculateStaffCommissions } from '@/lib/finance'; 
 
+// ★ 定義 UI 強制排序規則 (與 CMS 同步)
+const PREFERRED_ORDER = ['R1', 'R2', 'R3', 'R4', 'R5', 'W1', 'W2', 'W3', 'W4', 'W5', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP', 'SCALP_PROD'];
+
 export default function StaffPerformancePage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   
   // 日期與篩選狀態
   const [filterType, setFilterType] = useState('month');
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  // YYYY-MM-DD
+  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); 
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  
   
   const [serviceMapContext, setServiceMapContext] = useState({}); 
   const [targetStaff, setTargetStaff] = useState('');
@@ -24,8 +27,6 @@ export default function StaffPerformancePage() {
 
   // 接收自核心引擎的回傳狀態
   const [myTransactions, setMyTransactions] = useState([]);
-  
-  // 🟢 包含數量與金額的細化結構
   const [detailedBreakdown, setDetailedBreakdown] = useState({});
 
   const [stats, setStats] = useState({ 
@@ -37,11 +38,15 @@ export default function StaffPerformancePage() {
     productClientCount: 0, 
     averageSpend: 0 
   });
+  
   const [dynamicTierStats, setDynamicTierStats] = useState({ 
     scalpClientCount: 0, 
     combinedRevenue: 0, 
     finalScalpPct: 25, 
-    finalProdPct: 20 
+    finalProdPct: 20,
+    triggerAccumulatedAmount: 0,
+    isBonusTierAchieved: false,
+    bonusTierThreshold: 0
   });
   
   const [globalLabels, setGlobalLabels] = useState({});
@@ -57,7 +62,6 @@ export default function StaffPerformancePage() {
             setCurrentUser({ uid: user.uid, ...userData });
             setTargetStaff(userData.name);
 
-            // Admin 取得員工名單
             if (userData.role === 'admin') {
                const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
                const staffSnap = await getDocs(staffQ);
@@ -125,7 +129,6 @@ export default function StaffPerformancePage() {
       const snap = await getDocs(q);
       const targetTxs = [];
 
-      // 提取符合該員工與日期的紀錄
       snap.forEach(d => {
         const tx = d.data();
         let isMatchDate = false;
@@ -152,7 +155,6 @@ export default function StaffPerformancePage() {
       }
       setMyCommissionRules(userCommissionsRule);
 
-      // 🚀 呼叫共用財務引擎
       const result = calculateStaffCommissions(
         targetTxs, 
         userCommissionsRule, 
@@ -161,16 +163,21 @@ export default function StaffPerformancePage() {
       );
 
       setMyTransactions(result.processedTransactions || []);
-      setDynamicTierStats(result.dynamicTierStats || { scalpClientCount: 0, combinedRevenue: 0, finalScalpPct: 25, finalProdPct: 20 });
+      
+      setDynamicTierStats(result.dynamicTierStats || { 
+        scalpClientCount: 0, 
+        combinedRevenue: 0, 
+        finalScalpPct: 25, 
+        finalProdPct: 20,
+        triggerAccumulatedAmount: 0,
+        isBonusTierAchieved: false,
+        bonusTierThreshold: 0
+      });
+      
       setStats(result.stats || { totalRevenue: 0, totalCommission: 0, clientCount: 0, wrClientCount: 0, scalpClientCount: 0, productClientCount: 0, averageSpend: 0 });
 
-      // ==========================================
-      // 🟢 智能分類邏輯 (尊重 CMS 自訂命名，僅攔截「追加」項目不計單數)
-      // ==========================================
       const breakdown = {};
       
-      // 🟢 定義「追加項目」過濾器
-      // 如果服務名稱包含這些字眼，則不列入單數計算
       const isAddonService = (serviceName = '') => {
         const sName = serviceName.toUpperCase();
         return sName.includes('加') || 
@@ -182,8 +189,6 @@ export default function StaffPerformancePage() {
       };
 
       (result.processedTransactions || []).forEach(tx => {
-         // 🚀 核心修改：直接使用綁定的標籤 Code，不再強迫改名。
-         // 讓畫面讀取 CMS 設定好的 GlobalLabels。
          const code = tx.computedCode || '未綁定參數';
          const amt = Number(tx.amount || 0);
 
@@ -191,10 +196,8 @@ export default function StaffPerformancePage() {
            breakdown[code] = { amount: 0, count: 0 };
          }
          
-         // 營業額照樣加上去
          breakdown[code].amount += amt;
          
-         // 🟢 如果「不是」追加項目，單數才 +1
          if (!isAddonService(tx.service)) {
            breakdown[code].count += 1;
          }
@@ -287,6 +290,47 @@ export default function StaffPerformancePage() {
         </div>
       </header>
 
+      {/* ========================================================= */}
+      {/* 🟢 新增：進階自訂階梯觸發狀態面板 (Bonus Tier) */}
+      {/* ========================================================= */}
+      {dynamicTierStats.bonusTierThreshold > 0 && filterType === 'month' && (
+        <section className="mb-4 animate-fade-in bg-gradient-to-br from-indigo-900/30 to-[#121212] border border-indigo-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 blur-3xl rounded-full"></div>
+          <h3 className="text-sm font-black text-indigo-400 mb-3 flex items-center gap-2">
+            <i className="fa-solid fa-bolt-lightning"></i> 當月自訂階梯觸發狀態
+            {dynamicTierStats.isBonusTierAchieved ? (
+              <span className="bg-green-500 text-black text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ml-2 tracking-widest">已達標解鎖</span>
+            ) : (
+              <span className="bg-orange-500 text-black text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ml-2 tracking-widest">努力中</span>
+            )}
+          </h3>
+          
+          <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center gap-6">
+            <div className="flex-1 w-full">
+              <div className="flex justify-between text-[10px] text-gray-400 uppercase tracking-widest mb-2 font-bold">
+                <span>觸發項目累積金額</span>
+                <span>目標: ${dynamicTierStats.bonusTierThreshold.toLocaleString()}</span>
+              </div>
+              <div className="w-full bg-black rounded-full h-3 border border-white/10 overflow-hidden">
+                <div className={`h-full transition-all duration-1000 ${dynamicTierStats.isBonusTierAchieved ? 'bg-green-500' : 'bg-indigo-500'}`} style={{ width: `${Math.min((dynamicTierStats.triggerAccumulatedAmount / dynamicTierStats.bonusTierThreshold) * 100, 100)}%` }}></div>
+              </div>
+            </div>
+            
+            <div className="shrink-0 text-right">
+               <p className={`text-2xl font-black font-mono ${dynamicTierStats.isBonusTierAchieved ? 'text-green-400' : 'text-indigo-400'}`}>
+                 ${(dynamicTierStats.triggerAccumulatedAmount || 0).toLocaleString()}
+               </p>
+               {!dynamicTierStats.isBonusTierAchieved && (
+                 <p className="text-[10px] text-gray-500 font-bold mt-1">
+                   還差 ${(dynamicTierStats.bonusTierThreshold - dynamicTierStats.triggerAccumulatedAmount).toLocaleString()} 達標
+                 </p>
+               )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 頭皮/養護階梯狀態 */}
       <section className="mb-6 animate-fade-in bg-gradient-to-br from-green-900/30 to-[#121212] border border-green-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 blur-3xl rounded-full"></div>
         <h3 className="text-sm font-black text-green-400 mb-3 flex items-center gap-2">
@@ -357,7 +401,7 @@ export default function StaffPerformancePage() {
       </section>
 
       {/* ========================================================= */}
-      {/* 🟢 各項服務大數拆解 (支援 CMS 動態命名與追加項目過濾) */}
+      {/* 🟢 各項服務大數拆解 (已套裝自訂排序與追加項目過濾) */}
       {/* ========================================================= */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
@@ -368,12 +412,28 @@ export default function StaffPerformancePage() {
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
                Object.entries(detailedBreakdown || {})
-                 .sort((a, b) => Number(b[1].amount) - Number(a[1].amount)) 
+                 // 🚀 核心修改：依照 Chaco 指定的字母與數字順序強制排序
+                 .sort((a, b) => {
+                   const indexA = PREFERRED_ORDER.indexOf(a[0]);
+                   const indexB = PREFERRED_ORDER.indexOf(b[0]);
+                   
+                   if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+                   if (indexA !== -1) return -1;
+                   if (indexB !== -1) return 1;
+
+                   const charA = a[0].charAt(0);
+                   const charB = b[0].charAt(0);
+                   const weight = { 'R': 1, 'W': 2, 'P': 3 };
+                   const wA = weight[charA] || 99;
+                   const wB = weight[charB] || 99;
+                   if (wA !== wB) return wA - wB;
+
+                   return a[0].localeCompare(b[0]);
+                 }) 
                  .map(([code, data]) => (
                  <div key={code} className="bg-gradient-to-br from-[#1a1a1a] to-[#121212] p-5 rounded-2xl border border-white/5 hover:border-blue-500/30 transition-colors shadow-lg relative overflow-hidden">
                     <div className="relative z-10 flex flex-col h-full justify-between gap-3">
                        
-                       {/* 🚀 核心修改：讀取 globalLabels 對應的 CMS 設定名稱 */}
                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest truncate" title={globalLabels[code]}>
                          {code === 'ASSISTANT_BONUS' ? '🤝 助手特別獎金' : 
                           code === 'SCALP_PROD' ? '🌱 頭皮產品' : 
@@ -444,6 +504,8 @@ export default function StaffPerformancePage() {
                           </span>
                           <div className="flex gap-2 items-center mt-0.5">
                             {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
+                            {/* 🌟 若該筆交易觸發了階梯抽成，加上特效標記 */}
+                            {tx.isAppliedBonus && <span className="text-[9px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-500/30 uppercase font-bold animate-pulse"><i className="fa-solid fa-bolt-lightning mr-1"></i>階梯達標加成</span>}
                             {tx.computedCode === 'SCALP' && <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 uppercase font-mono">套票 {dynamicTierStats.finalScalpPct}%</span>}
                             {tx.computedCode === 'SCALP_PROD' && <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded border border-teal-500/30 uppercase font-mono">產品 {dynamicTierStats.finalProdPct}%</span>}
                           </div>
