@@ -8,10 +8,10 @@ import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
 // ★ 定義 UI 強制排序規則
-const PREFERRED_ORDER = ['W1', 'W2', 'W3', 'R1', 'R2', 'R3', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP'];
+const PREFERRED_ORDER = ['R1', 'R2', 'R3', 'R4', 'R5', 'W1', 'W2', 'W3', 'W4', 'W5', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP', 'SCALP_PROD'];
 
 // ★ 排序函式
-const getSortedCodes = (labelsObj) => {
+export const getSortedCodes = (labelsObj) => {
   const keys = Object.keys(labelsObj || {});
   return keys.sort((a, b) => {
     const indexA = PREFERRED_ORDER.indexOf(a);
@@ -20,6 +20,13 @@ const getSortedCodes = (labelsObj) => {
     if (indexA !== -1 && indexB !== -1) return indexA - indexB;
     if (indexA !== -1) return -1;
     if (indexB !== -1) return 1;
+
+    // 自訂標籤排序邏輯：R 優先，W 其次，最後 P
+    if (a.startsWith('R') && !b.startsWith('R')) return -1;
+    if (!a.startsWith('R') && b.startsWith('R')) return 1;
+    if (a.startsWith('W') && !b.startsWith('W')) return -1;
+    if (!a.startsWith('W') && b.startsWith('W')) return 1;
+
     return a.localeCompare(b);
   });
 };
@@ -46,41 +53,32 @@ export default function AdminManagePage() {
   const [newLabelCode, setNewLabelCode] = useState('');
   const [newLabelName, setNewLabelName] = useState('');
 
-  // 盤點修復工具狀態
   const [anomalyList, setAnomalyList] = useState([]);
   const [scanning, setScanning] = useState(false);
   const [fixPackageId, setFixPackageId] = useState('');
 
   const defaultLabels = {
-    W1: '洗剪吹類 (需扣耗材)', W2: '洗剪吹類 (純抽成)', W3: '洗剪吹類 (高階)', 
-    R1: '染燙化學類 (需扣耗材)', R2: '染燙化學類 (純抽成)', R3: '染燙化學類 (進階)', 
-    P1: '產品實體 (預設 A級抽 20%)', P2: '產品實體 (預設 A級抽 25%)', P3: '產品實體 (預設 A級抽 18%)', P4: '產品實體 (預設 A級抽 15%)', P5: '產品實體 (預設 A級抽 35%)', 
-    SCALP: '頭皮/養護套票類'
+    R1: 'R1 R CUT', R2: 'R2 R COLOR', R3: 'R3 R PERM', R4: 'R4 R TREATMENT',
+    W1: 'W1 W CUT', W2: 'W2 W COLOR', W3: 'W3 W PERM', W4: 'W4 W TREATMENT',
+    P1: 'P1 SALE', P2: 'P2 HELEN', P3: 'P3 京/SHI', P4: 'P4 AYUN', P5: 'P5 MIYA', 
+    SCALP: '頭皮療程', SCALP_PROD: '頭皮產品'
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
   const defaultCommissions = {
-    W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 },
-    R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 },
-    P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, P3: { deduct: 0, percent: 0 }, 
-    P4: { deduct: 0, percent: 0 }, P5: { deduct: 0, percent: 0 }, SCALP: { deduct: 0, percent: 0 }
-  };
-
-  const defaultPresets = {
-    "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
-    "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
-    "C 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
-    "D 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 35 }, P2: { deduct: 0, percent: 35 }, P3: { deduct: 0, percent: 35 }, P4: { deduct: 0, percent: 35 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
-    "E 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 }, R3: { deduct: 0, percent: 70 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } },
-    "F 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 }, R3: { deduct: 0, percent: 60 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } }
+    R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, R4: { deduct: 0, percent: 0 },
+    W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 }, W4: { deduct: 0, percent: 0 },
+    P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, P3: { deduct: 0, percent: 0 }, P4: { deduct: 0, percent: 0 }, P5: { deduct: 0, percent: 0 },
+    SCALP: { deduct: 0, percent: 0 }, SCALP_PROD: { deduct: 0, percent: 0 }
   };
 
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
-    commissionCode: 'W1', templateId: '', templateName: '', commissions: defaultCommissions, branch: '',
-    phoneNumber: '+852', commissionLabels: defaultLabels,
+    commissionCode: 'W1', templateId: '', templateName: '', 
+    commissions: { ...defaultCommissions, bonusTier: { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions } }, 
+    branch: '', phoneNumber: '+852', commissionLabels: defaultLabels,
     sortWeight: 0, isAssistant: false
   };
   const [formData, setFormData] = useState(initialForm);
@@ -171,20 +169,6 @@ export default function AdminManagePage() {
       const staffNames = snap.docs.map(doc => doc.data()).filter(u => ['staff', 'manager'].includes(u.role) && u.name).map(u => u.name);
       setRegisteredStaff([...new Set(staffNames)]);
     } catch (e) { console.error(e); }
-  };
-
-  const initDefaultTemplates = async () => {
-    setLoading(true);
-    const toastId = toast.loading("正在為您強制更新預設抽成模板...");
-    try {
-      for (const [name, comms] of Object.entries(defaultPresets)) {
-        const existing = templatesList.find(t => t.name === name);
-        if (existing) { await updateDoc(doc(db, 'templates', existing.id), { commissions: comms, updatedAt: new Date().toISOString() }); } 
-        else { await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() }); }
-      }
-      toast.success("預設模板已強制覆蓋更新完成！", { id: toastId });
-      fetchTemplates(); fetchData(); 
-    } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
   const scanAnomalies = async () => {
@@ -345,11 +329,16 @@ export default function AdminManagePage() {
     let safeCode = item.commissionCode;
     if (activeTab === 'packages') safeCode = 'SCALP';
     
+    const initCommissions = item.commissions || defaultCommissions;
+    if (!initCommissions.bonusTier) {
+      initCommissions.bonusTier = { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions };
+    }
+
     setFormData({ 
       ...initialForm, 
       ...item, 
       commissionCode: safeCode || (activeTab === 'packages' ? 'SCALP' : 'W1'),
-      commissions: item.commissions || defaultCommissions, 
+      commissions: initCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0,
       isAssistant: item.isAssistant || false
@@ -377,8 +366,50 @@ export default function AdminManagePage() {
     } else { setFormData({ ...formData, templateId: templateId, templateName: '' }); }
   };
 
-  const updateCommission = (code, field, value) => {
-    setFormData({ ...formData, templateName: '', commissions: { ...formData.commissions, [code]: { ...formData.commissions[code], [field]: Number(value) } } });
+  const updateCommission = (code, field, value, isBonus = false) => {
+    if (isBonus) {
+      setFormData({ 
+        ...formData, 
+        templateName: '', 
+        commissions: { 
+          ...formData.commissions, 
+          bonusTier: {
+            ...formData.commissions.bonusTier,
+            bonusRules: {
+              ...formData.commissions.bonusTier.bonusRules,
+              [code]: { ...formData.commissions.bonusTier.bonusRules[code], [field]: Number(value) }
+            }
+          }
+        } 
+      });
+    } else {
+      setFormData({ 
+        ...formData, 
+        templateName: '', 
+        commissions: { 
+          ...formData.commissions, 
+          [code]: { ...formData.commissions[code], [field]: Number(value) } 
+        } 
+      });
+    }
+  };
+
+  const toggleBonusTriggerCode = (code) => {
+    const currentCodes = formData.commissions.bonusTier.triggerCodes || [];
+    let newCodes;
+    if (currentCodes.includes(code)) {
+      newCodes = currentCodes.filter(c => c !== code);
+    } else {
+      newCodes = [...currentCodes, code];
+    }
+    
+    setFormData({
+      ...formData,
+      commissions: {
+        ...formData.commissions,
+        bonusTier: { ...formData.commissions.bonusTier, triggerCodes: newCodes }
+      }
+    });
   };
 
   const toggleGroup = (groupName) => {
@@ -391,33 +422,132 @@ export default function AdminManagePage() {
 
   const renderMatrixEditor = () => {
     const sortedCodes = getSortedCodes(globalLabels);
+    const isBonusEnabled = formData.commissions?.bonusTier?.enabled;
     
     return (
-      <div className="col-span-2 pt-6 border-t border-gray-800">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-sm font-bold text-[#D4AF37]"><i className="fa-solid fa-calculator"></i> 拆帳矩陣參數設定</h3>
-          <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
+      <div className="col-span-2 pt-6 border-t border-gray-800 space-y-8">
+        
+        {/* ========================================================= */}
+        {/* 1. 基礎拆帳參數 */}
+        {/* ========================================================= */}
+        <div>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-sm font-bold text-white flex items-center gap-2"><i className="fa-solid fa-calculator text-[#D4AF37]"></i> 基礎拆帳參數設定</h3>
+            <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {sortedCodes.map(code => (
+              <div key={code} className={`bg-gray-900/50 p-4 rounded-2xl border flex flex-col gap-2 transition-colors ${isBonusEnabled ? 'border-gray-800 opacity-70' : 'border-[#D4AF37]/30 shadow-lg'}`}>
+                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
+                   <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                 </div>
+                 <div className="flex items-center gap-2">
+                   <div className="flex-1 relative">
+                     <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                     <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+                   </div>
+                   <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+                   <div className="flex-1 relative">
+                     <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
+                     <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+                   </div>
+                 </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sortedCodes.map(code => (
-            <div key={code} className="bg-gray-900/50 p-4 rounded-2xl border border-gray-800 flex flex-col gap-2">
-               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-                 <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
-               </div>
-               <div className="flex items-center gap-2">
-                 <div className="flex-1 relative">
-                   <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
-                   <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+
+        {/* ========================================================= */}
+        {/* 2. 階梯式觸發設定 (Bonus Tier) */}
+        {/* ========================================================= */}
+        <div className={`p-6 rounded-[32px] border-2 transition-all duration-500 ${isBonusEnabled ? 'bg-indigo-900/20 border-indigo-500/50 shadow-[0_0_30px_rgba(99,102,241,0.15)]' : 'bg-black/30 border-gray-800'}`}>
+          <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
+             <div>
+                <h3 className={`text-lg font-black flex items-center gap-2 ${isBonusEnabled ? 'text-indigo-400' : 'text-gray-500'}`}>
+                  <i className="fa-solid fa-bolt-lightning"></i> 階梯式抽成門檻 (Bonus Tier)
+                </h3>
+                <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">當月指定項目營收達標後，自動切換至新抽成 %</p>
+             </div>
+             
+             {/* 開關 */}
+             <label className="relative inline-flex items-center cursor-pointer">
+               <input 
+                 type="checkbox" 
+                 className="sr-only peer" 
+                 checked={isBonusEnabled}
+                 onChange={e => setFormData({
+                   ...formData, 
+                   commissions: { ...formData.commissions, bonusTier: { ...formData.commissions.bonusTier, enabled: e.target.checked } }
+                 })}
+               />
+               <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
+             </label>
+          </div>
+
+          {isBonusEnabled && (
+            <div className="space-y-6 animate-fade-in">
+              {/* 門檻金額設定 */}
+              <div className="bg-black/50 p-4 rounded-xl border border-indigo-500/30">
+                 <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-2">1. 設定當月觸發門檻金額 (HKD)</label>
+                 <div className="relative max-w-xs">
+                   <span className="absolute left-4 top-3.5 text-gray-400 font-bold">$</span>
+                   <input 
+                     type="number" 
+                     className="w-full bg-black border border-white/10 p-3 pl-8 rounded-lg text-white font-mono text-lg outline-none focus:border-indigo-400 transition-colors"
+                     value={formData.commissions.bonusTier.threshold || 0}
+                     onChange={e => setFormData({...formData, commissions: {...formData.commissions, bonusTier: {...formData.commissions.bonusTier, threshold: Number(e.target.value)}}})}
+                   />
                  </div>
-                 <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
-                 <div className="flex-1 relative">
-                   <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
-                   <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+              </div>
+
+              {/* 觸發標籤選擇 */}
+              <div>
+                 <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">2. 選擇哪些項目算入這 $ {(formData.commissions.bonusTier.threshold || 0).toLocaleString()} 的進度？ (可複選)</label>
+                 <div className="flex flex-wrap gap-2">
+                    {sortedCodes.map(code => {
+                      const isSelected = (formData.commissions.bonusTier.triggerCodes || []).includes(code);
+                      return (
+                        <button
+                          key={`trigger-${code}`}
+                          type="button"
+                          onClick={() => toggleBonusTriggerCode(code)}
+                          className={`px-3 py-1.5 rounded-full text-[10px] font-bold tracking-widest transition-colors border ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.5)]' : 'bg-gray-900 text-gray-400 border-gray-700 hover:border-gray-500'}`}
+                        >
+                          {code}
+                        </button>
+                      );
+                    })}
                  </div>
-               </div>
+              </div>
+
+              {/* 達標後的新抽成矩陣 */}
+              <div className="pt-4 border-t border-indigo-500/20">
+                 <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">3. 達標後，適用以下【全新抽成比例】</label>
+                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {sortedCodes.map(code => (
+                    <div key={`bonus-${code}`} className="bg-indigo-950/30 p-4 rounded-2xl border border-indigo-500/20 flex flex-col gap-2">
+                       <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest flex justify-between">
+                         <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                       </div>
+                       <div className="flex items-center gap-2">
+                         <div className="flex-1 relative">
+                           <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                           <input type="number" inputMode="decimal" className="w-full bg-black border border-indigo-500/30 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value, true)} />
+                         </div>
+                         <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+                         <div className="flex-1 relative">
+                           <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-indigo-500/30 p-2.5 pr-8 rounded-lg text-indigo-400 outline-none text-sm focus:border-green-500 transition-colors text-right font-black" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value, true)} />
+                           <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+                         </div>
+                       </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          ))}
+          )}
         </div>
+
       </div>
     );
   };
@@ -740,7 +870,6 @@ export default function AdminManagePage() {
                   )}
                   
                   {activeTab === 'rewards' && (
-                    // 🟢 修改點：為 Rewards 積分商城表單加入響應式 Grid 排版
                     <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <label className="text-[10px] text-gray-400 font-bold uppercase tracking-widest ml-1">禮品名稱</label>
