@@ -13,6 +13,7 @@ export default function FinancePage() {
   
   const [viewMode, setViewMode] = useState('dashboard');
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
+  const [currentUserBranch, setCurrentUserBranch] = useState('ALL'); // 🟢 記錄經理的所屬門店
   const [currentUserName, setCurrentUserName] = useState(''); 
   
   const [filterType, setFilterType] = useState('month'); 
@@ -28,6 +29,8 @@ export default function FinancePage() {
   const [selectedBranch, setSelectedBranch] = useState('ALL');
 
   const [transactions, setTransactions] = useState([]);
+  const [usersData, setUsersData] = useState([]); // 🟢 為了計算跨店消費，需要讀取使用者開戶店
+
   const [staffConfig, setStaffConfig] = useState([]);
   const [outstandingTDollar, setOutstandingTDollar] = useState(0); 
   
@@ -43,6 +46,8 @@ export default function FinancePage() {
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, tDollarDeducted: 0 });
+  const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); // 🟢 跨店統計
+  
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
   const [payrollReport, setPayrollReport] = useState([]);
@@ -142,7 +147,7 @@ export default function FinancePage() {
          updatePayload.packageName = editingTx.packageName;
       } else if (editingTx.type === 'topup') {
          updatePayload.amountPaidHKD = newAmount;
-         updatePayload.tDollarAdded = newAmount; // 假設增值修改比例為 1:1
+         updatePayload.tDollarAdded = newAmount; 
       } else {
          updatePayload.amount = newAmount;
          if (editingTx.packageName !== undefined) {
@@ -182,10 +187,19 @@ export default function FinancePage() {
       if (!user) return router.push('/login');
       const docSnap = await getDoc(doc(db, 'users', user.uid));
       if (docSnap.exists()) {
-        const role = docSnap.data().role;
-        const name = docSnap.data().name;
+        const uData = docSnap.data();
+        const role = uData.role;
+        const name = uData.name;
+        const branch = uData.branch || 'ALL'; // 🟢 抓取管理員所屬門店
+        
         setCurrentAdminRole(role);
         setCurrentUserName(name);
+        setCurrentUserBranch(branch);
+        
+        // 🟢 權限鎖定：經理強制鎖定報表分店
+        if (role === 'manager' && branch !== 'ALL') {
+            setSelectedBranch(branch);
+        }
         
         if (role === 'member' || role === 'reception') {
           toast.error("⛔ 權限不足：您無法進入財務報表區");
@@ -199,8 +213,8 @@ export default function FinancePage() {
   }, [selectedMonth, selectedDate, filterType]); 
 
   useEffect(() => {
-    if (transactions.length >= 0) calculateData(); 
-  }, [selectedBranch, transactions, staffConfig, servicesData, packagesData, globalLabels]);
+    if (transactions.length >= 0 && usersData.length >= 0) calculateData(); 
+  }, [selectedBranch, transactions, usersData, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
@@ -215,14 +229,18 @@ export default function FinancePage() {
       }
 
       const qTx = query(collection(db, "transactions"), where("timestamp", ">=", startTime), where("timestamp", "<=", endTime));
-      
       const txSnap = await getDocs(qTx);
       setTransactions(txSnap.docs.map(d => ({ id: d.id, ...d.data() })));
       
+      // 🟢 抓取使用者資料，以便進行跨店分析
+      const qUser = query(collection(db, "users"));
+      const userSnap = await getDocs(qUser);
+      const userList = userSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setUsersData(userList);
+
       if (currentAdminRole === 'admin' || currentAdminRole === 'manager') {
-         const uSnap = await getDocs(query(collection(db, "users"), where("tDollarBalance", ">", 0)));
          let totalOut = 0;
-         uSnap.docs.forEach(d => { totalOut += (d.data().tDollarBalance || 0); });
+         userList.forEach(u => { if (u.tDollarBalance > 0) totalOut += u.tDollarBalance; });
          setOutstandingTDollar(totalOut);
       }
 
@@ -249,11 +267,27 @@ export default function FinancePage() {
   };
 
   const calculateData = () => {
+    // 建立 User Lookup 字典
+    const userMap = {};
+    usersData.forEach(u => {
+       // 統一處理 +852 以確保比對正確
+       const phone = u.phoneNumber ? u.phoneNumber.replace('+852', '') : '';
+       if (phone) {
+           userMap[`+852${phone}`] = u;
+           userMap[phone] = u;
+       }
+    });
+
     const filteredTx = transactions.filter(tx => {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
     
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
+    
+    // 🟢 跨店統計
+    let crossBranchIn = 0; // 其他店的客人，來本篩選店鋪消費 (本店應得)
+    let crossBranchOut = 0; // 本篩選店鋪的客人，去其他店消費 (本店應付)
+
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
     staffConfig.forEach(staff => {
@@ -266,8 +300,31 @@ export default function FinancePage() {
       };
     });
 
+    // 處理跨店計算 (需要掃過所有交易，不僅是 filteredTx)
+    if (selectedBranch !== 'ALL') {
+        transactions.forEach(tx => {
+           if (tx.type !== 'deduct' && tx.type !== 'deduct_package') return;
+           
+           const txAmount = Number(tx.amount || 0); // 若為套票則為0，目前跨店統計主要看餘額扣款
+           if (txAmount <= 0) return;
+
+           const customer = userMap[tx.phoneNumber];
+           if (!customer || !customer.branch || customer.branch === 'ALL') return; // 無歸屬或全域客不計入跨店補貼
+
+           const txBranch = tx.branch || '未指定';
+           
+           // 情境A: 客人是其他店的，但來本(篩選)店消費扣額 -> 總部需補貼本店 (In)
+           if (txBranch === selectedBranch && customer.branch !== selectedBranch) {
+               crossBranchIn += txAmount;
+           }
+           // 情境B: 客人是本(篩選)店開戶的，跑去別店消費扣額 -> 本店須把當初收的現金撥給別店 (Out)
+           else if (customer.branch === selectedBranch && txBranch !== selectedBranch) {
+               crossBranchOut += txAmount;
+           }
+        });
+    }
+
     filteredTx.forEach(tx => {
-      // 🟢 全局現金流統計：加入購物車產生的實收現金 (member_cash / walkin_cash)
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
         if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
@@ -279,7 +336,6 @@ export default function FinancePage() {
         cashIn -= Number(tx.pointsDeducted || 0);
       }
 
-      // 🟢 業績產值計算邏輯
       if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
         const stylistName = tx.stylist || '未指定';
         if (!stylistAggregator[stylistName]) {
@@ -298,7 +354,6 @@ export default function FinancePage() {
         else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash') {
           revenue = Number(tx.amount || 0);
           
-          // 如果是購物車賣出的套票，需要去 packagesData 找 commissionCode，否則去 servicesData 找
           let itemObj = servicesData.find(s => s.name === tx.service);
           if (!itemObj) itemObj = packagesData.find(p => p.name === tx.service);
           
@@ -371,6 +426,12 @@ export default function FinancePage() {
       outstandingTDollar: selectedBranch === 'ALL' ? Math.round(outstandingTDollar) : 0, 
       tDollarDeducted: Math.round(tDollarDeducted) 
     });
+    
+    setCrossBranchMetrics({
+       crossBranchIn: Math.round(crossBranchIn),
+       crossBranchOut: Math.round(crossBranchOut)
+    });
+
     setStylistRanking(Object.entries(stylists).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
     setServiceRanking(Object.entries(services).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
 
@@ -432,7 +493,13 @@ export default function FinancePage() {
       csvContent += `【營收與跨店結算總覽】\n`;
       csvContent += `充值與售票現金流,$${metrics.totalCashIn}\n`;
       csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
-      csvContent += `使用 T-Dollar 扣抵總額 (總部應撥款),$${metrics.tDollarDeducted}\n\n`;
+      csvContent += `使用 T-Dollar 扣抵總額,$${metrics.tDollarDeducted}\n`;
+      
+      if (selectedBranch !== 'ALL') {
+          csvContent += `(跨店) 他店開戶客來本店消費餘額,$${crossBranchMetrics.crossBranchIn}\n`;
+          csvContent += `(跨店) 本店開戶客去他店消費餘額,$${crossBranchMetrics.crossBranchOut}\n`;
+      }
+      csvContent += `\n`;
 
       const displayPayroll = payrollReport;
       const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
@@ -444,7 +511,7 @@ export default function FinancePage() {
       csvContent += `,,,總計發放佣金,$${totalCommissionPayout}\n\n`;
 
       csvContent += `【交易明細流水帳】\n`;
-      csvContent += `交易時間,門店,交易類型,客戶電話,項目/髮型師,變動金額\n`;
+      csvContent += `交易時間,門店,交易類型,客戶電話,項目/髮型師,變動金額,開戶分店\n`;
       const filteredTx = transactions.filter(tx => selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL'));
       filteredTx.forEach(tx => {
         const date = new Date(tx.timestamp).toLocaleString('zh-HK');
@@ -464,8 +531,13 @@ export default function FinancePage() {
         if (tx.type === 'assistant_bonus') amount = `(獎金) +$${tx.bonusAmount}`;
 
         const safePhone = tx.phoneNumber ? `'${tx.phoneNumber}` : ''; 
+        
+        // 查找開戶分店
+        const phoneKey = tx.phoneNumber ? tx.phoneNumber.replace('+852', '') : '';
+        const userObj = usersData.find(u => u.phoneNumber && u.phoneNumber.includes(phoneKey));
+        const userBranch = userObj ? (userObj.branch || 'ALL') : '未知/非會員';
 
-        csvContent += `${date},${tx.branch || '未指定'},${type},${safePhone},${itemDetail},${amount}\n`;
+        csvContent += `${date},${tx.branch || '未指定'},${type},${safePhone},${itemDetail},${amount},${userBranch}\n`;
       });
 
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -524,10 +596,19 @@ export default function FinancePage() {
              )}
 
              {isManagement && (
-               <div className="bg-[#121212] border border-white/10 px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors">
+               <div className={`bg-[#121212] border px-4 py-2.5 rounded-xl flex items-center gap-3 shadow-inner transition-colors ${currentAdminRole === 'manager' && currentUserBranch !== 'ALL' ? 'border-gray-800 opacity-60 cursor-not-allowed' : 'border-white/10 hover:border-[#D4AF37]/50'}`}>
                  <i className="fa-solid fa-store text-[#D4AF37] pointer-events-none"></i>
-                 <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none w-full">
-                   <option value="ALL">🌐 全線總計 (All Branches)</option>
+                 <select 
+                    value={selectedBranch} 
+                    onChange={(e) => setSelectedBranch(e.target.value)} 
+                    // 🟢 經理且有綁定門店時，強制鎖定下拉選單
+                    disabled={currentAdminRole === 'manager' && currentUserBranch !== 'ALL'}
+                    className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none w-full disabled:cursor-not-allowed"
+                 >
+                   {/* 只有 Admin 或全域經理能選 ALL */}
+                   {(currentAdminRole === 'admin' || currentUserBranch === 'ALL') && (
+                      <option value="ALL">🌐 全線總計 (All Branches)</option>
+                   )}
                    {branches.map(b => <option key={b} value={b}>📍 {b}</option>)}
                  </select>
                </div>
@@ -615,18 +696,38 @@ export default function FinancePage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+            {/* 🟢 跨店與勞務扣抵區塊 */}
+            <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 ${selectedBranch !== 'ALL' ? 'lg:grid-cols-3' : ''}`}>
               <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
                 <p className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務消耗扣抵總額
+                  🎫 {selectedBranch === 'ALL' ? '全線' : selectedBranch} T-Dollar 勞務扣抵總額
                 </p>
                 <div className="flex items-baseline gap-1 text-purple-300">
                   <span className="text-3xl font-bold">$</span>
                   <p className="text-5xl font-black tracking-tighter">{metrics.tDollarDeducted.toLocaleString()}</p>
                 </div>
-                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若貴公司各分店採獨立財務核算，總部需將此金額撥款補貼給該實體店。</p>}
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若有跨店消費，需參閱右側【跨店資金結算】板塊。</p>}
               </div>
+
+              {/* 🟢 只有篩選單一分店時，才顯示跨店對帳面板 */}
+              {selectedBranch !== 'ALL' && (
+                <div className="bg-blue-900/10 p-6 rounded-[32px] border border-blue-500/20 relative overflow-hidden flex flex-col justify-between">
+                   <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4 border-b border-blue-500/20 pb-2">
+                     🔄 跨店資金結算 (本月餘額消費)
+                   </p>
+                   <div className="space-y-4">
+                     <div>
+                       <p className="text-[10px] text-gray-400 flex justify-between">他店客 → 來本店消費 <span className="text-green-400 font-bold uppercase">總部應補貼本店</span></p>
+                       <p className="text-xl font-mono text-green-400 font-bold">+${crossBranchMetrics.crossBranchIn.toLocaleString()}</p>
+                     </div>
+                     <div>
+                       <p className="text-[10px] text-gray-400 flex justify-between">本店客 → 去他店消費 <span className="text-red-400 font-bold uppercase">本店應上繳總部</span></p>
+                       <p className="text-xl font-mono text-red-400 font-bold">-${crossBranchMetrics.crossBranchOut.toLocaleString()}</p>
+                     </div>
+                   </div>
+                </div>
+              )}
 
               <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5 opacity-50'}`}>
                  {selectedBranch === 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>}
@@ -702,19 +803,33 @@ export default function FinancePage() {
                   <thead>
                     <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/10">
                       <th className="pb-4 font-bold min-w-[120px]">時間 (Time)</th>
-                      <th className="pb-4 font-bold">門店 (Branch)</th>
+                      <th className="pb-4 font-bold min-w-[80px]">門店 (Branch)</th>
                       <th className="pb-4 font-bold">類型 (Type)</th>
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
-                      <th className="pb-4 font-bold text-right">變動金額</th>
+                      <th className="pb-4 font-bold text-right min-w-[100px]">變動金額</th>
                       {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
-                    {paginatedTx.map((tx) => ( 
+                    {paginatedTx.map((tx) => {
+                      // 🟢 即時比對這筆帳單的客戶原本是在哪間店開戶的
+                      const phoneKey = tx.phoneNumber ? tx.phoneNumber.replace('+852', '') : '';
+                      const userObj = usersData.find(u => u.phoneNumber && u.phoneNumber.includes(phoneKey));
+                      const userBranch = userObj ? (userObj.branch || 'ALL') : '無資料';
+
+                      return (
                       <tr key={tx.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
-                        <td className="py-4 text-[10px] text-gray-400 font-bold">{tx.branch || '未指定'}</td>
+                        <td className="py-4">
+                          <p className="text-[10px] text-gray-300 font-bold">{tx.branch || '未指定'}</p>
+                          {/* 跨店提示標記 */}
+                          {userBranch !== 'ALL' && tx.branch && userBranch !== tx.branch && tx.type === 'deduct' && (
+                            <p className="text-[8px] bg-orange-500/20 text-orange-400 border border-orange-500/30 px-1 py-0.5 rounded font-bold uppercase tracking-widest mt-1 w-fit">
+                              跨店客 ({userBranch})
+                            </p>
+                          )}
+                        </td>
                         <td className="py-4">
                           {tx.type === 'topup' ? (
                             <span className="text-[9px] bg-green-500/10 text-green-400 px-2 py-1 rounded uppercase tracking-widest font-bold">Top Up</span>
@@ -735,7 +850,7 @@ export default function FinancePage() {
                         <td className="py-4 text-white font-bold">{tx.phoneNumber}</td>
                         <td className="py-4 text-gray-400">
                           {tx.type === 'topup' || tx.type === 'buy_package' ? `收取 ${tx.paymentMethod} $${tx.amountPaidHKD || 0}` : (
-                            <span className="flex items-center gap-2">
+                            <span className="flex flex-col md:flex-row items-start md:items-center gap-2">
                               {tx.service || tx.packageName} <span className="text-[9px] bg-white/10 px-2 py-0.5 rounded text-[#D4AF37]">{tx.stylist}</span>
                             </span>
                           )}
@@ -779,7 +894,7 @@ export default function FinancePage() {
                           </td>
                         )}
                       </tr>
-                    ))}
+                    )})}
                     {filteredAndSortedTx.length === 0 && (
                       <tr><td colSpan="7" className="py-10 text-center text-gray-600 font-bold tracking-widest">此篩選條件下無交易紀錄</td></tr>
                     )}
@@ -948,7 +1063,6 @@ export default function FinancePage() {
                     ) : (
                       servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)
                     )}
-                    {/* 保留舊項目名稱防呆 */}
                     {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
                       <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
                     )}
