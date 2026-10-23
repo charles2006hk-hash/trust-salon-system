@@ -453,7 +453,7 @@ export default function UserManagementPage() {
             <thead>
               <tr className="text-[10px] text-gray-500 uppercase tracking-widest border-b border-white/5 bg-black/20">
                 <th className="p-6 font-bold">姓名與識別資訊</th>
-                <th className="p-6 font-bold">所屬店鋪</th>
+                <th className="p-6 font-bold">開戶 / 歸屬店鋪</th>
                 <th className="p-6 font-bold">資產狀態</th>
                 <th className="p-6 font-bold">系統權限 (Role)</th>
                 <th className="p-6 font-bold text-right">操作</th>
@@ -473,8 +473,12 @@ export default function UserManagementPage() {
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
                   <td className="p-6">
-                    <span className={`text-[9px] px-2 py-1 rounded font-bold tracking-widest uppercase ${['ALL', 'all'].includes(u.branch) ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'}`}>
-                      {['ALL', 'all'].includes(u.branch) ? '全域通' : u.branch || '未設定'}
+                    {/* 🟢 顯示開戶分店 */}
+                    <span className={`text-[10px] px-2 py-1 rounded font-bold tracking-widest uppercase border ${
+                      ['ALL', 'all'].includes(u.branch) ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' : 
+                      'bg-green-500/10 text-green-400 border-green-500/30'
+                    }`}>
+                      {['ALL', 'all'].includes(u.branch) ? '🌐 全域通 (跨店)' : `📍 ${u.branch || '未設定'} 開戶`}
                     </span>
                   </td>
                   <td className="p-6">
@@ -575,7 +579,7 @@ export default function UserManagementPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">所屬分店 (Branch)</label>
+                  <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest">所屬分店 / 開戶分店</label>
                   <select 
                     value={newUser.branch} 
                     onChange={e => setNewUser({...newUser, branch: e.target.value})} 
@@ -655,7 +659,15 @@ export default function UserManagementPage() {
                   {['staff', 'manager'].includes(selectedUser.role) ? '✂️' : selectedUser.role === 'admin' ? '👑' : '👤'}
                 </div>
                 <div>
-                  <h2 className="text-2xl font-black text-white">{selectedUser.name || '未設定姓名'}</h2>
+                  <h2 className="text-2xl font-black text-white flex items-center gap-3">
+                    {selectedUser.name || '未設定姓名'}
+                    <span className={`text-[10px] px-2 py-1 rounded font-bold tracking-widest uppercase border ${
+                      ['ALL', 'all'].includes(selectedUser.branch) ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' : 
+                      'bg-green-500/10 text-green-400 border-green-500/30'
+                    }`}>
+                      {['ALL', 'all'].includes(selectedUser.branch) ? '🌐 全域通' : `📍 ${selectedUser.branch || '未設定'} 開戶`}
+                    </span>
+                  </h2>
                   <p className="text-[10px] font-mono text-gray-500 mt-1">{selectedUser.id}</p>
                 </div>
               </div>
@@ -756,7 +768,7 @@ export default function UserManagementPage() {
                   </div>
                   
                   <div className="space-y-1 md:col-span-2">
-                    <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest ml-1">修改所屬店鋪 (Branch)</label>
+                    <label className="text-[10px] text-[#D4AF37] font-bold uppercase tracking-widest ml-1">修改歸屬 / 開戶店鋪 (Branch)</label>
                     <select 
                       value={selectedUser.branch || 'ALL'} 
                       onChange={e => setSelectedUser({...selectedUser, branch: e.target.value})} 
@@ -832,7 +844,7 @@ export default function UserManagementPage() {
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-gray-300">前台 POS 收銀 / 報到</td>
                     <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
-                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i> (鎖定門店)</td>
                     <td className="p-4 text-center border-l border-white/5 text-green-500"><i className="fa-solid fa-check"></i></td>
                     <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
                   </tr>
@@ -846,7 +858,7 @@ export default function UserManagementPage() {
                   <tr className="border-b border-white/5 hover:bg-white/[0.02]">
                     <td className="p-4 text-gray-300">查看個人業績 / 抽成</td>
                     <td className="p-4 text-center border-l border-white/5 text-green-500">全店</td>
-                    <td className="p-4 text-center border-l border-white/5 text-green-500">全店</td>
+                    <td className="p-4 text-center border-l border-white/5 text-green-500">全店 (鎖定門店)</td>
                     <td className="p-4 text-center border-l border-white/5 text-gray-600"><i className="fa-solid fa-minus"></i></td>
                     <td className="p-4 text-center border-l border-white/5 text-green-500">僅限自己</td>
                   </tr>
