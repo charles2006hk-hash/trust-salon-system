@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction } from 'firebase/firestore'; 
+// 🟢 引入 writeBatch 進行安全批量更新
+import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction, writeBatch } from 'firebase/firestore'; 
 import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
@@ -89,7 +90,6 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🟢 撈取該客戶完整歷史軌跡的引擎
   const fetchUserJourney = async (user) => {
     setHistoryModal({ isOpen: true, logs: [], loading: true, targetUser: user });
     try {
@@ -100,6 +100,49 @@ export default function UserManagementPage() {
     } catch (e) {
       toast.error("讀取歷史紀錄失敗");
       setHistoryModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // 🚀 新增：批量轉換全域會員歸屬 (防呆機制：嚴格排除內部員工)
+  const handleBatchMigrateMembersToTaipo = async () => {
+    if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
+
+    // 嚴格篩選條件：必須是 member (排除所有 staff, admin, manager, reception)，且 branch 是 ALL/all
+    const targetMembers = users.filter(u => u.role === 'member' && ['ALL', 'all'].includes(u.branch));
+
+    if (targetMembers.length === 0) {
+      return toast.info("目前沒有需要修改的「全域通」會員！", { icon: '💡' });
+    }
+
+    const isConfirm = window.confirm(`⚠️ 批量移轉確認\n\n即將把 ${targetMembers.length} 位「全域通 (ALL)」的【會員】歸屬分店改為「大埔店」。\n\n系統已啟動保護機制，【絕對不會】修改到任何員工或經理的權限與分店設定。\n\n請問確定要執行嗎？`);
+    if (!isConfirm) return;
+
+    setIsSaving(true);
+    const toastId = toast.loading(`正在批量轉換 ${targetMembers.length} 筆會員資料...`);
+
+    try {
+      // Firebase writeBatch 限制每次最多 500 筆寫入，需進行 Chunking 分塊處理
+      const chunks = [];
+      for (let i = 0; i < targetMembers.length; i += 500) {
+          chunks.push(targetMembers.slice(i, i + 500));
+      }
+
+      for (const chunk of chunks) {
+          const batch = writeBatch(db);
+          chunk.forEach(user => {
+              const userRef = doc(db, 'users', user.id);
+              batch.update(userRef, { branch: '大埔店' });
+          });
+          await batch.commit();
+      }
+
+      toast.success(`✅ 批量更新成功！已將 ${targetMembers.length} 位會員歸屬改為大埔店。`, { id: toastId, duration: 5000 });
+      fetchUsers(); // 重新整理資料表
+    } catch (error) {
+      console.error("Batch update failed:", error);
+      toast.error(`批量更新失敗：${error.message}`, { id: toastId });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -408,7 +451,18 @@ export default function UserManagementPage() {
           <h1 className="text-3xl font-black text-white italic tracking-tighter mb-2">USER <span className="text-[#D4AF37]">MANAGEMENT</span></h1>
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">客戶與內部員工權限控制台</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
+          {/* 🟢 新增：只有老闆可以看的批量轉換按鈕 */}
+          {currentAdminRole === 'admin' && (
+            <button 
+              onClick={handleBatchMigrateMembersToTaipo} 
+              disabled={isSaving}
+              className="bg-orange-900/30 text-orange-400 border border-orange-800/50 px-6 py-3 rounded-2xl text-xs font-bold tracking-widest hover:bg-orange-600 hover:text-white transition-colors disabled:opacity-50"
+            >
+              <i className="fa-solid fa-wand-magic-sparkles mr-2"></i> 批量歸屬大埔店
+            </button>
+          )}
+
           <button onClick={() => setIsRoleMatrixOpen(true)} className="bg-white/5 text-gray-300 border border-white/10 px-6 py-3 rounded-2xl text-xs font-bold tracking-widest hover:bg-white/10 transition-colors">
             <i className="fa-solid fa-shield-halved mr-2 text-[#D4AF37]"></i> 角色權限定義
           </button>
@@ -473,7 +527,6 @@ export default function UserManagementPage() {
                     <p className="text-[10px] text-gray-500 font-mono tracking-widest">{u.phoneNumber || u.email || '無綁定聯絡方式'}</p>
                   </td>
                   <td className="p-6">
-                    {/* 🟢 顯示開戶分店 */}
                     <span className={`text-[10px] px-2 py-1 rounded font-bold tracking-widest uppercase border ${
                       ['ALL', 'all'].includes(u.branch) ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' : 
                       'bg-green-500/10 text-green-400 border-green-500/30'
