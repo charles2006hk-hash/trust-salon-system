@@ -10,8 +10,8 @@ import { Toaster, toast } from 'react-hot-toast';
 // ★ 定義 UI 強制排序規則
 const PREFERRED_ORDER = ['R1', 'R2', 'R3', 'R4', 'R5', 'W1', 'W2', 'W3', 'W4', 'W5', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP', 'SCALP_PROD'];
 
-// ★ 排序函式
-export const getSortedCodes = (labelsObj) => {
+// 🚀 修復：移除 export，遵守 Next.js App Router 規範，避免路由崩潰
+const getSortedCodes = (labelsObj) => {
   const keys = Object.keys(labelsObj || {});
   return keys.sort((a, b) => {
     const indexA = PREFERRED_ORDER.indexOf(a);
@@ -72,12 +72,22 @@ export default function AdminManagePage() {
     SCALP: { deduct: 0, percent: 0 }, SCALP_PROD: { deduct: 0, percent: 0 }
   };
 
+  const defaultPresets = {
+    "A 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 28 }, W3: { deduct: 0, percent: 32 }, R1: { deduct: 0, percent: 60 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "B 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 35 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "C 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 22.75 }, W3: { deduct: 0, percent: 26.25 }, R1: { deduct: 20, percent: 50 }, R2: { deduct: 0, percent: 32.5 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 20 }, P2: { deduct: 0, percent: 25 }, P3: { deduct: 0, percent: 18 }, P4: { deduct: 0, percent: 15 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "D 級師傅": { W1: { deduct: 20, percent: 35 }, W2: { deduct: 0, percent: 24.5 }, W3: { deduct: 0, percent: 28 }, R1: { deduct: 0, percent: 50 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, P1: { deduct: 0, percent: 35 }, P2: { deduct: 0, percent: 35 }, P3: { deduct: 0, percent: 35 }, P4: { deduct: 0, percent: 35 }, P5: { deduct: 0, percent: 35 }, SCALP: { deduct: 0, percent: 25 } },
+    "E 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 70 }, W3: { deduct: 0, percent: 70 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 70 }, R3: { deduct: 0, percent: 70 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } },
+    "F 級助理": { W1: { deduct: 0, percent: 70 }, W2: { deduct: 0, percent: 60 }, W3: { deduct: 0, percent: 60 }, R1: { deduct: 0, percent: 70 }, R2: { deduct: 0, percent: 60 }, R3: { deduct: 0, percent: 60 }, P1: { deduct: 0, percent: 10 }, P2: { deduct: 0, percent: 10 }, P3: { deduct: 0, percent: 10 }, P4: { deduct: 0, percent: 10 }, P5: { deduct: 0, percent: 10 }, SCALP: { deduct: 0, percent: 10 } }
+  };
+
   const initialForm = { 
     name: '', price: '', category: '', title: '', content: '', 
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', 
-    commissions: { ...defaultCommissions, bonusTier: { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions } }, 
+    // 🚀 深拷貝保護，防止物件參照污染
+    commissions: JSON.parse(JSON.stringify({ ...defaultCommissions, bonusTier: { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions } })), 
     branch: '', phoneNumber: '+852', commissionLabels: defaultLabels,
     sortWeight: 0, isAssistant: false
   };
@@ -169,6 +179,20 @@ export default function AdminManagePage() {
       const staffNames = snap.docs.map(doc => doc.data()).filter(u => ['staff', 'manager'].includes(u.role) && u.name).map(u => u.name);
       setRegisteredStaff([...new Set(staffNames)]);
     } catch (e) { console.error(e); }
+  };
+
+  const initDefaultTemplates = async () => {
+    setLoading(true);
+    const toastId = toast.loading("正在為您強制更新預設抽成模板...");
+    try {
+      for (const [name, comms] of Object.entries(defaultPresets)) {
+        const existing = templatesList.find(t => t.name === name);
+        if (existing) { await updateDoc(doc(db, 'templates', existing.id), { commissions: comms, updatedAt: new Date().toISOString() }); } 
+        else { await addDoc(collection(db, 'templates'), { name: name, commissions: comms, createdAt: new Date().toISOString() }); }
+      }
+      toast.success("預設模板已強制覆蓋更新完成！", { id: toastId });
+      fetchTemplates(); fetchData(); 
+    } catch (e) { toast.error("更新失敗", { id: toastId }); } finally { setLoading(false); }
   };
 
   const scanAnomalies = async () => {
@@ -329,9 +353,10 @@ export default function AdminManagePage() {
     let safeCode = item.commissionCode;
     if (activeTab === 'packages') safeCode = 'SCALP';
     
-    const initCommissions = item.commissions || defaultCommissions;
+    // 🚀 修復：深拷貝 item.commissions 避免修改到原始物件
+    const initCommissions = item.commissions ? JSON.parse(JSON.stringify(item.commissions)) : JSON.parse(JSON.stringify(defaultCommissions));
     if (!initCommissions.bonusTier) {
-      initCommissions.bonusTier = { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions };
+      initCommissions.bonusTier = { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: JSON.parse(JSON.stringify(defaultCommissions)) };
     }
 
     setFormData({ 
@@ -361,7 +386,9 @@ export default function AdminManagePage() {
   const applyTemplate = (templateId) => {
     const selectedTemplate = templatesList.find(t => t.id === templateId);
     if (selectedTemplate) {
-      setFormData({ ...formData, templateId: templateId, templateName: selectedTemplate.name, commissions: selectedTemplate.commissions });
+      // 確保套用時深拷貝
+      const safeComms = JSON.parse(JSON.stringify(selectedTemplate.commissions));
+      setFormData({ ...formData, templateId: templateId, templateName: selectedTemplate.name, commissions: safeComms });
       toast.success(`已載入【${selectedTemplate.name}】數值！請務必點擊下方「儲存」按鈕！`);
     } else { setFormData({ ...formData, templateId: templateId, templateName: '' }); }
   };
@@ -395,7 +422,7 @@ export default function AdminManagePage() {
   };
 
   const toggleBonusTriggerCode = (code) => {
-    const currentCodes = formData.commissions.bonusTier.triggerCodes || [];
+    const currentCodes = formData.commissions?.bonusTier?.triggerCodes || [];
     let newCodes;
     if (currentCodes.includes(code)) {
       newCodes = currentCodes.filter(c => c !== code);
@@ -469,15 +496,14 @@ export default function AdminManagePage() {
                 <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">當月指定項目營收達標後，自動切換至新抽成 %</p>
              </div>
              
-             {/* 開關 */}
              <label className="relative inline-flex items-center cursor-pointer">
                <input 
                  type="checkbox" 
                  className="sr-only peer" 
-                 checked={isBonusEnabled}
+                 checked={isBonusEnabled || false}
                  onChange={e => setFormData({
                    ...formData, 
-                   commissions: { ...formData.commissions, bonusTier: { ...formData.commissions.bonusTier, enabled: e.target.checked } }
+                   commissions: { ...formData.commissions, bonusTier: { ...(formData.commissions?.bonusTier || {}), enabled: e.target.checked } }
                  })}
                />
                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
@@ -486,7 +512,6 @@ export default function AdminManagePage() {
 
           {isBonusEnabled && (
             <div className="space-y-6 animate-fade-in">
-              {/* 門檻金額設定 */}
               <div className="bg-black/50 p-4 rounded-xl border border-indigo-500/30">
                  <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-2">1. 設定當月觸發門檻金額 (HKD)</label>
                  <div className="relative max-w-xs">
@@ -494,18 +519,17 @@ export default function AdminManagePage() {
                    <input 
                      type="number" 
                      className="w-full bg-black border border-white/10 p-3 pl-8 rounded-lg text-white font-mono text-lg outline-none focus:border-indigo-400 transition-colors"
-                     value={formData.commissions.bonusTier.threshold || 0}
+                     value={formData.commissions?.bonusTier?.threshold || 0}
                      onChange={e => setFormData({...formData, commissions: {...formData.commissions, bonusTier: {...formData.commissions.bonusTier, threshold: Number(e.target.value)}}})}
                    />
                  </div>
               </div>
 
-              {/* 觸發標籤選擇 */}
               <div>
-                 <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">2. 選擇哪些項目算入這 $ {(formData.commissions.bonusTier.threshold || 0).toLocaleString()} 的進度？ (可複選)</label>
+                 <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">2. 選擇哪些項目算入這 $ {(formData.commissions?.bonusTier?.threshold || 0).toLocaleString()} 的進度？ (可複選)</label>
                  <div className="flex flex-wrap gap-2">
                     {sortedCodes.map(code => {
-                      const isSelected = (formData.commissions.bonusTier.triggerCodes || []).includes(code);
+                      const isSelected = (formData.commissions?.bonusTier?.triggerCodes || []).includes(code);
                       return (
                         <button
                           key={`trigger-${code}`}
@@ -520,7 +544,6 @@ export default function AdminManagePage() {
                  </div>
               </div>
 
-              {/* 達標後的新抽成矩陣 */}
               <div className="pt-4 border-t border-indigo-500/20">
                  <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">3. 達標後，適用以下【全新抽成比例】</label>
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
