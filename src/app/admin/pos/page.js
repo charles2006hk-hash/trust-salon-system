@@ -10,7 +10,7 @@ import { Toaster, toast } from 'react-hot-toast';
 export default function SmartPOS() {
   const router = useRouter();
   const [currentUserRole, setCurrentUserRole] = useState(null);
-  const [currentUserBranch, setCurrentUserBranch] = useState(''); // 🟢 記錄員工所屬分店
+  const [currentUserBranch, setCurrentUserBranch] = useState(''); 
   const [branches, setBranches] = useState([]);
   const [currentBranch, setCurrentBranch] = useState('');
   const [showBranchModal, setShowBranchModal] = useState(false);
@@ -68,12 +68,10 @@ export default function SmartPOS() {
               const branch = uData.branch || 'ALL';
               setCurrentUserBranch(branch);
 
-              // 🟢 權限鎖定：如果是 staff 或 manager 且不是 ALL，強制綁定門店
               if (['staff', 'manager'].includes(uData.role) && branch !== 'ALL') {
                   setCurrentBranch(branch);
                   localStorage.setItem('pos_branch', branch);
               } else {
-                  // Admin 或 全域通員工，讀取本地暫存
                   const savedBranch = localStorage.getItem('pos_branch');
                   if (savedBranch) setCurrentBranch(savedBranch);
               }
@@ -102,26 +100,19 @@ export default function SmartPOS() {
       catch (e) { return { docs: [] }; }
     };
 
+    // 🚀 核心優化：移除對 users 大表的無謂查詢，徹底解決 Quota Exceeded 問題
     const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap, cSnap] = await Promise.all([
       safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches'), safeGet('categories')
     ]);
     
     const branchList = bSnap.docs.map(d => d.data().name);
     setBranches(branchList);
-    // 只有在還沒綁定門市且需要選擇時才跳出
     if (!localStorage.getItem('pos_branch') && branchList.length > 0 && currentUserBranch === 'ALL') {
       setShowBranchModal(true);
     }
 
-    try {
-      const qStaff = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
-      const uSnap = await getDocs(qStaff);
-      const userStaff = uSnap.docs.map(d => d.data());
-      const cmsStaff = sSnap.docs.map(d => d.data());
-      setRawStaff([...cmsStaff, ...userStaff]); 
-    } catch(e) {
-      setRawStaff(sSnap.docs.map(d => d.data())); 
-    }
+    // 只依賴輕量級的 staff collection 來呈現設計師名單
+    setRawStaff(sSnap.docs.map(d => d.data())); 
 
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -225,7 +216,6 @@ export default function SmartPOS() {
   const openCheckout = async (session) => {
     const toastId = toast.loading("正在載入結帳單...");
     try {
-      // 🚀 核心優化：改用 Exact Match 避免 Firebase Quota 爆炸
       let uData = { discount: 1, tier: '非會員 (Walk-in)', tDollarBalance: 0, packageBalances: {}, name: '', points: 0, branch: 'ALL' };
       let userId = null;
 
@@ -263,7 +253,7 @@ export default function SmartPOS() {
         userId: userId, 
         packageBalances: uData.packageBalances || {},
         customerName: uData.name || '',
-        customerBranch: uData.branch || 'ALL' // 🟢 抓取開戶分店
+        customerBranch: uData.branch || 'ALL' 
       });
 
       setCart([{ id: Date.now().toString(), type: 'pay', name: session.service, stylist: session.stylist, originalPrice, finalPrice, grids: 0 }]);
@@ -430,7 +420,6 @@ export default function SmartPOS() {
 
   const searchTopUpUser = async () => {
     if(!topUpPhone) return;
-    // 🚀 核心優化：改用 Exact Match 避免 Firebase Quota 爆炸
     let searchPhones = [
         topUpPhone,
         topUpPhone.startsWith('+852') ? topUpPhone.replace('+852', '') : `+852${topUpPhone}`
@@ -713,7 +702,6 @@ export default function SmartPOS() {
             <span className="bg-blue-600/20 border border-blue-500/50 text-blue-400 px-3 py-1 rounded-md text-xs font-bold uppercase tracking-widest">
               <i className="fa-solid fa-location-dot mr-1"></i> {currentBranch || '未選門市'}
             </span>
-            {/* 🟢 權限鎖定：只有 admin 和 沒綁定分店的 manager 才能看到切換按鈕 */}
             {(currentUserRole === 'admin' || (currentUserRole === 'manager' && currentUserBranch === 'ALL')) && (
               <button onClick={() => setShowBranchModal(true)} className="text-[10px] text-gray-500 hover:text-white underline underline-offset-2 transition-colors">
                 切換門市
@@ -885,7 +873,6 @@ export default function SmartPOS() {
         </div>
       </div>
 
-      {/* 🟢 儲值/套票 Modal */}
       {showTopUpModal && (
         <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4 md:p-6 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-lg max-h-[90vh] overflow-y-auto custom-scrollbar rounded-[40px] p-6 md:p-10 border border-[#D4AF37]/30 shadow-[0_0_50px_rgba(212,175,55,0.15)] relative">
@@ -918,7 +905,6 @@ export default function SmartPOS() {
                      <div>
                        <p className="text-white font-bold text-lg flex items-center gap-2">
                          {topUpUser.name || topUpUser.phoneNumber}
-                         {/* 🟢 顯示開戶門店標籤 */}
                          {topUpUser.branch && topUpUser.branch !== 'ALL' && (
                            <span className="text-[9px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded uppercase tracking-widest">
                              {topUpUser.branch} 開戶
@@ -1084,7 +1070,6 @@ export default function SmartPOS() {
                   <p className="text-[10px] text-gray-500 font-bold uppercase mb-1">Customer</p>
                   <p className="text-lg font-bold text-white flex items-center gap-2">
                     {checkoutSession.customerName ? checkoutSession.customerName : checkoutSession.phoneNumber}
-                    {/* 🟢 結帳時顯示開戶分店 */}
                     {checkoutSession.customerBranch && checkoutSession.customerBranch !== 'ALL' && (
                       <span className="text-[9px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded uppercase tracking-widest font-bold">
                         {checkoutSession.customerBranch} 開戶
@@ -1170,7 +1155,6 @@ export default function SmartPOS() {
                ))}
                
                <div className="pt-4 border-t border-white/10 flex flex-col gap-3">
-                 {/* 🟢 T-Point 折抵區塊 */}
                  {checkoutSession.userId && (checkoutSession.points || 0) > 0 && cart.filter(i => i.type === 'pay').length > 0 && (
                    <div className="flex justify-between items-center bg-blue-900/20 p-3 rounded-xl border border-blue-500/30">
                      <div>
@@ -1187,7 +1171,6 @@ export default function SmartPOS() {
                    </div>
                  )}
                  
-                 {/* 🟢 會員結帳支付方式切換 */}
                  {checkoutSession.userId && cart.filter(i => i.type === 'pay').length > 0 && (
                    <div className="flex justify-between items-center bg-[#1a1a1a] p-2 rounded-xl border border-white/10">
                      <button type="button" onClick={() => setCheckoutPaymentMethod('t_dollar')} className={`flex-1 py-2 rounded-lg text-xs font-bold transition-colors ${checkoutPaymentMethod === 't_dollar' ? 'bg-[#D4AF37] text-black' : 'text-gray-500'}`}>T-Dollar 餘額扣帳</button>
