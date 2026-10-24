@@ -7,13 +7,16 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
+// 🚀 引入核心財務計算引擎，確保前後台計算邏輯 100% 同步
+import { calculateStaffCommissions } from '@/lib/finance'; 
+
 export default function FinancePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   
   const [viewMode, setViewMode] = useState('dashboard');
   const [currentAdminRole, setCurrentAdminRole] = useState('reception');
-  const [currentUserBranch, setCurrentUserBranch] = useState('ALL'); // 🟢 記錄經理的所屬門店
+  const [currentUserBranch, setCurrentUserBranch] = useState('ALL'); 
   const [currentUserName, setCurrentUserName] = useState(''); 
   
   const [filterType, setFilterType] = useState('month'); 
@@ -29,7 +32,7 @@ export default function FinancePage() {
   const [selectedBranch, setSelectedBranch] = useState('ALL');
 
   const [transactions, setTransactions] = useState([]);
-  const [usersData, setUsersData] = useState([]); // 🟢 為了計算跨店消費，需要讀取使用者開戶店
+  const [usersData, setUsersData] = useState([]); 
 
   const [staffConfig, setStaffConfig] = useState([]);
   const [outstandingTDollar, setOutstandingTDollar] = useState(0); 
@@ -46,7 +49,7 @@ export default function FinancePage() {
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, tDollarDeducted: 0 });
-  const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); // 🟢 跨店統計
+  const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
   
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
@@ -190,13 +193,12 @@ export default function FinancePage() {
         const uData = docSnap.data();
         const role = uData.role;
         const name = uData.name;
-        const branch = uData.branch || 'ALL'; // 🟢 抓取管理員所屬門店
+        const branch = uData.branch || 'ALL'; 
         
         setCurrentAdminRole(role);
         setCurrentUserName(name);
         setCurrentUserBranch(branch);
         
-        // 🟢 權限鎖定：經理強制鎖定報表分店
         if (role === 'manager' && branch !== 'ALL') {
             setSelectedBranch(branch);
         }
@@ -213,7 +215,9 @@ export default function FinancePage() {
   }, [selectedMonth, selectedDate, filterType]); 
 
   useEffect(() => {
-    if (transactions.length >= 0 && usersData.length >= 0) calculateData(); 
+    if (transactions.length >= 0 && usersData.length >= 0 && staffConfig.length >= 0) {
+      calculateData(); 
+    }
   }, [selectedBranch, transactions, usersData, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
@@ -232,7 +236,6 @@ export default function FinancePage() {
       const txSnap = await getDocs(qTx);
       setTransactions(txSnap.docs.map(d => ({ id: d.id, ...d.data() })));
       
-      // 🟢 抓取使用者資料，以便進行跨店分析
       const qUser = query(collection(db, "users"));
       const userSnap = await getDocs(qUser);
       const userList = userSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -267,10 +270,8 @@ export default function FinancePage() {
   };
 
   const calculateData = () => {
-    // 建立 User Lookup 字典
     const userMap = {};
     usersData.forEach(u => {
-       // 統一處理 +852 以確保比對正確
        const phone = u.phoneNumber ? u.phoneNumber.replace('+852', '') : '';
        if (phone) {
            userMap[`+852${phone}`] = u;
@@ -283,47 +284,10 @@ export default function FinancePage() {
     });
     
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
-    
-    // 🟢 跨店統計
-    let crossBranchIn = 0; // 其他店的客人，來本篩選店鋪消費 (本店應得)
-    let crossBranchOut = 0; // 本篩選店鋪的客人，去其他店消費 (本店應付)
-
+    let crossBranchIn = 0; let crossBranchOut = 0; 
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
-    staffConfig.forEach(staff => {
-      stylistAggregator[staff.name] = { 
-        name: staff.name, 
-        grade: staff.templateName || '自訂比例', 
-        commissionsRule: staff.commissions || {}, 
-        totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [],
-        uniqueClientsSet: new Set() 
-      };
-    });
-
-    // 處理跨店計算 (需要掃過所有交易，不僅是 filteredTx)
-    if (selectedBranch !== 'ALL') {
-        transactions.forEach(tx => {
-           if (tx.type !== 'deduct' && tx.type !== 'deduct_package') return;
-           
-           const txAmount = Number(tx.amount || 0); // 若為套票則為0，目前跨店統計主要看餘額扣款
-           if (txAmount <= 0) return;
-
-           const customer = userMap[tx.phoneNumber];
-           if (!customer || !customer.branch || customer.branch === 'ALL') return; // 無歸屬或全域客不計入跨店補貼
-
-           const txBranch = tx.branch || '未指定';
-           
-           // 情境A: 客人是其他店的，但來本(篩選)店消費扣額 -> 總部需補貼本店 (In)
-           if (txBranch === selectedBranch && customer.branch !== selectedBranch) {
-               crossBranchIn += txAmount;
-           }
-           // 情境B: 客人是本(篩選)店開戶的，跑去別店消費扣額 -> 本店須把當初收的現金撥給別店 (Out)
-           else if (customer.branch === selectedBranch && txBranch !== selectedBranch) {
-               crossBranchOut += txAmount;
-           }
-        });
-    }
-
+    // 🟢 現金流與跨店統計
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
@@ -336,87 +300,81 @@ export default function FinancePage() {
         cashIn -= Number(tx.pointsDeducted || 0);
       }
 
-      if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash' || tx.type === 'deduct_package' || tx.type === 'assistant_bonus') {
-        const stylistName = tx.stylist || '未指定';
-        if (!stylistAggregator[stylistName]) {
-          stylistAggregator[stylistName] = { name: stylistName, grade: '無資料 (未綁定)', commissionsRule: {}, totalRevenue: 0, totalCommission: 0, clientCount: 0, details: [], uniqueClientsSet: new Set() };
-        }
-
-        const staff = stylistAggregator[stylistName];
-        let revenue = 0; let commCode = null; let formulaStr = ""; let commission = 0;
-
-        if (tx.type === 'assistant_bonus') {
-          revenue = 0; 
-          commission = Number(tx.bonusAmount || 0);
-          formulaStr = `店家發放定額獎金 ($${commission})`;
-          commCode = 'BONUS';
-        } 
-        else if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash') {
-          revenue = Number(tx.amount || 0);
-          
-          let itemObj = servicesData.find(s => s.name === tx.service);
-          if (!itemObj) itemObj = packagesData.find(p => p.name === tx.service);
-          
-          commCode = itemObj ? itemObj.commissionCode : null;
-          services[tx.service || '一般服務'] = (services[tx.service || '一般服務'] || 0) + revenue;
-          
-          if (tx.type === 'deduct') tDollarDeducted += revenue;
-        } 
-        else if (tx.type === 'deduct_package') {
-          const pkgItem = packagesData.find(p => p.name === tx.packageName);
-          if (pkgItem) {
-            revenue = 0; 
-            commCode = pkgItem.commissionCode; 
-          }
-        }
-
-        if (tx.type !== 'assistant_bonus') {
-          if (!commCode) {
-              formulaStr = "未綁定拆帳標籤 (需至CMS設定)";
-          } else if (!staff.commissionsRule || Object.keys(staff.commissionsRule).length === 0) {
-              formulaStr = "該設計師未儲存抽成參數";
-          } else if (staff.commissionsRule[commCode] === undefined) {
-              formulaStr = `該設計師未設定 ${commCode} 參數`;
-          } else {
-              const rule = staff.commissionsRule[commCode];
-              if (revenue > rule.deduct) {
-                commission = (revenue - rule.deduct) * (rule.percent / 100);
-                formulaStr = `($${revenue.toFixed(1)} - 扣$${rule.deduct}) x ${rule.percent}%`;
-              } else {
-                formulaStr = `實收低於耗材扣款 ($${rule.deduct})`;
-              }
-          }
-        }
-
-        if (tx.type === 'deduct' || tx.type === 'walkin_cash' || tx.type === 'member_cash' || tx.type === 'deduct_package') {
-           const itemName = tx.service || tx.packageName || '';
-           const isAddon = itemName.includes('追加');
-           const isProduct = commCode && String(commCode).startsWith('P'); 
-
-           if (!isAddon && !isProduct) {
-             staff.uniqueClientsSet.add(tx.id);
-           }
-           staff.clientCount = staff.uniqueClientsSet.size;
-        }
-
-        serviceValue += revenue;
-        stylists[stylistName] = (stylists[stylistName] || 0) + revenue;
-
-        staff.totalRevenue += revenue;
-        staff.totalCommission += commission;
-        
-        staff.details.push({
-          id: tx.id,
-          date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
-          service: tx.service || tx.packageName,
-          type: tx.type, 
-          commCode: commCode || 'N/A', 
-          revenue: Math.round(revenue), 
-          commission: Math.round(commission), 
-          formulaStr: formulaStr, 
-          branch: tx.branch || '未知門店'
-        });
+      if (tx.type === 'deduct') {
+        tDollarDeducted += Number(tx.amount || 0);
       }
+    });
+
+    if (selectedBranch !== 'ALL') {
+        transactions.forEach(tx => {
+           if (tx.type !== 'deduct' && tx.type !== 'deduct_package') return;
+           const txAmount = Number(tx.amount || 0);
+           if (txAmount <= 0) return;
+
+           const customer = userMap[tx.phoneNumber];
+           if (!customer || !customer.branch || customer.branch === 'ALL') return; 
+
+           const txBranch = tx.branch || '未指定';
+           
+           if (txBranch === selectedBranch && customer.branch !== selectedBranch) {
+               crossBranchIn += txAmount;
+           }
+           else if (customer.branch === selectedBranch && txBranch !== selectedBranch) {
+               crossBranchOut += txAmount;
+           }
+        });
+    }
+
+    // 🚀 核心修復：全面套用 calculateStaffCommissions 統一財務引擎
+    const serviceMap = {};
+    servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
+    packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
+
+    const txByStylist = {};
+    filteredTx.forEach(tx => {
+       if (['deduct', 'walkin_cash', 'member_cash', 'deduct_package', 'assistant_bonus'].includes(tx.type)) {
+           const sName = tx.stylist || '未指定';
+           if (!txByStylist[sName]) txByStylist[sName] = [];
+           txByStylist[sName].push(tx);
+
+           if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
+               const srvName = tx.service || '一般服務';
+               services[srvName] = (services[srvName] || 0) + Number(tx.amount || 0);
+           }
+       }
+    });
+
+    const allStylistNames = new Set([...Object.keys(txByStylist), ...staffConfig.map(s => s.name)]);
+
+    allStylistNames.forEach(stylistName => {
+        const staffTxs = txByStylist[stylistName] || [];
+        const staffProfile = staffConfig.find(s => s.name === stylistName) || { commissions: {}, templateName: '無資料 (未綁定)' };
+
+        // 呼叫統一引擎進行計算
+        const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
+
+        stylistAggregator[stylistName] = {
+            name: stylistName,
+            grade: staffProfile.templateName || '自訂比例',
+            totalRevenue: result.stats.totalRevenue,
+            totalCommission: result.stats.totalCommission,
+            clientCount: result.stats.clientCount,
+            details: result.processedTransactions.map(tx => ({
+                id: tx.id,
+                date: new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
+                service: tx.service || tx.packageName,
+                type: tx.type,
+                commCode: tx.computedCode || 'N/A',
+                revenue: Math.round(Number(tx.amount || 0)),
+                commission: Math.round(tx.computedCommission || 0),
+                // 標記引擎回傳的階梯狀態
+                formulaStr: tx.type === 'assistant_bonus' ? '店家發放定額獎金' : (tx.isAppliedBonus ? '⚡ 階梯達標高抽成' : (tx.computedCode === 'SCALP' ? '套票比例' : '一般抽成')),
+                branch: tx.branch || '未知門店'
+            }))
+        };
+
+        serviceValue += result.stats.totalRevenue;
+        stylists[stylistName] = result.stats.totalRevenue;
     });
 
     setMetrics({ 
@@ -532,7 +490,6 @@ export default function FinancePage() {
 
         const safePhone = tx.phoneNumber ? `'${tx.phoneNumber}` : ''; 
         
-        // 查找開戶分店
         const phoneKey = tx.phoneNumber ? tx.phoneNumber.replace('+852', '') : '';
         const userObj = usersData.find(u => u.phoneNumber && u.phoneNumber.includes(phoneKey));
         const userBranch = userObj ? (userObj.branch || 'ALL') : '未知/非會員';
@@ -601,11 +558,9 @@ export default function FinancePage() {
                  <select 
                     value={selectedBranch} 
                     onChange={(e) => setSelectedBranch(e.target.value)} 
-                    // 🟢 經理且有綁定門店時，強制鎖定下拉選單
                     disabled={currentAdminRole === 'manager' && currentUserBranch !== 'ALL'}
                     className="bg-transparent text-white font-bold outline-none cursor-pointer pr-3 text-sm appearance-none w-full disabled:cursor-not-allowed"
                  >
-                   {/* 只有 Admin 或全域經理能選 ALL */}
                    {(currentAdminRole === 'admin' || currentUserBranch === 'ALL') && (
                       <option value="ALL">🌐 全線總計 (All Branches)</option>
                    )}
@@ -696,7 +651,6 @@ export default function FinancePage() {
               </div>
             </div>
 
-            {/* 🟢 跨店與勞務扣抵區塊 */}
             <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 mb-12 ${selectedBranch !== 'ALL' ? 'lg:grid-cols-3' : ''}`}>
               <div className="bg-purple-900/10 p-8 rounded-[32px] border border-purple-500/20 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/10 rounded-bl-[100px] -z-10 transition-colors"></div>
@@ -710,7 +664,6 @@ export default function FinancePage() {
                 {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若有跨店消費，需參閱右側【跨店資金結算】板塊。</p>}
               </div>
 
-              {/* 🟢 只有篩選單一分店時，才顯示跨店對帳面板 */}
               {selectedBranch !== 'ALL' && (
                 <div className="bg-blue-900/10 p-6 rounded-[32px] border border-blue-500/20 relative overflow-hidden flex flex-col justify-between">
                    <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4 border-b border-blue-500/20 pb-2">
@@ -813,7 +766,6 @@ export default function FinancePage() {
                   </thead>
                   <tbody className="text-sm font-light">
                     {paginatedTx.map((tx) => {
-                      // 🟢 即時比對這筆帳單的客戶原本是在哪間店開戶的
                       const phoneKey = tx.phoneNumber ? tx.phoneNumber.replace('+852', '') : '';
                       const userObj = usersData.find(u => u.phoneNumber && u.phoneNumber.includes(phoneKey));
                       const userBranch = userObj ? (userObj.branch || 'ALL') : '無資料';
@@ -823,7 +775,6 @@ export default function FinancePage() {
                         <td className="py-4 text-[10px] text-gray-500 font-mono uppercase">{new Date(tx.timestamp).toLocaleString('zh-HK', { month: 'short', day: '2-digit', hour: '2-digit', minute:'2-digit' })}</td>
                         <td className="py-4">
                           <p className="text-[10px] text-gray-300 font-bold">{tx.branch || '未指定'}</p>
-                          {/* 跨店提示標記 */}
                           {userBranch !== 'ALL' && tx.branch && userBranch !== tx.branch && tx.type === 'deduct' && (
                             <p className="text-[8px] bg-orange-500/20 text-orange-400 border border-orange-500/30 px-1 py-0.5 rounded font-bold uppercase tracking-widest mt-1 w-fit">
                               跨店客 ({userBranch})
