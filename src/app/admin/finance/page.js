@@ -68,9 +68,9 @@ export default function FinancePage() {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
 
-  // 🚀 核心升級：智能退單機制 (自動退款/退次數)
+  // 🚀 權限升級：允許 admin 與 manager 刪除/作廢單據
   const handleDeleteTransaction = async (tx) => {
-    if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
+    if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理刪除單據！");
     
     const itemName = tx.service || tx.packageName || (tx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
     const itemAmount = tx.amount || tx.bonusAmount || tx.amountPaidHKD || tx.tDollarAdded || 0;
@@ -81,7 +81,6 @@ export default function FinancePage() {
 
     const toastId = toast.loading("正在刪除單據並回滾資產...");
     try {
-      // 1. 確保拿到正確的 userId (相容舊單據與跨店)
       let targetUserId = tx.userId;
       if (!targetUserId && tx.phoneNumber && tx.phoneNumber !== 'Walk-in (無提供電話)') {
           const phonesToTry = [tx.phoneNumber, tx.phoneNumber.replace('+852', ''), `+852${tx.phoneNumber.replace('+852', '')}`];
@@ -115,7 +114,6 @@ export default function FinancePage() {
              let newPkgs = { ...(userData.packageBalances || {}) };
              let changed = false;
 
-             // 根據交易類型進行反向操作 (Reversal)
              if (tx.type === 'deduct') {
                  newTDollar += Number(tx.amount || 0);
                  changed = true;
@@ -150,7 +148,6 @@ export default function FinancePage() {
              }
          }
 
-         // 2. 寫入 Audit Log，動作改為 delete_transaction_and_revert
          const auditRef = doc(collection(db, 'audit_logs'));
          transaction.set(auditRef, {
            module: 'finance_transactions',
@@ -159,10 +156,10 @@ export default function FinancePage() {
            customerPhone: tx.phoneNumber || '未提供',
            branch: tx.branch || '未指定',
            timestamp: new Date().toISOString(),
-           adminName: currentUserName || 'Admin',
+           adminName: currentUserName || 'Manager', // 紀錄操作者名字
            changes: {
              deletedAt: new Date().toISOString(),
-             deletedBy: currentUserName || 'Admin',
+             deletedBy: currentUserName || 'Manager',
              amount: itemAmount,
              service: itemName,
              stylist: tx.stylist || '無',
@@ -171,7 +168,6 @@ export default function FinancePage() {
            }
          });
 
-         // 3. 刪除原單據
          const txRef = doc(db, 'transactions', tx.id);
          transaction.delete(txRef);
       });
@@ -189,9 +185,10 @@ export default function FinancePage() {
     }
   };
 
+  // 🚀 權限升級：允許 admin 與 manager 修改單據
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
-    if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 修改單據！");
+    if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理修改單據！");
     
     const toastId = toast.loading("正在覆寫單據資料並寫入全域審計紀錄...");
     setIsUpdatingTx(true);
@@ -206,7 +203,7 @@ export default function FinancePage() {
 
       const auditLog = {
         editedAt: new Date().toISOString(),
-        editedBy: currentUserName || 'Admin', 
+        editedBy: currentUserName || 'Manager', 
         oldAmount: oldAmount,
         newAmount: newAmount,
         oldStylist: originalTx.stylist || '無',
@@ -230,7 +227,7 @@ export default function FinancePage() {
          updatePayload.packageName = editingTx.packageName;
       } else if (editingTx.type === 'topup') {
          updatePayload.amountPaidHKD = newAmount;
-         updatePayload.tDollarAdded = newAmount; // 假設增值修改比例為 1:1
+         updatePayload.tDollarAdded = newAmount; 
       } else {
          updatePayload.amount = newAmount;
          if (editingTx.packageName !== undefined) {
@@ -249,7 +246,7 @@ export default function FinancePage() {
         customerPhone: editingTx.phoneNumber || '未提供',
         branch: editingTx.branch || '未指定',
         timestamp: new Date().toISOString(),
-        adminName: currentUserName || 'Admin',
+        adminName: currentUserName || 'Manager',
         changes: auditLog
       });
       
@@ -837,7 +834,8 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right min-w-[100px]">變動金額</th>
-                      {currentAdminRole === 'admin' && <th className="pb-4 font-bold text-center">操作</th>}
+                      {/* 🚀 權限升級：允許 admin 與 manager 看到操作按鈕 */}
+                      {['admin', 'manager'].includes(currentAdminRole) && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
                   <tbody className="text-sm font-light">
@@ -886,7 +884,8 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'member_cash' ? '+' : tx.type === 'walkin_cash' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? (tx.tDollarAdded || 0) : tx.type === 'buy_package' ? (tx.amountPaidHKD || 0) : tx.type === 'assistant_bonus' ? (tx.bonusAmount || 0) : (tx.amount || 0)}
                         </td>
                         
-                        {currentAdminRole === 'admin' && (
+                        {/* 🚀 權限升級：允許 admin 與 manager 進行操作 */}
+                        {['admin', 'manager'].includes(currentAdminRole) && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-1.5">
                                 <div className="flex gap-1.5 w-full justify-center">
