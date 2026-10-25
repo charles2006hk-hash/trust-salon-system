@@ -6,17 +6,14 @@ import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firesto
 import { onAuthStateChanged } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
-// 🚀 引入核心財務計算引擎，確保前台(設計師)與後台(老闆)拆帳邏輯 100% 同步
 import { calculateStaffCommissions } from '@/lib/finance'; 
 
-// ★ 定義 UI 強制排序規則 (與 CMS 同步)
 const PREFERRED_ORDER = ['R1', 'R2', 'R3', 'R4', 'R5', 'W1', 'W2', 'W3', 'W4', 'W5', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP', 'SCALP_PROD'];
 
 export default function StaffPerformancePage() {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   
-  // 日期與篩選狀態
   const [filterType, setFilterType] = useState('month');
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  
@@ -25,7 +22,6 @@ export default function StaffPerformancePage() {
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
 
-  // 接收自核心引擎的回傳狀態
   const [myTransactions, setMyTransactions] = useState([]);
   const [detailedBreakdown, setDetailedBreakdown] = useState({});
 
@@ -40,7 +36,7 @@ export default function StaffPerformancePage() {
   });
   
   const [dynamicTierStats, setDynamicTierStats] = useState({ 
-    scalpClientCount: 0, 
+    realScalpClientCount: 0, 
     combinedRevenue: 0, 
     finalScalpPct: 25, 
     finalProdPct: 20,
@@ -165,7 +161,7 @@ export default function StaffPerformancePage() {
       setMyTransactions(result.processedTransactions || []);
       
       setDynamicTierStats(result.dynamicTierStats || { 
-        scalpClientCount: 0, 
+        realScalpClientCount: 0, 
         combinedRevenue: 0, 
         finalScalpPct: 25, 
         finalProdPct: 20,
@@ -290,9 +286,6 @@ export default function StaffPerformancePage() {
         </div>
       </header>
 
-      {/* ========================================================= */}
-      {/* 🟢 新增：進階自訂階梯觸發狀態面板 (Bonus Tier) */}
-      {/* ========================================================= */}
       {dynamicTierStats.bonusTierThreshold > 0 && filterType === 'month' && (
         <section className="mb-4 animate-fade-in bg-gradient-to-br from-indigo-900/30 to-[#121212] border border-indigo-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 blur-3xl rounded-full"></div>
@@ -330,7 +323,7 @@ export default function StaffPerformancePage() {
         </section>
       )}
 
-      {/* 頭皮/養護階梯狀態 */}
+      {/* 🟢 更新：頭皮與產品雙軌顯示介面 */}
       <section className="mb-6 animate-fade-in bg-gradient-to-br from-green-900/30 to-[#121212] border border-green-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 blur-3xl rounded-full"></div>
         <h3 className="text-sm font-black text-green-400 mb-3 flex items-center gap-2">
@@ -341,16 +334,16 @@ export default function StaffPerformancePage() {
              <p className="text-[10px] text-gray-400 uppercase tracking-widest">真實套票客量</p>
              <p className="text-xl font-bold font-mono text-white">{dynamicTierStats.realScalpClientCount || 0} <span className="text-xs font-normal text-gray-500">位</span></p>
              <p className="text-[10px] text-green-500 font-bold mt-1">
-               {dynamicTierStats.scalpClientCount >= 2 
-                 ? '✅ 產品基礎提成已達 25%' 
-                 : '距離升級 25% 還差 ' + (2 - (dynamicTierStats.scalpClientCount || 0)) + ' 位'}
+               {dynamicTierStats.realScalpClientCount >= 2 
+                 ? '✅ 產品提成加碼 +5%' 
+                 : '距產品提成升級差 ' + (2 - (dynamicTierStats.realScalpClientCount || 0)) + ' 位'}
              </p>
            </div>
            <div>
              <p className="text-[10px] text-gray-400 uppercase tracking-widest">頭皮總業績 (套票+產品)</p>
              <p className="text-xl font-bold font-mono text-white"><span className="text-xs text-gray-500">$</span>{(dynamicTierStats.combinedRevenue || 0).toLocaleString()}</p>
              <p className="text-[10px] text-green-500 font-bold mt-1">
-               距離下次加成 (+5%) 還差 ${(10000 - ((dynamicTierStats.combinedRevenue || 0) % 10000)).toLocaleString()}
+               距離下次總達標 (+5%) 還差 ${(10000 - ((dynamicTierStats.combinedRevenue || 0) % 10000)).toLocaleString()}
              </p>
            </div>
            <div className="bg-black/40 p-2 rounded-lg border border-white/5 text-center">
