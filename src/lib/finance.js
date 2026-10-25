@@ -10,7 +10,6 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   let prodRev = 0;
   
   let realScalpClientCount = 0; 
-  let scalpTokens = 0;          
   
   let uniqueClients = new Set();
   let uniqueWR = new Set();
@@ -26,11 +25,11 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   const bonusTierConfig = userCommissionsRule.bonusTier || null;
   const isBonusTierActive = !!bonusTierConfig && bonusTierConfig.enabled;
   
-  // 2. 計算觸發目標的累積金額 (以月為單位，此處簡化為傳入的 rawTransactions 總和)
+  // 2. 計算觸發目標的累積金額
   let triggerAccumulatedAmount = 0;
 
   // ==============================================================
-  // 🟢 Pass 1: 分類帳單並智能辨識動態標籤 (追加項目排除、代幣機制)
+  // 🟢 Pass 1: 分類帳單並智能辨識動態標籤
   // ==============================================================
   (rawTransactions || []).forEach(tx => {
     let code = '未綁定參數';
@@ -72,15 +71,13 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
                 realScalpClientCount += 1;
                 uniqueScalp.add(tx.id);
                 uniqueClients.add(tx.id); 
-                if (amount >= 6000) scalpTokens += 2;
-                else scalpTokens += 1;
             }
         } 
         else if (code === 'SCALP_PROD') {
             prodRev += amount;
         }
 
-        // 🌟 統計階梯觸發金額
+        // 🌟 統計大數階梯觸發金額
         if (isBonusTierActive && bonusTierConfig.triggerCodes && bonusTierConfig.triggerCodes.includes(code)) {
             triggerAccumulatedAmount += amount;
         }
@@ -89,19 +86,24 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
     pass1Txs.push({ ...tx, computedCode: code });
   });
 
-  // 🌟 判定階梯是否達標
+  // 🌟 判定大數階梯是否達標
   const isBonusTierAchieved = isBonusTierActive && (triggerAccumulatedAmount >= (Number(bonusTierConfig.threshold) || 0));
 
   // ==============================================================
-  // 🟢 頭皮動態階梯算法
+  // 🚀 核心修復：頭皮與產品雙軌階梯算法
   // ==============================================================
   const combinedRevenue = scalpRev + prodRev;
   const baseScalpPct = 25; 
   const baseProdPct = 20; 
-  const bonusLevel = Math.floor(scalpTokens / 2);
-  const boostPct = bonusLevel * 5; 
-  const finalScalpPct = baseScalpPct + boostPct;
-  const finalProdPct = baseProdPct + boostPct;
+  
+  // 1. 產品專屬客數加成
+  const prodClientBonus = realScalpClientCount >= 2 ? 5 : 0;
+  
+  // 2. 總業績跳轉加成 (每滿 10000 提升 5%)
+  const revenueBonus = Math.floor(combinedRevenue / 10000) * 5;
+
+  const finalProdPct = baseProdPct + prodClientBonus + revenueBonus;
+  const finalScalpPct = baseScalpPct + revenueBonus;
 
   let revSum = 0;
   let commSum = 0;
@@ -109,7 +111,7 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   const processedTransactions = [];
 
   // ==============================================================
-  // 🟢 Pass 2: 套用佣金與空值防護 (支援階梯達標替換)
+  // 🟢 Pass 2: 套用佣金與空值防護 (支援大數階梯達標替換)
   // ==============================================================
   pass1Txs.forEach(tx => {
     const amount = Number(tx.amount || 0);
@@ -152,6 +154,7 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
         tx.isAppliedBonus = isAppliedBonus;
     }
 
+    // 解決 JavaScript 浮點數精度問題
     calculatedComm = Math.round(calculatedComm * 100) / 100;
     
     if (tx.type !== 'deduct_package' && tx.type !== 'assistant_bonus') {
@@ -175,7 +178,6 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   return {
     processedTransactions,
     dynamicTierStats: { 
-      scalpClientCount: scalpTokens, 
       realScalpClientCount,          
       combinedRevenue, 
       finalScalpPct, 
