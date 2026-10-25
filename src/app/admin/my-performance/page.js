@@ -117,28 +117,35 @@ export default function StaffPerformancePage() {
     try {
       if (!staffName) return;
       
+      // 🚀 核心優化：加入資料庫層級的日期區間過濾，徹底解決讀取量爆炸的問題
+      let startTime, endTime;
+      if (currentFilterType === 'month') {
+        startTime = `${monthStr}-01T00:00:00`;
+        endTime = `${monthStr}-31T23:59:59`;
+      } else {
+        startTime = `${dateStr}T00:00:00`;
+        endTime = `${dateStr}T23:59:59`;
+      }
+
+      // 僅向資料庫要求該日期區間的資料
       const q = query(
         collection(db, 'transactions'), 
-        where('type', 'in', ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus', 'member_cash'])
+        where("timestamp", ">=", startTime),
+        where("timestamp", "<=", endTime)
       );
       
       const snap = await getDocs(q);
       const targetTxs = [];
+      const validTypes = ['deduct', 'walkin_cash', 'deduct_package', 'assistant_bonus', 'member_cash'];
 
       snap.forEach(d => {
         const tx = d.data();
-        let isMatchDate = false;
         
-        if (currentFilterType === 'month') {
-           const txMonth = tx.timestamp ? tx.timestamp.slice(0, 7) : '';
-           isMatchDate = (txMonth === monthStr);
-        } else {
-           const txDay = tx.timestamp ? tx.timestamp.slice(0, 10) : '';
-           isMatchDate = (txDay === dateStr);
-        }
+        // 在前端過濾我們需要的交易類型 (避免複合索引出錯)
+        if (!validTypes.includes(tx.type)) return;
 
         const stylistArray = tx.stylist ? tx.stylist.split(',').map(s => s.trim()) : [];
-        if (stylistArray.includes(staffName) && isMatchDate) {
+        if (stylistArray.includes(staffName)) {
            targetTxs.push({ id: d.id, ...tx });
         }
       });
@@ -323,7 +330,6 @@ export default function StaffPerformancePage() {
         </section>
       )}
 
-      {/* 🟢 更新：頭皮與產品雙軌顯示介面 */}
       <section className="mb-6 animate-fade-in bg-gradient-to-br from-green-900/30 to-[#121212] border border-green-500/30 rounded-2xl p-5 shadow-lg relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/10 blur-3xl rounded-full"></div>
         <h3 className="text-sm font-black text-green-400 mb-3 flex items-center gap-2">
@@ -393,9 +399,6 @@ export default function StaffPerformancePage() {
         </div>
       </section>
 
-      {/* ========================================================= */}
-      {/* 🟢 各項服務大數拆解 (已套裝自訂排序與追加項目過濾) */}
-      {/* ========================================================= */}
       <section className="mb-10 animate-fade-in" style={{ animationDelay: '0.15s' }}>
          <h3 className="text-xs font-black tracking-widest uppercase text-white mb-4 border-l-4 border-[#D4AF37] pl-3">
            📊 各項服務大數拆解 (Gross Revenue Breakdown)
@@ -405,7 +408,6 @@ export default function StaffPerformancePage() {
                <div className="col-span-full bg-[#121212] p-6 rounded-2xl border border-dashed border-white/5 text-center text-gray-600 text-xs tracking-widest font-bold">目前尚無分類大數紀錄</div>
             ) : (
                Object.entries(detailedBreakdown || {})
-                 // 🚀 核心修改：依照 Chaco 指定的字母與數字順序強制排序
                  .sort((a, b) => {
                    const indexA = PREFERRED_ORDER.indexOf(a[0]);
                    const indexB = PREFERRED_ORDER.indexOf(b[0]);
@@ -497,7 +499,6 @@ export default function StaffPerformancePage() {
                           </span>
                           <div className="flex gap-2 items-center mt-0.5">
                             {tx.type === 'assistant_bonus' && <span className="text-[9px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded border border-green-500/30 uppercase">助手獎金</span>}
-                            {/* 🌟 若該筆交易觸發了階梯抽成，加上特效標記 */}
                             {tx.isAppliedBonus && <span className="text-[9px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-500/30 uppercase font-bold animate-pulse"><i className="fa-solid fa-bolt-lightning mr-1"></i>階梯達標加成</span>}
                             {tx.computedCode === 'SCALP' && <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/30 uppercase font-mono">套票 {dynamicTierStats.finalScalpPct}%</span>}
                             {tx.computedCode === 'SCALP_PROD' && <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded border border-teal-500/30 uppercase font-mono">產品 {dynamicTierStats.finalProdPct}%</span>}
