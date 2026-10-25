@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, query, doc, getDoc, where, updateDoc, arrayUnion, addDoc, deleteDoc } from 'firebase/firestore'; 
+import { collection, getDocs, query, doc, getDoc, where, updateDoc, arrayUnion, addDoc, deleteDoc, runTransaction } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
-// 🚀 引入核心財務計算引擎，確保前後台計算邏輯 100% 同步
 import { calculateStaffCommissions } from '@/lib/finance'; 
 
 export default function FinancePage() {
@@ -69,43 +68,124 @@ export default function FinancePage() {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
 
+  // 🚀 核心升級：智能退單機制 (自動退款/退次數)
   const handleDeleteTransaction = async (tx) => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 僅限 Admin 刪除單據！");
     
     const itemName = tx.service || tx.packageName || (tx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
     const itemAmount = tx.amount || tx.bonusAmount || tx.amountPaidHKD || tx.tDollarAdded || 0;
     
-    if (!window.confirm(`⚠️ 警告：您確定要永久刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '無/未指定'}\n\n❗ 刪除後將無法恢復，且系統會將此操作寫入安全日誌。`)) {
+    if (!window.confirm(`⚠️ 警告：您確定要作廢並刪除此單據嗎？\n\n項目：${itemName}\n金額：$${itemAmount}\n設計師：${tx.stylist || '無/未指定'}\n\n❗ 系統將自動嘗試「退回 / 扣回」該客人的錢包餘額與套票次數。`)) {
       return;
     }
 
-    const toastId = toast.loading("正在刪除單據並寫入安全日誌...");
+    const toastId = toast.loading("正在刪除單據並回滾資產...");
     try {
-      await addDoc(collection(db, 'audit_logs'), {
-        module: 'finance_transactions',
-        action: 'delete_transaction',
-        transactionId: tx.id,
-        customerPhone: tx.phoneNumber || '未提供',
-        branch: tx.branch || '未指定',
-        timestamp: new Date().toISOString(),
-        adminName: currentUserName || 'Admin',
-        changes: {
-          deletedAt: new Date().toISOString(),
-          deletedBy: currentUserName || 'Admin',
-          amount: itemAmount,
-          service: itemName,
-          stylist: tx.stylist || '無',
-          originalTimestamp: tx.timestamp
-        }
-      });
+      // 1. 確保拿到正確的 userId (相容舊單據與跨店)
+      let targetUserId = tx.userId;
+      if (!targetUserId && tx.phoneNumber && tx.phoneNumber !== 'Walk-in (無提供電話)') {
+          const phonesToTry = [tx.phoneNumber, tx.phoneNumber.replace('+852', ''), `+852${tx.phoneNumber.replace('+852', '')}`];
+          for (const p of phonesToTry) {
+              const q = query(collection(db, 'users'), where('phoneNumber', '==', p));
+              const snap = await getDocs(q);
+              if (!snap.empty) {
+                  targetUserId = snap.docs[0].id;
+                  break;
+              }
+          }
+      }
 
-      await deleteDoc(doc(db, 'transactions', tx.id));
+      let assetRefunded = false;
+
+      await runTransaction(db, async (transaction) => {
+         let userRef = null;
+         let userData = null;
+
+         if (targetUserId) {
+             userRef = doc(db, 'users', targetUserId);
+             const userDoc = await transaction.get(userRef);
+             if (userDoc.exists()) {
+                 userData = userDoc.data();
+             }
+         }
+
+         if (userRef && userData) {
+             let newTDollar = Number(userData.tDollarBalance || 0);
+             let newPoints = Number(userData.points || 0);
+             let newPkgs = { ...(userData.packageBalances || {}) };
+             let changed = false;
+
+             // 根據交易類型進行反向操作 (Reversal)
+             if (tx.type === 'deduct') {
+                 newTDollar += Number(tx.amount || 0);
+                 changed = true;
+             } else if (tx.type === 'deduct_points') {
+                 newPoints += Number(tx.pointsDeducted || 0);
+                 changed = true;
+             } else if (tx.type === 'deduct_package') {
+                 const pkgName = tx.packageName;
+                 if (pkgName) {
+                     newPkgs[pkgName] = (newPkgs[pkgName] || 0) + Number(tx.deductedGrids || 0);
+                     changed = true;
+                 }
+             } else if (tx.type === 'topup') {
+                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
+                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
+                 changed = true;
+             } else if (tx.type === 'buy_package') {
+                 const pkgName = tx.packageName;
+                 if (pkgName) {
+                     newPkgs[pkgName] = Math.max(0, (newPkgs[pkgName] || 0) - Number(tx.gridsAdded || 0));
+                     changed = true;
+                 }
+             }
+
+             if (changed) {
+                 transaction.update(userRef, {
+                     tDollarBalance: newTDollar,
+                     points: newPoints,
+                     packageBalances: newPkgs
+                 });
+                 assetRefunded = true;
+             }
+         }
+
+         // 2. 寫入 Audit Log，動作改為 delete_transaction_and_revert
+         const auditRef = doc(collection(db, 'audit_logs'));
+         transaction.set(auditRef, {
+           module: 'finance_transactions',
+           action: 'delete_transaction_and_revert',
+           transactionId: tx.id,
+           customerPhone: tx.phoneNumber || '未提供',
+           branch: tx.branch || '未指定',
+           timestamp: new Date().toISOString(),
+           adminName: currentUserName || 'Admin',
+           changes: {
+             deletedAt: new Date().toISOString(),
+             deletedBy: currentUserName || 'Admin',
+             amount: itemAmount,
+             service: itemName,
+             stylist: tx.stylist || '無',
+             originalTimestamp: tx.timestamp,
+             reverted: assetRefunded
+           }
+         });
+
+         // 3. 刪除原單據
+         const txRef = doc(db, 'transactions', tx.id);
+         transaction.delete(txRef);
+      });
       
-      toast.success("✅ 單據已永久刪除！", { id: toastId });
+      if (assetRefunded) {
+          toast.success("✅ 單據已作廢，客戶錢包餘額/次數已成功退回！", { id: toastId });
+      } else {
+          toast.success("✅ 單據已刪除 (此筆為現金結帳或無餘額可退)", { id: toastId });
+      }
+      
       fetchFinancialData(); 
     } catch (error) {
       console.error(error);
-      toast.error("刪除失敗，請檢查權限或網路", { id: toastId });
+      toast.error(`作廢失敗：${error.message}`, { id: toastId });
     }
   };
 
@@ -150,7 +230,7 @@ export default function FinancePage() {
          updatePayload.packageName = editingTx.packageName;
       } else if (editingTx.type === 'topup') {
          updatePayload.amountPaidHKD = newAmount;
-         updatePayload.tDollarAdded = newAmount; 
+         updatePayload.tDollarAdded = newAmount; // 假設增值修改比例為 1:1
       } else {
          updatePayload.amount = newAmount;
          if (editingTx.packageName !== undefined) {
@@ -287,7 +367,6 @@ export default function FinancePage() {
     let crossBranchIn = 0; let crossBranchOut = 0; 
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
-    // 🟢 現金流與跨店統計
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
         cashIn += Number(tx.amountPaidHKD || 0);
@@ -325,7 +404,6 @@ export default function FinancePage() {
         });
     }
 
-    // 🚀 核心修復：全面套用 calculateStaffCommissions 統一財務引擎
     const serviceMap = {};
     servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
     packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
@@ -350,7 +428,6 @@ export default function FinancePage() {
         const staffTxs = txByStylist[stylistName] || [];
         const staffProfile = staffConfig.find(s => s.name === stylistName) || { commissions: {}, templateName: '無資料 (未綁定)' };
 
-        // 呼叫統一引擎進行計算
         const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
 
         stylistAggregator[stylistName] = {
@@ -367,7 +444,6 @@ export default function FinancePage() {
                 commCode: tx.computedCode || 'N/A',
                 revenue: Math.round(Number(tx.amount || 0)),
                 commission: Math.round(tx.computedCommission || 0),
-                // 標記引擎回傳的階梯狀態
                 formulaStr: tx.type === 'assistant_bonus' ? '店家發放定額獎金' : (tx.isAppliedBonus ? '⚡ 階梯達標高抽成' : (tx.computedCode === 'SCALP' ? '套票比例' : '一般抽成')),
                 branch: tx.branch || '未知門店'
             }))
@@ -827,9 +903,9 @@ export default function FinancePage() {
                                   <button 
                                     onClick={() => handleDeleteTransaction(tx)}
                                     className="flex-1 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-2 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1"
-                                    title="永久刪除"
+                                    title="永久刪除並回滾"
                                   >
-                                    <i className="fa-solid fa-trash-can"></i> 刪
+                                    <i className="fa-solid fa-trash-can"></i> 刪除/退單
                                   </button>
                                 </div>
                               
@@ -1014,6 +1090,7 @@ export default function FinancePage() {
                     ) : (
                       servicesData.map(s => <option key={s.id} value={s.name}>{s.name}</option>)
                     )}
+                    {/* 保留舊項目名稱防呆 */}
                     {!servicesData.find(s => s.name === editingTx.service) && !packagesData.find(p => p.name === editingTx.packageName) && (
                       <option value={editingTx.service || editingTx.packageName}>{editingTx.service || editingTx.packageName}</option>
                     )}
