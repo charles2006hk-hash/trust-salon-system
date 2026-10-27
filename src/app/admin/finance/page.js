@@ -34,7 +34,6 @@ export default function FinancePage() {
   const [usersData, setUsersData] = useState([]); 
 
   const [staffConfig, setStaffConfig] = useState([]);
-  const [outstandingTDollar, setOutstandingTDollar] = useState(0); 
   
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
@@ -47,7 +46,8 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, tDollarDeducted: 0 });
+  // 🟢 修正：加入 branchOutstandingTDollar 狀態
+  const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, branchOutstandingTDollar: 0, tDollarDeducted: 0 });
   const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
   
   const [stylistRanking, setStylistRanking] = useState([]);
@@ -68,7 +68,6 @@ export default function FinancePage() {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
 
-  // 🚀 權限升級：允許 admin 與 manager 刪除/作廢單據
   const handleDeleteTransaction = async (tx) => {
     if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理刪除單據！");
     
@@ -156,7 +155,7 @@ export default function FinancePage() {
            customerPhone: tx.phoneNumber || '未提供',
            branch: tx.branch || '未指定',
            timestamp: new Date().toISOString(),
-           adminName: currentUserName || 'Manager', // 紀錄操作者名字
+           adminName: currentUserName || 'Manager', 
            changes: {
              deletedAt: new Date().toISOString(),
              deletedBy: currentUserName || 'Manager',
@@ -185,7 +184,6 @@ export default function FinancePage() {
     }
   };
 
-  // 🚀 權限升級：允許 admin 與 manager 修改單據
   const handleUpdateTransaction = async (e) => {
     e.preventDefault();
     if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理修改單據！");
@@ -318,12 +316,6 @@ export default function FinancePage() {
       const userList = userSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setUsersData(userList);
 
-      if (currentAdminRole === 'admin' || currentAdminRole === 'manager') {
-         let totalOut = 0;
-         userList.forEach(u => { if (u.tDollarBalance > 0) totalOut += u.tDollarBalance; });
-         setOutstandingTDollar(totalOut);
-      }
-
       const staffSnap = await getDocs(collection(db, 'staff'));
       const staffList = staffSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setStaffConfig(staffList);
@@ -348,11 +340,24 @@ export default function FinancePage() {
 
   const calculateData = () => {
     const userMap = {};
+    // 🚀 核心優化：同步計算所有餘額負債狀態 (避免 React useState 延遲)
+    let totalSystemOutstanding = 0;
+    let currentBranchOutstanding = 0;
+
     usersData.forEach(u => {
        const phone = u.phoneNumber ? u.phoneNumber.replace('+852', '') : '';
        if (phone) {
            userMap[`+852${phone}`] = u;
            userMap[phone] = u;
+       }
+
+       const bal = Number(u.tDollarBalance) || 0;
+       if (bal > 0) {
+           totalSystemOutstanding += bal;
+           // 計算單一分店的獨立會員餘額負債
+           if ((u.branch || 'ALL') === selectedBranch) {
+               currentBranchOutstanding += bal;
+           }
        }
     });
 
@@ -450,11 +455,13 @@ export default function FinancePage() {
         stylists[stylistName] = result.stats.totalRevenue;
     });
 
+    // 🚀 更新狀態，填入最新精算出來的負債餘額
     setMetrics({ 
       totalCashIn: Math.round(cashIn), 
       totalServiceValue: Math.round(serviceValue), 
       totalGivenPoints: Math.round(givenPoints), 
-      outstandingTDollar: selectedBranch === 'ALL' ? Math.round(outstandingTDollar) : 0, 
+      outstandingTDollar: Math.round(totalSystemOutstanding), 
+      branchOutstandingTDollar: Math.round(currentBranchOutstanding),
       tDollarDeducted: Math.round(tDollarDeducted) 
     });
     
@@ -526,7 +533,10 @@ export default function FinancePage() {
       csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
       csvContent += `使用 T-Dollar 扣抵總額,$${metrics.tDollarDeducted}\n`;
       
-      if (selectedBranch !== 'ALL') {
+      if (selectedBranch === 'ALL') {
+          csvContent += `系統全線總未消費餘額 (總負債),$${metrics.outstandingTDollar}\n`;
+      } else {
+          csvContent += `${selectedBranch} 開戶客未消費餘額 (分店負債),$${metrics.branchOutstandingTDollar}\n`;
           csvContent += `(跨店) 他店開戶客來本店消費餘額,$${crossBranchMetrics.crossBranchIn}\n`;
           csvContent += `(跨店) 本店開戶客去他店消費餘額,$${crossBranchMetrics.crossBranchOut}\n`;
       }
@@ -755,15 +765,17 @@ export default function FinancePage() {
                 </div>
               )}
 
-              <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-white/5 opacity-50'}`}>
+              {/* 🟢 修正：動態顯示「系統總未消費餘額」或「單店未消費餘額」 */}
+              <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-blue-500/20'}`}>
                  {selectedBranch === 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>}
+                 {selectedBranch !== 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-[100px] -z-10"></div>}
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  系統總未消費餘額 <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
+                  {selectedBranch === 'ALL' ? '系統全線總未消費餘額' : `${selectedBranch} 開戶客未消費餘額`} <i className="fa-solid fa-circle-info text-gray-600" title="此數字不受月份影響，為全店當下總負債"></i>
                 </p>
                 <p className="text-4xl font-black text-gray-300 tracking-tighter">
-                  {selectedBranch === 'ALL' ? `$${metrics.outstandingTDollar.toLocaleString()}` : '---'}
+                  ${selectedBranch === 'ALL' ? metrics.outstandingTDollar.toLocaleString() : metrics.branchOutstandingTDollar.toLocaleString()}
                 </p>
-                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">請切換至「全線總計」以查看全系統總負債餘額</p>}
+                {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 僅計算歸屬於 {selectedBranch} 的會員剩餘 T-Dollar 總額</p>}
               </div>
             </div>
 
@@ -834,7 +846,6 @@ export default function FinancePage() {
                       <th className="pb-4 font-bold">客戶 (Customer)</th>
                       <th className="pb-4 font-bold">項目 / 髮型師</th>
                       <th className="pb-4 font-bold text-right min-w-[100px]">變動金額</th>
-                      {/* 🚀 權限升級：允許 admin 與 manager 看到操作按鈕 */}
                       {['admin', 'manager'].includes(currentAdminRole) && <th className="pb-4 font-bold text-center">操作</th>}
                     </tr>
                   </thead>
@@ -884,7 +895,6 @@ export default function FinancePage() {
                           {tx.type === 'topup' ? '+' : tx.type === 'buy_package' ? '+' : tx.type === 'member_cash' ? '+' : tx.type === 'walkin_cash' ? '+' : tx.type === 'assistant_bonus' ? '+' : '-'}${tx.type === 'topup' ? (tx.tDollarAdded || 0) : tx.type === 'buy_package' ? (tx.amountPaidHKD || 0) : tx.type === 'assistant_bonus' ? (tx.bonusAmount || 0) : (tx.amount || 0)}
                         </td>
                         
-                        {/* 🚀 權限升級：允許 admin 與 manager 進行操作 */}
                         {['admin', 'manager'].includes(currentAdminRole) && (
                           <td className="py-4 text-center">
                             <div className="flex flex-col items-center gap-1.5">
