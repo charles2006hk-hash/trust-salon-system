@@ -34,6 +34,7 @@ export default function FinancePage() {
   const [usersData, setUsersData] = useState([]); 
 
   const [staffConfig, setStaffConfig] = useState([]);
+  const [outstandingTDollar, setOutstandingTDollar] = useState(0); 
   
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
@@ -46,7 +47,6 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  // 🟢 修正：加入 branchOutstandingTDollar 狀態
   const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, branchOutstandingTDollar: 0, tDollarDeducted: 0 });
   const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
   
@@ -68,6 +68,7 @@ export default function FinancePage() {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
 
+  // 🚀 核心升級：涵蓋所有購買途徑的智能退單機制 (自動退款/退次數)
   const handleDeleteTransaction = async (tx) => {
     if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理刪除單據！");
     
@@ -113,26 +114,39 @@ export default function FinancePage() {
              let newPkgs = { ...(userData.packageBalances || {}) };
              let changed = false;
 
+             // 1. 處理 T-Dollar / Points 餘額回滾
              if (tx.type === 'deduct') {
                  newTDollar += Number(tx.amount || 0);
                  changed = true;
              } else if (tx.type === 'deduct_points') {
                  newPoints += Number(tx.pointsDeducted || 0);
                  changed = true;
-             } else if (tx.type === 'deduct_package') {
+             } else if (tx.type === 'topup') {
+                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
+                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
+                 changed = true;
+             }
+
+             // 2. 處理套票次數回滾
+             if (tx.type === 'deduct_package') {
+                 // 退回客人的套票扣次
                  const pkgName = tx.packageName;
                  if (pkgName) {
                      newPkgs[pkgName] = (newPkgs[pkgName] || 0) + Number(tx.deductedGrids || 0);
                      changed = true;
                  }
-             } else if (tx.type === 'topup') {
-                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
-                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
-                 changed = true;
              } else if (tx.type === 'buy_package') {
+                 // 扣回客人在 TopUp Modal 買的套票
                  const pkgName = tx.packageName;
                  if (pkgName) {
                      newPkgs[pkgName] = Math.max(0, (newPkgs[pkgName] || 0) - Number(tx.gridsAdded || 0));
+                     changed = true;
+                 }
+             } else if (['deduct', 'member_cash', 'walkin_cash'].includes(tx.type)) {
+                 // 🚨 核心修復：如果是在 POS 購物車直接結帳購買的套票，需手動找尋關聯的套票資料並扣回次數
+                 const boughtPkg = packagesData.find(p => p.name === tx.service);
+                 if (boughtPkg) {
+                     newPkgs[tx.service] = Math.max(0, (newPkgs[tx.service] || 0) - Number(boughtPkg.quantity || 0));
                      changed = true;
                  }
              }
@@ -172,9 +186,9 @@ export default function FinancePage() {
       });
       
       if (assetRefunded) {
-          toast.success("✅ 單據已作廢，客戶錢包餘額/次數已成功退回！", { id: toastId });
+          toast.success("✅ 單據已作廢，客戶錢包餘額/套票次數已成功退回！", { id: toastId });
       } else {
-          toast.success("✅ 單據已刪除 (此筆為現金結帳或無餘額可退)", { id: toastId });
+          toast.success("✅ 單據已刪除 (此筆為現金結帳或無餘額/次數可退)", { id: toastId });
       }
       
       fetchFinancialData(); 
@@ -340,7 +354,6 @@ export default function FinancePage() {
 
   const calculateData = () => {
     const userMap = {};
-    // 🚀 核心優化：同步計算所有餘額負債狀態 (避免 React useState 延遲)
     let totalSystemOutstanding = 0;
     let currentBranchOutstanding = 0;
 
@@ -354,7 +367,6 @@ export default function FinancePage() {
        const bal = Number(u.tDollarBalance) || 0;
        if (bal > 0) {
            totalSystemOutstanding += bal;
-           // 計算單一分店的獨立會員餘額負債
            if ((u.branch || 'ALL') === selectedBranch) {
                currentBranchOutstanding += bal;
            }
@@ -455,7 +467,6 @@ export default function FinancePage() {
         stylists[stylistName] = result.stats.totalRevenue;
     });
 
-    // 🚀 更新狀態，填入最新精算出來的負債餘額
     setMetrics({ 
       totalCashIn: Math.round(cashIn), 
       totalServiceValue: Math.round(serviceValue), 
@@ -765,7 +776,6 @@ export default function FinancePage() {
                 </div>
               )}
 
-              {/* 🟢 修正：動態顯示「系統總未消費餘額」或「單店未消費餘額」 */}
               <div className={`bg-[#1a1a1a] p-8 rounded-[32px] border relative overflow-hidden ${selectedBranch === 'ALL' ? 'border-red-500/20' : 'border-blue-500/20'}`}>
                  {selectedBranch === 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10"></div>}
                  {selectedBranch !== 'ALL' && <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-[100px] -z-10"></div>}
