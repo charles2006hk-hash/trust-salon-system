@@ -34,7 +34,6 @@ export default function FinancePage() {
   const [usersData, setUsersData] = useState([]); 
 
   const [staffConfig, setStaffConfig] = useState([]);
-  const [outstandingTDollar, setOutstandingTDollar] = useState(0); 
   
   const [servicesData, setServicesData] = useState([]); 
   const [packagesData, setPackagesData] = useState([]); 
@@ -68,7 +67,6 @@ export default function FinancePage() {
     setCurrentPage(1);
   }, [selectedBranch, filterType, selectedMonth, selectedDate]);
 
-  // 🚀 核心升級：涵蓋所有購買途徑的智能退單機制 (自動退款/退次數)
   const handleDeleteTransaction = async (tx) => {
     if (!['admin', 'manager'].includes(currentAdminRole)) return toast.error("⛔ 僅限老闆或經理刪除單據！");
     
@@ -114,36 +112,29 @@ export default function FinancePage() {
              let newPkgs = { ...(userData.packageBalances || {}) };
              let changed = false;
 
-             // 1. 處理 T-Dollar / Points 餘額回滾
              if (tx.type === 'deduct') {
                  newTDollar += Number(tx.amount || 0);
                  changed = true;
              } else if (tx.type === 'deduct_points') {
                  newPoints += Number(tx.pointsDeducted || 0);
                  changed = true;
-             } else if (tx.type === 'topup') {
-                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
-                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
-                 changed = true;
-             }
-
-             // 2. 處理套票次數回滾
-             if (tx.type === 'deduct_package') {
-                 // 退回客人的套票扣次
+             } else if (tx.type === 'deduct_package') {
                  const pkgName = tx.packageName;
                  if (pkgName) {
                      newPkgs[pkgName] = (newPkgs[pkgName] || 0) + Number(tx.deductedGrids || 0);
                      changed = true;
                  }
+             } else if (tx.type === 'topup') {
+                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
+                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
+                 changed = true;
              } else if (tx.type === 'buy_package') {
-                 // 扣回客人在 TopUp Modal 買的套票
                  const pkgName = tx.packageName;
                  if (pkgName) {
                      newPkgs[pkgName] = Math.max(0, (newPkgs[pkgName] || 0) - Number(tx.gridsAdded || 0));
                      changed = true;
                  }
              } else if (['deduct', 'member_cash', 'walkin_cash'].includes(tx.type)) {
-                 // 🚨 核心修復：如果是在 POS 購物車直接結帳購買的套票，需手動找尋關聯的套票資料並扣回次數
                  const boughtPkg = packagesData.find(p => p.name === tx.service);
                  if (boughtPkg) {
                      newPkgs[tx.service] = Math.max(0, (newPkgs[tx.service] || 0) - Number(boughtPkg.quantity || 0));
@@ -186,9 +177,9 @@ export default function FinancePage() {
       });
       
       if (assetRefunded) {
-          toast.success("✅ 單據已作廢，客戶錢包餘額/套票次數已成功退回！", { id: toastId });
+          toast.success("✅ 單據已作廢，客戶錢包餘額/次數已成功退回！", { id: toastId });
       } else {
-          toast.success("✅ 單據已刪除 (此筆為現金結帳或無餘額/次數可退)", { id: toastId });
+          toast.success("✅ 單據已刪除 (此筆為現金結帳或無餘額可退)", { id: toastId });
       }
       
       fetchFinancialData(); 
@@ -422,12 +413,20 @@ export default function FinancePage() {
     servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
     packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
 
-    const txByStylist = {};
+    // 🚀 核心升級：跨店髮型師業績分離邏輯
+    const txByStylistAndBranch = {};
+    
     filteredTx.forEach(tx => {
        if (['deduct', 'walkin_cash', 'member_cash', 'deduct_package', 'assistant_bonus'].includes(tx.type)) {
            const sName = tx.stylist || '未指定';
-           if (!txByStylist[sName]) txByStylist[sName] = [];
-           txByStylist[sName].push(tx);
+           
+           // 如果目前是「全線總計」，則把名字加上門店後綴進行獨立分群計算
+           const aggKey = selectedBranch === 'ALL' ? `${sName} (${tx.branch || '未知門店'})` : sName;
+
+           if (!txByStylistAndBranch[aggKey]) {
+               txByStylistAndBranch[aggKey] = { originalName: sName, txs: [] };
+           }
+           txByStylistAndBranch[aggKey].txs.push(tx);
 
            if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
                const srvName = tx.service || '一般服務';
@@ -436,16 +435,24 @@ export default function FinancePage() {
        }
     });
 
-    const allStylistNames = new Set([...Object.keys(txByStylist), ...staffConfig.map(s => s.name)]);
+    const allAggKeys = new Set(Object.keys(txByStylistAndBranch));
+    // 補齊沒業績的設計師以供顯示
+    staffConfig.forEach(s => {
+        if (selectedBranch !== 'ALL' && (s.branch === selectedBranch || s.branch === 'ALL')) {
+            allAggKeys.add(s.name);
+        }
+    });
 
-    allStylistNames.forEach(stylistName => {
-        const staffTxs = txByStylist[stylistName] || [];
-        const staffProfile = staffConfig.find(s => s.name === stylistName) || { commissions: {}, templateName: '無資料 (未綁定)' };
+    allAggKeys.forEach(aggKey => {
+        const txData = txByStylistAndBranch[aggKey];
+        const staffName = txData ? txData.originalName : aggKey;
+        const staffTxs = txData ? txData.txs : [];
+        const staffProfile = staffConfig.find(s => s.name === staffName) || { commissions: {}, templateName: '無資料 (未綁定)' };
 
         const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
 
-        stylistAggregator[stylistName] = {
-            name: stylistName,
+        stylistAggregator[aggKey] = {
+            name: aggKey, // 顯示如 "Chaco (大埔店)"
             grade: staffProfile.templateName || '自訂比例',
             totalRevenue: result.stats.totalRevenue,
             totalCommission: result.stats.totalCommission,
@@ -464,7 +471,7 @@ export default function FinancePage() {
         };
 
         serviceValue += result.stats.totalRevenue;
-        stylists[stylistName] = result.stats.totalRevenue;
+        stylists[aggKey] = result.stats.totalRevenue;
     });
 
     setMetrics({ 
@@ -488,7 +495,7 @@ export default function FinancePage() {
       ...s,
       totalRevenue: Math.round(s.totalRevenue),
       totalCommission: Math.round(s.totalCommission)
-    })).filter(s => s.clientCount > 0 || s.name === currentUserName).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    })).filter(s => s.clientCount > 0 || (s.name.includes(currentUserName) && selectedBranch !== 'ALL')).sort((a, b) => b.totalRevenue - a.totalRevenue);
     
     setPayrollReport(report);
   };
@@ -607,7 +614,8 @@ export default function FinancePage() {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">報表生成中...</div>;
 
   const isManagement = ['admin', 'manager'].includes(currentAdminRole);
-  const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name === currentUserName);
+  // 如果是員工模式，只顯示包含自己名字的列 (例如 "Chaco (大埔店)" 和 "Chaco (樂富店)")
+  const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name.includes(currentUserName));
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
   const filteredAndSortedTx = transactions
