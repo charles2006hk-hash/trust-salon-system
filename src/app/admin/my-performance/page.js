@@ -18,6 +18,10 @@ export default function StaffPerformancePage() {
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7)); 
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));  
   
+  // 🚀 新增：前台門店篩選狀態
+  const [branches, setBranches] = useState([]);
+  const [selectedBranch, setSelectedBranch] = useState('ALL');
+
   const [serviceMapContext, setServiceMapContext] = useState({}); 
   const [targetStaff, setTargetStaff] = useState('');
   const [staffList, setStaffList] = useState([]);
@@ -82,9 +86,10 @@ export default function StaffPerformancePage() {
 
   useEffect(() => {
     if (currentUser && targetStaff && Object.keys(serviceMapContext).length > 0) {
-      fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate);
+      // 🚀 將 selectedBranch 傳入計算引擎
+      fetchMyTransactions(targetStaff, serviceMapContext, filterType, selectedMonth, selectedDate, selectedBranch);
     }
-  }, [filterType, selectedMonth, selectedDate, targetStaff, serviceMapContext]);
+  }, [filterType, selectedMonth, selectedDate, targetStaff, serviceMapContext, selectedBranch]);
 
   const initData = async () => {
     try {
@@ -95,11 +100,15 @@ export default function StaffPerformancePage() {
       }
       setGlobalLabels(labels);
 
-      const [svSnap, pkSnap] = await Promise.all([
+      // 同時拉取門店清單供前端篩選
+      const [svSnap, pkSnap, bSnap] = await Promise.all([
           getDocs(collection(db, 'services')),
-          getDocs(collection(db, 'packages'))
+          getDocs(collection(db, 'packages')),
+          getDocs(collection(db, 'branches'))
       ]);
       
+      setBranches(bSnap.docs.map(d => d.data().name));
+
       const serviceMap = {};
       svSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'W1' });
       pkSnap.docs.forEach(d => { serviceMap[d.data().name] = d.data().commissionCode || 'SCALP' });
@@ -112,12 +121,11 @@ export default function StaffPerformancePage() {
     }
   };
 
-  const fetchMyTransactions = async (staffName, serviceMap, currentFilterType, monthStr, dateStr) => {
+  const fetchMyTransactions = async (staffName, serviceMap, currentFilterType, monthStr, dateStr, branchFilter) => {
     setLoading(true);
     try {
       if (!staffName) return;
       
-      // 🚀 核心優化：加入資料庫層級的日期區間過濾，徹底解決讀取量爆炸的問題
       let startTime, endTime;
       if (currentFilterType === 'month') {
         startTime = `${monthStr}-01T00:00:00`;
@@ -127,7 +135,6 @@ export default function StaffPerformancePage() {
         endTime = `${dateStr}T23:59:59`;
       }
 
-      // 僅向資料庫要求該日期區間的資料
       const q = query(
         collection(db, 'transactions'), 
         where("timestamp", ">=", startTime),
@@ -141,12 +148,14 @@ export default function StaffPerformancePage() {
       snap.forEach(d => {
         const tx = d.data();
         
-        // 在前端過濾我們需要的交易類型 (避免複合索引出錯)
         if (!validTypes.includes(tx.type)) return;
 
         const stylistArray = tx.stylist ? tx.stylist.split(',').map(s => s.trim()) : [];
         if (stylistArray.includes(staffName)) {
-           targetTxs.push({ id: d.id, ...tx });
+           // 🚀 核心升級：加入前台門店篩選邏輯，自動過濾跨店業績
+           if (branchFilter === 'ALL' || tx.branch === branchFilter || (!tx.branch && branchFilter === 'ALL')) {
+               targetTxs.push({ id: d.id, ...tx });
+           }
         }
       });
 
@@ -241,6 +250,21 @@ export default function StaffPerformancePage() {
         </div>
         
         <div className="flex flex-col lg:flex-row items-start lg:items-center gap-3">
+          
+          {/* 🚀 新增：門店篩選器 (給髮型師自己切換看單店業績) */}
+          <div className="relative bg-[#121212] border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-[#D4AF37]/50 transition-colors focus-within:border-[#D4AF37]">
+            <i className="fa-solid fa-store text-[#D4AF37] pointer-events-none text-xs"></i>
+            <select 
+               value={selectedBranch} 
+               onChange={(e) => setSelectedBranch(e.target.value)} 
+               className="bg-transparent text-white font-bold outline-none cursor-pointer text-sm appearance-none pr-4 w-28"
+            >
+               <option value="ALL">🌐 全線總計</option>
+               {branches.map(b => <option key={b} value={b} className="bg-[#121212]">{b}</option>)}
+            </select>
+            <i className="fa-solid fa-chevron-down text-[#D4AF37]/50 absolute right-3 pointer-events-none text-[10px]"></i>
+          </div>
+
           {isAdmin && staffList.length > 0 && (
             <div className="relative bg-gradient-to-r from-blue-900/20 to-black border border-blue-500/30 px-4 py-2 rounded-xl flex items-center gap-3 shadow-inner hover:border-blue-500 transition-colors focus-within:border-blue-500">
               <span className="text-[10px] text-blue-400 font-bold uppercase tracking-widest pointer-events-none">切換員工</span>
@@ -258,13 +282,13 @@ export default function StaffPerformancePage() {
           <div className="flex bg-[#121212] p-1 rounded-xl border border-white/10 shadow-inner">
             <button 
               onClick={() => setFilterType('day')}
-              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'day' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'day' ? 'bg-[#D4AF37] text-black shadow-md' : 'text-gray-400 hover:text-white'}`}
             >
               日統計
             </button>
             <button 
               onClick={() => setFilterType('month')}
-              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'month' ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+              className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-colors ${filterType === 'month' ? 'bg-[#D4AF37] text-black shadow-md' : 'text-gray-400 hover:text-white'}`}
             >
               月統計
             </button>
@@ -518,7 +542,7 @@ export default function StaffPerformancePage() {
                 {(myTransactions || []).length === 0 && !loading && (
                   <tr>
                     <td colSpan="5" className="p-20 text-center text-gray-600 font-bold tracking-widest border border-dashed border-white/5">
-                      📭 {targetStaff} 在 {displayDateStr} 尚無結帳服務紀錄。
+                      📭 {targetStaff} 在 {displayDateStr} {selectedBranch !== 'ALL' ? `(${selectedBranch}) ` : ''}尚無結帳服務紀錄。
                     </td>
                   </tr>
                 )}
