@@ -100,7 +100,6 @@ export default function SmartPOS() {
       catch (e) { return { docs: [] }; }
     };
 
-    // 🚀 核心優化：移除對 users 大表的無謂查詢，徹底解決 Quota Exceeded 問題
     const [sSnap, svSnap, tSnap, pSnap, setSnap, bSnap, cSnap] = await Promise.all([
       safeGet('staff'), safeGet('services'), safeGet('tiers'), safeGet('packages'), safeGet('settings'), safeGet('branches'), safeGet('categories')
     ]);
@@ -111,8 +110,22 @@ export default function SmartPOS() {
       setShowBranchModal(true);
     }
 
-    // 只依賴輕量級的 staff collection 來呈現設計師名單
-    setRawStaff(sSnap.docs.map(d => d.data())); 
+    // 🚀 核心升級：抓取 users 表中「已停用」的員工名單 (低消耗查詢，只抓員工)
+    let suspendedNames = [];
+    try {
+        const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
+        const staffUserSnap = await getDocs(staffQ);
+        suspendedNames = staffUserSnap.docs
+            .map(d => d.data())
+            .filter(u => u.status === 'suspended' && u.name)
+            .map(u => u.name);
+    } catch (e) { 
+        console.error(e); 
+    }
+
+    // 過濾掉被停用的員工，使其不在前台顯示，但保留過去歷史紀錄的完整性
+    const activeStaff = sSnap.docs.map(d => d.data()).filter(s => !suspendedNames.includes(s.name));
+    setRawStaff(activeStaff);
 
     const svData = svSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     const pkData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
