@@ -7,10 +7,8 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
-// ★ 定義 UI 強制排序規則
 const PREFERRED_ORDER = ['R1', 'R2', 'R3', 'R4', 'R5', 'W1', 'W2', 'W3', 'W4', 'W5', 'P1', 'P2', 'P3', 'P4', 'P5', 'SCALP', 'SCALP_PROD'];
 
-// 🚀 修復：移除 export，遵守 Next.js App Router 規範，避免路由崩潰
 const getSortedCodes = (labelsObj) => {
   const keys = Object.keys(labelsObj || {});
   return keys.sort((a, b) => {
@@ -21,7 +19,6 @@ const getSortedCodes = (labelsObj) => {
     if (indexA !== -1) return -1;
     if (indexB !== -1) return 1;
 
-    // 自訂標籤排序邏輯：R 優先，W 其次，最後 P
     if (a.startsWith('R') && !b.startsWith('R')) return -1;
     if (!a.startsWith('R') && b.startsWith('R')) return 1;
     if (a.startsWith('W') && !b.startsWith('W')) return -1;
@@ -86,7 +83,6 @@ export default function AdminManagePage() {
     expiry: '', points: '', icon: '', tag: '', threshold: '', discount: '', 
     quantity: '', upgradeBonus: '', giftPackageName: '', validityDays: 365,
     commissionCode: 'W1', templateId: '', templateName: '', 
-    // 🚀 深拷貝保護，防止物件參照污染
     commissions: JSON.parse(JSON.stringify({ ...defaultCommissions, bonusTier: { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions } })), 
     branch: '', phoneNumber: '+852', commissionLabels: defaultLabels,
     sortWeight: 0, isAssistant: false
@@ -290,9 +286,8 @@ export default function AdminManagePage() {
       let dataToSave = { ...formData };
       const dynamicValidCodes = Object.keys(globalLabels);
       
-      if (activeTab === 'packages') {
-        dataToSave.commissionCode = 'SCALP';
-      } else if (activeTab === 'services') {
+      // 🚀 解除強制將套票綁定為 SCALP 的限制，允許套票自由選擇拆帳類別
+      if (['services', 'packages'].includes(activeTab)) {
         if (!dynamicValidCodes.includes(dataToSave.commissionCode)) {
            dataToSave.commissionCode = 'W1'; 
         }
@@ -315,7 +310,10 @@ export default function AdminManagePage() {
           toast.success("新增成功！");
         }
       }
-      setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); 
+      
+      // 預設值保持有彈性，不再強制鎖定 SCALP
+      setFormData({...initialForm, commissionCode: 'W1'}); 
+      
       setEditingId(null); setIsCustomStaff(false); fetchData();
       if (activeTab === 'categories') fetchCategories();
       if (activeTab === 'templates') fetchTemplates();
@@ -350,10 +348,9 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
+    // 修改編輯時的預設類別行為
     let safeCode = item.commissionCode;
-    if (activeTab === 'packages') safeCode = 'SCALP';
     
-    // 🚀 修復：深拷貝 item.commissions 避免修改到原始物件
     const initCommissions = item.commissions ? JSON.parse(JSON.stringify(item.commissions)) : JSON.parse(JSON.stringify(defaultCommissions));
     if (!initCommissions.bonusTier) {
       initCommissions.bonusTier = { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: JSON.parse(JSON.stringify(defaultCommissions)) };
@@ -362,7 +359,7 @@ export default function AdminManagePage() {
     setFormData({ 
       ...initialForm, 
       ...item, 
-      commissionCode: safeCode || (activeTab === 'packages' ? 'SCALP' : 'W1'),
+      commissionCode: safeCode || 'W1', // 如果沒有設定，預設 W1
       commissions: initCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0,
@@ -377,7 +374,7 @@ export default function AdminManagePage() {
     if (['staff', 'settings', 'templates', 'branches'].includes(activeTab) && currentUserRole !== 'admin') return toast.error("權限不足：僅老闆可刪除此設定");
     if (!window.confirm("確定刪除？")) return;
     await deleteDoc(doc(db, activeTab, id)); toast.success("已刪除"); 
-    if (editingId === id) { setEditingId(null); setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); setIsCustomStaff(false); }
+    if (editingId === id) { setEditingId(null); setFormData({...initialForm, commissionCode: 'W1'}); setIsCustomStaff(false); }
     fetchData();
     if (activeTab === 'templates') fetchTemplates();
     if (activeTab === 'branches') fetchBranches();
@@ -386,7 +383,6 @@ export default function AdminManagePage() {
   const applyTemplate = (templateId) => {
     const selectedTemplate = templatesList.find(t => t.id === templateId);
     if (selectedTemplate) {
-      // 確保套用時深拷貝
       const safeComms = JSON.parse(JSON.stringify(selectedTemplate.commissions));
       setFormData({ ...formData, templateId: templateId, templateName: selectedTemplate.name, commissions: safeComms });
       toast.success(`已載入【${selectedTemplate.name}】數值！請務必點擊下方「儲存」按鈕！`);
@@ -604,7 +600,7 @@ export default function AdminManagePage() {
                    <button key={tab.id} onClick={() => { 
                      setActiveTab(tab.id); 
                      setEditingId(null); 
-                     setFormData({...initialForm, commissionCode: tab.id === 'packages' ? 'SCALP' : 'W1'}); 
+                     setFormData({...initialForm, commissionCode: 'W1'}); 
                      setIsCustomStaff(false); 
                    }} 
                      className={`w-full text-left px-4 py-3 rounded-2xl text-sm font-bold transition-all flex items-center gap-3 ${activeTab === tab.id ? 'bg-[#D4AF37] text-black shadow-lg' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
@@ -821,10 +817,12 @@ export default function AdminManagePage() {
                           {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                         </select>
                       </div>
+                      
+                      {/* 🚀 開放套票的拆帳類別下拉選單 */}
                       <div className="space-y-2 col-span-2">
-                        <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別</label>
+                        <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (支援 Color Plan 等所有標籤)</label>
                         <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
-                          {['SCALP'].map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
+                          {getSortedCodes(globalLabels).map(c => <option key={c} value={c}>{globalLabels[c] ? `${c} - ${globalLabels[c]}` : c}</option>)}
                         </select>
                       </div>
                     </>
@@ -935,7 +933,7 @@ export default function AdminManagePage() {
                       {activeTab === 'settings' ? '💾 儲存全局設定' : editingId ? '💾 儲存修改內容' : '➕ 確認新增資料'}
                     </button>
                     {editingId && (
-                      <button type="button" onClick={() => {setEditingId(null); setFormData({...initialForm, commissionCode: activeTab === 'packages' ? 'SCALP' : 'W1'}); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
+                      <button type="button" onClick={() => {setEditingId(null); setFormData({...initialForm, commissionCode: 'W1'}); setIsCustomStaff(false);}} className="px-8 bg-gray-800 text-white font-bold rounded-2xl tracking-widest">取消</button>
                     )}
                   </div>
                 </form>
