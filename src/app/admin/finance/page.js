@@ -46,7 +46,16 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  const [metrics, setMetrics] = useState({ totalCashIn: 0, totalServiceValue: 0, totalGivenPoints: 0, outstandingTDollar: 0, branchOutstandingTDollar: 0, tDollarDeducted: 0 });
+  // 🚀 新增 totalScalpRevenue 狀態
+  const [metrics, setMetrics] = useState({ 
+    totalCashIn: 0, 
+    totalServiceValue: 0, 
+    totalGivenPoints: 0, 
+    outstandingTDollar: 0, 
+    branchOutstandingTDollar: 0, 
+    tDollarDeducted: 0,
+    totalScalpRevenue: 0 
+  });
   const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
   
   const [stylistRanking, setStylistRanking] = useState([]);
@@ -347,6 +356,13 @@ export default function FinancePage() {
     const userMap = {};
     let totalSystemOutstanding = 0;
     let currentBranchOutstanding = 0;
+    
+    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
+    let crossBranchIn = 0; let crossBranchOut = 0; 
+    
+    // 🚀 新增：統計 SCALP 總額
+    let totalScalpRevenue = 0;
+    let stylists = {}; let services = {}; let stylistAggregator = {};
 
     usersData.forEach(u => {
        const phone = u.phoneNumber ? u.phoneNumber.replace('+852', '') : '';
@@ -367,10 +383,6 @@ export default function FinancePage() {
     const filteredTx = transactions.filter(tx => {
       return selectedBranch === 'ALL' || tx.branch === selectedBranch || (!tx.branch && selectedBranch === 'ALL');
     });
-    
-    let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
-    let crossBranchIn = 0; let crossBranchOut = 0; 
-    let stylists = {}; let services = {}; let stylistAggregator = {};
 
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
@@ -413,14 +425,11 @@ export default function FinancePage() {
     servicesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'W1' });
     packagesData.forEach(d => { serviceMap[d.name] = d.commissionCode || 'SCALP' });
 
-    // 🚀 核心升級：跨店髮型師業績分離邏輯
     const txByStylistAndBranch = {};
     
     filteredTx.forEach(tx => {
        if (['deduct', 'walkin_cash', 'member_cash', 'deduct_package', 'assistant_bonus'].includes(tx.type)) {
            const sName = tx.stylist || '未指定';
-           
-           // 如果目前是「全線總計」，則把名字加上門店後綴進行獨立分群計算
            const aggKey = selectedBranch === 'ALL' ? `${sName} (${tx.branch || '未知門店'})` : sName;
 
            if (!txByStylistAndBranch[aggKey]) {
@@ -436,7 +445,6 @@ export default function FinancePage() {
     });
 
     const allAggKeys = new Set(Object.keys(txByStylistAndBranch));
-    // 補齊沒業績的設計師以供顯示
     staffConfig.forEach(s => {
         if (selectedBranch !== 'ALL' && (s.branch === selectedBranch || s.branch === 'ALL')) {
             allAggKeys.add(s.name);
@@ -451,8 +459,11 @@ export default function FinancePage() {
 
         const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
 
+        // 🚀 聚合所有設計師的 SCALP 頭皮療程總額
+        totalScalpRevenue += (result.categoryBreakdown['SCALP'] || 0);
+
         stylistAggregator[aggKey] = {
-            name: aggKey, // 顯示如 "Chaco (大埔店)"
+            name: aggKey, 
             grade: staffProfile.templateName || '自訂比例',
             totalRevenue: result.stats.totalRevenue,
             totalCommission: result.stats.totalCommission,
@@ -480,7 +491,8 @@ export default function FinancePage() {
       totalGivenPoints: Math.round(givenPoints), 
       outstandingTDollar: Math.round(totalSystemOutstanding), 
       branchOutstandingTDollar: Math.round(currentBranchOutstanding),
-      tDollarDeducted: Math.round(tDollarDeducted) 
+      tDollarDeducted: Math.round(tDollarDeducted),
+      totalScalpRevenue: Math.round(totalScalpRevenue) // 更新狀態
     });
     
     setCrossBranchMetrics({
@@ -549,6 +561,7 @@ export default function FinancePage() {
       csvContent += `【營收與跨店結算總覽】\n`;
       csvContent += `充值與售票現金流,$${metrics.totalCashIn}\n`;
       csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
+      csvContent += `頭皮療程 (SCALP) 總業績,$${metrics.totalScalpRevenue}\n`; // 匯出報表新增 SCALP
       csvContent += `使用 T-Dollar 扣抵總額,$${metrics.tDollarDeducted}\n`;
       
       if (selectedBranch === 'ALL') {
@@ -614,7 +627,6 @@ export default function FinancePage() {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-[#D4AF37] bg-[#080808]">報表生成中...</div>;
 
   const isManagement = ['admin', 'manager'].includes(currentAdminRole);
-  // 如果是員工模式，只顯示包含自己名字的列 (例如 "Chaco (大埔店)" 和 "Chaco (樂富店)")
   const displayPayroll = isManagement ? payrollReport : payrollReport.filter(s => s.name.includes(currentUserName));
   const totalCommissionPayout = displayPayroll.reduce((sum, staff) => sum + staff.totalCommission, 0);
 
@@ -720,11 +732,13 @@ export default function FinancePage() {
 
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+            {/* 🚀 儀表板最上方列：擴增為 4 格 (xl:grid-cols-4)，加入頭皮專區 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-6">
+              
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  {selectedBranch === 'ALL' ? '全線' : selectedBranch} 現金流收入 (HKD) <i className="fa-solid fa-circle-info text-gray-600" title="包含增值與直接售出套票的實收現金"></i>
+                  {selectedBranch === 'ALL' ? '全線' : selectedBranch} 現金流收入 <i className="fa-solid fa-circle-info text-gray-600" title="包含增值與直接售出套票的實收現金"></i>
                 </p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
@@ -735,11 +749,23 @@ export default function FinancePage() {
               <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-8 rounded-[32px] border border-[#D4AF37]/30 relative overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.05)]">
                 <div className="absolute -right-5 -bottom-5 text-[#D4AF37] opacity-10 text-7xl -z-10"><i className="fa-solid fa-fire"></i></div>
                 <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">
-                  {selectedBranch === 'ALL' ? '全線總產值' : `${selectedBranch} 產值`} (包含現金與扣餘額)
+                  {selectedBranch === 'ALL' ? '全線總產值' : `${selectedBranch} 產值`} (含扣餘額)
                 </p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
                   <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* 🟢 新增：頭皮療程專區 */}
+              <div className="bg-emerald-900/10 p-8 rounded-[32px] border border-emerald-500/20 relative overflow-hidden group hover:border-emerald-500/40 transition-colors shadow-lg">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-bl-[100px] -z-10 group-hover:bg-emerald-500/20 transition-colors"></div>
+                <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <i className="fa-solid fa-leaf"></i> {selectedBranch === 'ALL' ? '全線' : selectedBranch} 頭皮療程 (SCALP)
+                </p>
+                <div className="flex items-baseline gap-1 text-emerald-300">
+                  <span className="text-2xl font-bold">$</span>
+                  <p className="text-4xl font-black tracking-tighter">{metrics.totalScalpRevenue.toLocaleString()}</p>
                 </div>
               </div>
 
