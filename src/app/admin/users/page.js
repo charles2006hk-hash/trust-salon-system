@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { db, auth } from '@/lib/firebase';
-// 🟢 引入 writeBatch 進行安全批量更新
 import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction, writeBatch } from 'firebase/firestore'; 
 import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
@@ -37,7 +36,6 @@ export default function UserManagementPage() {
   const [branchesList, setBranchesList] = useState([]);
   const [tiersList, setTiersList] = useState([]); 
 
-  // 🟢 CRM 歷史軌跡專屬狀態
   const [historyModal, setHistoryModal] = useState({ isOpen: false, logs: [], loading: false, targetUser: null });
 
   const MASTER_EMAIL = "trustsalon.taipo@gmail.com";
@@ -103,11 +101,9 @@ export default function UserManagementPage() {
     }
   };
 
-  // 🚀 新增：批量轉換全域會員歸屬 (防呆機制：嚴格排除內部員工)
   const handleBatchMigrateMembersToTaipo = async () => {
     if (currentAdminRole !== 'admin') return toast.error("⛔ 權限不足：僅限老闆操作");
 
-    // 嚴格篩選條件：必須是 member (排除所有 staff, admin, manager, reception)，且 branch 是 ALL/all
     const targetMembers = users.filter(u => u.role === 'member' && ['ALL', 'all'].includes(u.branch));
 
     if (targetMembers.length === 0) {
@@ -121,7 +117,6 @@ export default function UserManagementPage() {
     const toastId = toast.loading(`正在批量轉換 ${targetMembers.length} 筆會員資料...`);
 
     try {
-      // Firebase writeBatch 限制每次最多 500 筆寫入，需進行 Chunking 分塊處理
       const chunks = [];
       for (let i = 0; i < targetMembers.length; i += 500) {
           chunks.push(targetMembers.slice(i, i + 500));
@@ -137,7 +132,7 @@ export default function UserManagementPage() {
       }
 
       toast.success(`✅ 批量更新成功！已將 ${targetMembers.length} 位會員歸屬改為大埔店。`, { id: toastId, duration: 5000 });
-      fetchUsers(); // 重新整理資料表
+      fetchUsers(); 
     } catch (error) {
       console.error("Batch update failed:", error);
       toast.error(`批量更新失敗：${error.message}`, { id: toastId });
@@ -307,6 +302,9 @@ export default function UserManagementPage() {
         phoneNumber: selectedUser.phoneNumber || '',
         email: selectedUser.email || '',
         branch: selectedUser.branch || 'ALL', 
+        // 🚀 新增：支援直接修改會員等級與連動折扣[cite: 20]
+        tier: selectedUser.tier || '基本會員 (Basic)',
+        discount: Number(selectedUser.discount) || 1,
         ...(currentAdminRole === 'admin' ? { role: selectedUser.role } : {}),
         notes: selectedUser.notes || ''
       });
@@ -452,7 +450,6 @@ export default function UserManagementPage() {
           <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">客戶與內部員工權限控制台</p>
         </div>
         <div className="flex flex-wrap gap-4">
-          {/* 🟢 新增：只有老闆可以看的批量轉換按鈕 */}
           {currentAdminRole === 'admin' && (
             <button 
               onClick={handleBatchMigrateMembersToTaipo} 
@@ -834,6 +831,24 @@ export default function UserManagementPage() {
                     </select>
                   </div>
 
+                  {/* 🚀 新增：會員等級與折扣編輯選單[cite: 20] */}
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">修改會員等級 (Tier & Discount)</label>
+                    <select 
+                      value={selectedUser.tier || '基本會員 (Basic)'} 
+                      onChange={e => {
+                         const t = tiersList.find(x => x.name === e.target.value);
+                         setSelectedUser({...selectedUser, tier: e.target.value, discount: t ? t.discount : 1});
+                      }} 
+                      className="w-full bg-black border border-purple-500/30 p-4 rounded-xl text-purple-400 font-bold text-sm outline-none focus:border-purple-500"
+                    >
+                      <option value="基本會員 (Basic)">基本會員 (Basic) - 無折扣</option>
+                      {tiersList.map(t => (
+                        <option key={t.id} value={t.name}>{t.name} - {t.discount * 10}折</option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-gray-500 font-bold uppercase tracking-widest ml-1">系統認證信箱 (登入憑證)</label>
                     <input type="email" disabled value={selectedUser.email || '早期未綁定憑證之帳號'} className="w-full bg-black border border-white/5 p-4 rounded-xl text-gray-500 outline-none text-sm font-mono opacity-50 cursor-not-allowed" />
@@ -964,7 +979,6 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* 🟢 後台專屬：CRM 歷史軌跡 Modal */}
       {historyModal.isOpen && (
         <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-6 backdrop-blur-md">
           <div className="bg-[#121212] w-full max-w-2xl max-h-[85vh] overflow-y-auto custom-scrollbar rounded-[40px] p-8 border border-blue-500/50 shadow-[0_0_50px_rgba(59,130,246,0.15)] relative animate-fade-in">
