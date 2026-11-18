@@ -46,7 +46,7 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  // 🚀 新增 totalScalpRevenue 狀態
+  // 🚀 新增 totalScalpProdRevenue 狀態
   const [metrics, setMetrics] = useState({ 
     totalCashIn: 0, 
     totalServiceValue: 0, 
@@ -54,7 +54,8 @@ export default function FinancePage() {
     outstandingTDollar: 0, 
     branchOutstandingTDollar: 0, 
     tDollarDeducted: 0,
-    totalScalpRevenue: 0 
+    totalScalpRevenue: 0,
+    totalScalpProdRevenue: 0 
   });
   const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
   
@@ -360,8 +361,10 @@ export default function FinancePage() {
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
     let crossBranchIn = 0; let crossBranchOut = 0; 
     
-    // 🚀 新增：統計 SCALP 總額
+    // 🚀 新增：統計 SCALP 與 SCALP_PROD 總額
     let totalScalpRevenue = 0;
+    let totalScalpProdRevenue = 0;
+    
     let stylists = {}; let services = {}; let stylistAggregator = {};
 
     usersData.forEach(u => {
@@ -459,8 +462,9 @@ export default function FinancePage() {
 
         const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
 
-        // 🚀 聚合所有設計師的 SCALP 頭皮療程總額
+        // 🚀 聚合所有設計師的 SCALP 與 SCALP_PROD 總額
         totalScalpRevenue += (result.categoryBreakdown['SCALP'] || 0);
+        totalScalpProdRevenue += (result.categoryBreakdown['SCALP_PROD'] || 0);
 
         stylistAggregator[aggKey] = {
             name: aggKey, 
@@ -492,7 +496,8 @@ export default function FinancePage() {
       outstandingTDollar: Math.round(totalSystemOutstanding), 
       branchOutstandingTDollar: Math.round(currentBranchOutstanding),
       tDollarDeducted: Math.round(tDollarDeducted),
-      totalScalpRevenue: Math.round(totalScalpRevenue) // 更新狀態
+      totalScalpRevenue: Math.round(totalScalpRevenue),
+      totalScalpProdRevenue: Math.round(totalScalpProdRevenue) // 🚀 更新狀態
     });
     
     setCrossBranchMetrics({
@@ -561,7 +566,8 @@ export default function FinancePage() {
       csvContent += `【營收與跨店結算總覽】\n`;
       csvContent += `充值與售票現金流,$${metrics.totalCashIn}\n`;
       csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
-      csvContent += `頭皮療程 (SCALP) 總業績,$${metrics.totalScalpRevenue}\n`; // 匯出報表新增 SCALP
+      csvContent += `頭皮療程 (SCALP) 總業績,$${metrics.totalScalpRevenue}\n`; 
+      csvContent += `頭皮產品 (SCALP_PROD) 總業績,$${metrics.totalScalpProdRevenue}\n`; // 🚀 匯出報表新增 SCALP_PROD
       csvContent += `使用 T-Dollar 扣抵總額,$${metrics.tDollarDeducted}\n`;
       
       if (selectedBranch === 'ALL') {
@@ -732,32 +738,31 @@ export default function FinancePage() {
 
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
-            {/* 🚀 儀表板最上方列：擴增為 4 格 (xl:grid-cols-4)，加入頭皮專區 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-6">
+            {/* 🚀 儀表板最上方列：擴增為 5 格 (xl:grid-cols-5)，加入頭皮療程與頭皮產品專區 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-6">
               
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-bl-[100px] -z-10 group-hover:bg-green-500/20 transition-colors"></div>
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1">
-                  {selectedBranch === 'ALL' ? '全線' : selectedBranch} 現金流收入 <i className="fa-solid fa-circle-info text-gray-600" title="包含增值與直接售出套票的實收現金"></i>
+                  現金流收入 <i className="fa-solid fa-circle-info text-gray-600" title="包含增值與直接售出套票的實收現金"></i>
                 </p>
                 <div className="flex items-baseline gap-1">
                   <span className="text-2xl text-green-500 font-bold">$</span>
-                  <p className="text-4xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString()}</p>
+                  <p className="text-3xl font-black text-white tracking-tighter">{metrics.totalCashIn.toLocaleString()}</p>
                 </div>
               </div>
               
               <div className="bg-gradient-to-br from-[#1a1a1a] to-black p-8 rounded-[32px] border border-[#D4AF37]/30 relative overflow-hidden shadow-[0_0_20px_rgba(212,175,55,0.05)]">
                 <div className="absolute -right-5 -bottom-5 text-[#D4AF37] opacity-10 text-7xl -z-10"><i className="fa-solid fa-fire"></i></div>
                 <p className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-widest mb-2">
-                  {selectedBranch === 'ALL' ? '全線總產值' : `${selectedBranch} 產值`} (含扣餘額)
+                  總產值 (含扣餘額)
                 </p>
                 <div className="flex items-baseline gap-1 text-[#D4AF37]">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString()}</p>
+                  <p className="text-3xl font-black tracking-tighter">{metrics.totalServiceValue.toLocaleString()}</p>
                 </div>
               </div>
 
-              {/* 🟢 新增：頭皮療程專區 */}
               <div className="bg-emerald-900/10 p-8 rounded-[32px] border border-emerald-500/20 relative overflow-hidden group hover:border-emerald-500/40 transition-colors shadow-lg">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-bl-[100px] -z-10 group-hover:bg-emerald-500/20 transition-colors"></div>
                 <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-2 flex items-center gap-1">
@@ -765,16 +770,28 @@ export default function FinancePage() {
                 </p>
                 <div className="flex items-baseline gap-1 text-emerald-300">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{metrics.totalScalpRevenue.toLocaleString()}</p>
+                  <p className="text-3xl font-black tracking-tighter">{metrics.totalScalpRevenue.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* 🟢 新增：頭皮產品專區 */}
+              <div className="bg-teal-900/10 p-8 rounded-[32px] border border-teal-500/20 relative overflow-hidden group hover:border-teal-500/40 transition-colors shadow-lg">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-teal-500/10 rounded-bl-[100px] -z-10 group-hover:bg-teal-500/20 transition-colors"></div>
+                <p className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-2 flex items-center gap-1">
+                  <i className="fa-solid fa-bottle-droplet"></i> {selectedBranch === 'ALL' ? '全線' : selectedBranch} 頭皮產品 (PROD)
+                </p>
+                <div className="flex items-baseline gap-1 text-teal-300">
+                  <span className="text-2xl font-bold">$</span>
+                  <p className="text-3xl font-black tracking-tighter">{metrics.totalScalpProdRevenue.toLocaleString()}</p>
                 </div>
               </div>
 
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-red-500/50 transition-colors">
                  <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-[100px] -z-10 group-hover:bg-red-500/20 transition-colors"></div>
-                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">預計發放總佣金成本</p>
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">發放總佣金成本</p>
                 <div className="flex items-baseline gap-1 text-red-400">
                   <span className="text-2xl font-bold">$</span>
-                  <p className="text-4xl font-black tracking-tighter">{totalCommissionPayout.toLocaleString()}</p>
+                  <p className="text-3xl font-black tracking-tighter">{totalCommissionPayout.toLocaleString()}</p>
                 </div>
               </div>
             </div>
