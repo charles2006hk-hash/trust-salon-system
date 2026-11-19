@@ -62,11 +62,12 @@ export default function AdminManagePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
+  // 預設加上 isFixed 與 fixedAmount 確保結構完整
   const defaultCommissions = {
-    R1: { deduct: 0, percent: 0 }, R2: { deduct: 0, percent: 0 }, R3: { deduct: 0, percent: 0 }, R4: { deduct: 0, percent: 0 },
-    W1: { deduct: 0, percent: 0 }, W2: { deduct: 0, percent: 0 }, W3: { deduct: 0, percent: 0 }, W4: { deduct: 0, percent: 0 },
-    P1: { deduct: 0, percent: 0 }, P2: { deduct: 0, percent: 0 }, P3: { deduct: 0, percent: 0 }, P4: { deduct: 0, percent: 0 }, P5: { deduct: 0, percent: 0 },
-    SCALP: { deduct: 0, percent: 0 }, SCALP_PROD: { deduct: 0, percent: 0 }
+    R1: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R2: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R3: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R4: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 },
+    W1: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W2: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W3: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W4: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 },
+    P1: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, P2: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, P3: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, P4: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, P5: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 },
+    SCALP: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, SCALP_PROD: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }
   };
 
   const defaultPresets = {
@@ -286,7 +287,6 @@ export default function AdminManagePage() {
       let dataToSave = { ...formData };
       const dynamicValidCodes = Object.keys(globalLabels);
       
-      // 🚀 解除強制將套票綁定為 SCALP 的限制，允許套票自由選擇拆帳類別
       if (['services', 'packages'].includes(activeTab)) {
         if (!dynamicValidCodes.includes(dataToSave.commissionCode)) {
            dataToSave.commissionCode = 'W1'; 
@@ -311,7 +311,6 @@ export default function AdminManagePage() {
         }
       }
       
-      // 預設值保持有彈性，不再強制鎖定 SCALP
       setFormData({...initialForm, commissionCode: 'W1'}); 
       
       setEditingId(null); setIsCustomStaff(false); fetchData();
@@ -348,7 +347,6 @@ export default function AdminManagePage() {
 
   const startEdit = (item) => {
     setEditingId(item.id);
-    // 修改編輯時的預設類別行為
     let safeCode = item.commissionCode;
     
     const initCommissions = item.commissions ? JSON.parse(JSON.stringify(item.commissions)) : JSON.parse(JSON.stringify(defaultCommissions));
@@ -359,7 +357,7 @@ export default function AdminManagePage() {
     setFormData({ 
       ...initialForm, 
       ...item, 
-      commissionCode: safeCode || 'W1', // 如果沒有設定，預設 W1
+      commissionCode: safeCode || 'W1', 
       commissions: initCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0,
@@ -389,7 +387,10 @@ export default function AdminManagePage() {
     } else { setFormData({ ...formData, templateId: templateId, templateName: '' }); }
   };
 
+  // 🚀 核心升級：支援 isFixed 與 fixedAmount 欄位的狀態更新
   const updateCommission = (code, field, value, isBonus = false) => {
+    const parsedValue = field === 'isFixed' ? Boolean(value) : Number(value);
+    
     if (isBonus) {
       setFormData({ 
         ...formData, 
@@ -400,7 +401,7 @@ export default function AdminManagePage() {
             ...formData.commissions.bonusTier,
             bonusRules: {
               ...formData.commissions.bonusTier.bonusRules,
-              [code]: { ...formData.commissions.bonusTier.bonusRules[code], [field]: Number(value) }
+              [code]: { ...formData.commissions.bonusTier.bonusRules[code], [field]: parsedValue }
             }
           }
         } 
@@ -411,7 +412,7 @@ export default function AdminManagePage() {
         templateName: '', 
         commissions: { 
           ...formData.commissions, 
-          [code]: { ...formData.commissions[code], [field]: Number(value) } 
+          [code]: { ...formData.commissions[code], [field]: parsedValue } 
         } 
       });
     }
@@ -456,27 +457,49 @@ export default function AdminManagePage() {
         <div>
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2"><i className="fa-solid fa-calculator text-[#D4AF37]"></i> 基礎拆帳參數設定</h3>
-            <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">公式：(實收總額 - 扣減成本) x 抽成比例</span>
+            <span className="text-[10px] text-gray-500 bg-white/5 px-3 py-1 rounded-full">依據門市規定設定提成算法</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sortedCodes.map(code => (
+            {sortedCodes.map(code => {
+              const isFixed = formData.commissions?.[code]?.isFixed || false;
+              
+              return (
               <div key={code} className={`bg-gray-900/50 p-4 rounded-2xl border flex flex-col gap-2 transition-colors ${isBonusEnabled ? 'border-gray-800 opacity-70' : 'border-[#D4AF37]/30 shadow-lg'}`}>
-                 <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex justify-between">
-                   <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                 <div className="flex justify-between items-center mb-2">
+                   <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                   
+                   {/* 🚀 UI 升級：加入「比例/固定」切換開關 */}
+                   <button
+                     type="button"
+                     onClick={() => updateCommission(code, 'isFixed', !isFixed)}
+                     className={`text-[9px] px-2 py-0.5 rounded border font-bold tracking-widest transition-colors ${isFixed ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-gray-800 text-gray-400 border-gray-600'}`}
+                   >
+                     {isFixed ? '模式: 固定金額' : '模式: 比例抽成'}
+                   </button>
                  </div>
-                 <div className="flex items-center gap-2">
-                   <div className="flex-1 relative">
-                     <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
-                     <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
-                   </div>
-                   <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
-                   <div className="flex-1 relative">
-                     <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
-                     <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
-                   </div>
-                 </div>
+                 
+                 {isFixed ? (
+                    <div className="flex items-center gap-2 animate-fade-in">
+                       <div className="flex-1 relative">
+                         <span className="absolute left-3 top-2.5 text-blue-500 text-xs font-bold">$</span>
+                         <input type="number" inputMode="decimal" className="w-full bg-black border border-blue-500/30 p-2.5 pl-8 rounded-lg text-white outline-none text-sm focus:border-blue-400 transition-colors font-bold" value={formData.commissions?.[code]?.fixedAmount || 0} onChange={e => updateCommission(code, 'fixedAmount', e.target.value)} placeholder="輸入發放獎金" />
+                       </div>
+                    </div>
+                 ) : (
+                    <div className="flex items-center gap-2 animate-fade-in">
+                       <div className="flex-1 relative">
+                         <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                         <input type="number" inputMode="decimal" className="w-full bg-black border border-white/10 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value)} />
+                       </div>
+                       <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+                       <div className="flex-1 relative">
+                         <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-white/10 p-2.5 pr-8 rounded-lg text-white outline-none text-sm focus:border-green-500 transition-colors text-right font-bold" value={formData.commissions?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value)} />
+                         <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+                       </div>
+                    </div>
+                 )}
               </div>
-            ))}
+            )})}
           </div>
         </div>
 
@@ -489,7 +512,7 @@ export default function AdminManagePage() {
                 <h3 className={`text-lg font-black flex items-center gap-2 ${isBonusEnabled ? 'text-indigo-400' : 'text-gray-500'}`}>
                   <i className="fa-solid fa-bolt-lightning"></i> 階梯式抽成門檻 (Bonus Tier)
                 </h3>
-                <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">當月指定項目營收達標後，自動切換至新抽成 %</p>
+                <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">當月指定項目營收達標後，自動切換至新抽成模式</p>
              </div>
              
              <label className="relative inline-flex items-center cursor-pointer">
@@ -543,24 +566,44 @@ export default function AdminManagePage() {
               <div className="pt-4 border-t border-indigo-500/20">
                  <label className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block mb-3">3. 達標後，適用以下【全新抽成比例】</label>
                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {sortedCodes.map(code => (
+                  {sortedCodes.map(code => {
+                    const isFixed = formData.commissions?.bonusTier?.bonusRules?.[code]?.isFixed || false;
+                    
+                    return (
                     <div key={`bonus-${code}`} className="bg-indigo-950/30 p-4 rounded-2xl border border-indigo-500/20 flex flex-col gap-2">
-                       <div className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest flex justify-between">
-                         <span>{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                       <div className="flex justify-between items-center mb-2">
+                         <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest">{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
+                         <button
+                           type="button"
+                           onClick={() => updateCommission(code, 'isFixed', !isFixed, true)}
+                           className={`text-[9px] px-2 py-0.5 rounded border font-bold tracking-widest transition-colors ${isFixed ? 'bg-indigo-500/50 text-indigo-200 border-indigo-400' : 'bg-indigo-900/50 text-indigo-400 border-indigo-800'}`}
+                         >
+                           {isFixed ? '模式: 固定金額' : '模式: 比例抽成'}
+                         </button>
                        </div>
-                       <div className="flex items-center gap-2">
-                         <div className="flex-1 relative">
-                           <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
-                           <input type="number" inputMode="decimal" className="w-full bg-black border border-indigo-500/30 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value, true)} />
-                         </div>
-                         <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
-                         <div className="flex-1 relative">
-                           <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-indigo-500/30 p-2.5 pr-8 rounded-lg text-indigo-400 outline-none text-sm focus:border-green-500 transition-colors text-right font-black" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value, true)} />
-                           <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
-                         </div>
-                       </div>
+                       
+                       {isFixed ? (
+                          <div className="flex items-center gap-2 animate-fade-in">
+                             <div className="flex-1 relative">
+                               <span className="absolute left-3 top-2.5 text-indigo-400 text-xs font-bold">$</span>
+                               <input type="number" inputMode="decimal" className="w-full bg-black border border-indigo-500/30 p-2.5 pl-8 rounded-lg text-white outline-none text-sm focus:border-indigo-400 transition-colors font-bold" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.fixedAmount || 0} onChange={e => updateCommission(code, 'fixedAmount', e.target.value, true)} placeholder="輸入達標獎金" />
+                             </div>
+                          </div>
+                       ) : (
+                          <div className="flex items-center gap-2 animate-fade-in">
+                             <div className="flex-1 relative">
+                               <span className="absolute left-3 top-2.5 text-gray-500 text-xs">扣 $</span>
+                               <input type="number" inputMode="decimal" className="w-full bg-black border border-indigo-500/30 p-2.5 pl-10 rounded-lg text-white outline-none text-sm focus:border-red-500 transition-colors" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.deduct || 0} onChange={e => updateCommission(code, 'deduct', e.target.value, true)} />
+                             </div>
+                             <span className="text-gray-600"><i className="fa-solid fa-xmark"></i></span>
+                             <div className="flex-1 relative">
+                               <input type="number" inputMode="decimal" step="0.1" className="w-full bg-black border border-indigo-500/30 p-2.5 pr-8 rounded-lg text-indigo-400 outline-none text-sm focus:border-green-500 transition-colors text-right font-black" value={formData.commissions?.bonusTier?.bonusRules?.[code]?.percent || 0} onChange={e => updateCommission(code, 'percent', e.target.value, true)} />
+                               <span className="absolute right-3 top-2.5 text-green-500 text-xs font-bold">%</span>
+                             </div>
+                          </div>
+                       )}
                     </div>
-                  ))}
+                  )})}
                 </div>
               </div>
             </div>
@@ -818,7 +861,6 @@ export default function AdminManagePage() {
                         </select>
                       </div>
                       
-                      {/* 🚀 開放套票的拆帳類別下拉選單 */}
                       <div className="space-y-2 col-span-2">
                         <label className="text-sm font-bold text-purple-400 uppercase tracking-widest">綁定拆帳類別 (支援 Color Plan 等所有標籤)</label>
                         <select className="w-full bg-black border border-purple-500/50 p-4 rounded-xl text-white outline-none focus:border-purple-400" value={formData.commissionCode} onChange={e => setFormData({...formData, commissionCode: e.target.value})}>
