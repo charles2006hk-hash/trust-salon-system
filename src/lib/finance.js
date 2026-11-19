@@ -21,11 +21,8 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   // ==============================================================
   // 🟢 階梯式觸發計算 (Bonus Tier System) - 預處理階段
   // ==============================================================
-  // 1. 取得該員工設定的階梯觸發條件
   const bonusTierConfig = userCommissionsRule.bonusTier || null;
   const isBonusTierActive = !!bonusTierConfig && bonusTierConfig.enabled;
-  
-  // 2. 計算觸發目標的累積金額
   let triggerAccumulatedAmount = 0;
 
   // ==============================================================
@@ -77,7 +74,6 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
             prodRev += amount;
         }
 
-        // 🌟 統計大數階梯觸發金額
         if (isBonusTierActive && bonusTierConfig.triggerCodes && bonusTierConfig.triggerCodes.includes(code)) {
             triggerAccumulatedAmount += amount;
         }
@@ -86,20 +82,13 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
     pass1Txs.push({ ...tx, computedCode: code });
   });
 
-  // 🌟 判定大數階梯是否達標
   const isBonusTierAchieved = isBonusTierActive && (triggerAccumulatedAmount >= (Number(bonusTierConfig.threshold) || 0));
 
-  // ==============================================================
-  // 🚀 核心修復：頭皮與產品雙軌階梯算法
-  // ==============================================================
   const combinedRevenue = scalpRev + prodRev;
   const baseScalpPct = 25; 
   const baseProdPct = 20; 
   
-  // 1. 產品專屬客數加成
   const prodClientBonus = realScalpClientCount >= 2 ? 5 : 0;
-  
-  // 2. 總業績跳轉加成 (每滿 10000 提升 5%)
   const revenueBonus = Math.floor(combinedRevenue / 10000) * 5;
 
   const finalProdPct = baseProdPct + prodClientBonus + revenueBonus;
@@ -111,7 +100,7 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
   const processedTransactions = [];
 
   // ==============================================================
-  // 🟢 Pass 2: 套用佣金與空值防護 (支援大數階梯達標替換)
+  // 🟢 Pass 2: 套用佣金與空值防護 (🌟 支援固定金額模式)
   // ==============================================================
   pass1Txs.forEach(tx => {
     const amount = Number(tx.amount || 0);
@@ -130,31 +119,38 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
     } else if (code === 'SCALP_PROD') {
         calculatedComm = amount * (finalProdPct / 100);
     } else {
-        // 🌟 判斷是否使用基礎 Rule 或 達標 Bonus Rule
-        const baseRule = userCommissionsRule[code] || { deduct: 0, percent: 0 };
+        // 取得基礎規則或相容舊資料 (舊資料無 isFixed 屬性，預設為 false)
+        const baseRule = userCommissionsRule[code] || { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 };
         const bonusRule = bonusTierConfig && bonusTierConfig.bonusRules ? bonusTierConfig.bonusRules[code] : null;
         
         let targetRule = baseRule;
         let isAppliedBonus = false;
 
-        // 如果該員工開啟了階梯、且有設定該項目的 Bonus Rule、並且當月達標了
-        if (isBonusTierAchieved && bonusRule && (bonusRule.percent > 0 || bonusRule.deduct > 0)) {
+        // 如果該員工開啟了階梯、達標，且該項目有設定獎勵 (包含固定金額大於 0)
+        if (isBonusTierAchieved && bonusRule && (bonusRule.percent > 0 || bonusRule.deduct > 0 || bonusRule.fixedAmount > 0)) {
             targetRule = bonusRule;
             isAppliedBonus = true;
         }
 
         const deduct = Number(targetRule.deduct || 0);
         const percent = Number(targetRule.percent || 0);
+        const isFixed = Boolean(targetRule.isFixed);
+        const fixedAmount = Number(targetRule.fixedAmount || 0);
         
-        if (amount > deduct) {
-          calculatedComm = (amount - deduct) * (percent / 100);
+        // 🚀 核心升級：支援定額佣金 (Fixed Amount)
+        if (isFixed) {
+            // 固定金額模式：無論客單價多少，直接發放固定獎金
+            calculatedComm = fixedAmount;
+        } else {
+            // 比例抽成模式：扣除成本後按百分比計算
+            if (amount > deduct) {
+                calculatedComm = (amount - deduct) * (percent / 100);
+            }
         }
 
-        // 將是否套用階梯獎勵的狀態標記在 tx 上，供前端 UI 顯示
         tx.isAppliedBonus = isAppliedBonus;
     }
 
-    // 解決 JavaScript 浮點數精度問題
     calculatedComm = Math.round(calculatedComm * 100) / 100;
     
     if (tx.type !== 'deduct_package' && tx.type !== 'assistant_bonus') {
@@ -182,7 +178,6 @@ export function calculateStaffCommissions(rawTransactions, userCommissionsRule =
       combinedRevenue, 
       finalScalpPct, 
       finalProdPct,
-      // 🌟 回傳階梯觸發狀態給前端
       triggerAccumulatedAmount,
       isBonusTierAchieved,
       bonusTierThreshold: isBonusTierActive ? bonusTierConfig.threshold : 0
