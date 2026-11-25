@@ -9,6 +9,9 @@ import { Toaster, toast } from 'react-hot-toast';
 
 import { calculateStaffCommissions } from '@/lib/finance'; 
 
+// 防止浮點數運算誤差的金額四捨五入工具
+const roundMoney = (val) => Math.round((Number(val) || 0) * 100) / 100;
+
 export default function FinancePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -46,7 +49,6 @@ export default function FinancePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  // 🚀 新增 totalScalpProdRevenue 狀態
   const [metrics, setMetrics] = useState({ 
     totalCashIn: 0, 
     totalServiceValue: 0, 
@@ -57,7 +59,14 @@ export default function FinancePage() {
     totalScalpRevenue: 0,
     totalScalpProdRevenue: 0 
   });
-  const [crossBranchMetrics, setCrossBranchMetrics] = useState({ crossBranchIn: 0, crossBranchOut: 0 }); 
+
+  // 動態多店跨店結算狀態（含各分店明細陣列）
+  const [crossBranchMetrics, setCrossBranchMetrics] = useState({
+    crossBranchIn: 0,
+    crossBranchOut: 0,
+    inDetails: [],
+    outDetails: []
+  }); 
   
   const [stylistRanking, setStylistRanking] = useState([]);
   const [serviceRanking, setServiceRanking] = useState([]);
@@ -117,16 +126,16 @@ export default function FinancePage() {
          }
 
          if (userRef && userData) {
-             let newTDollar = Number(userData.tDollarBalance || 0);
-             let newPoints = Number(userData.points || 0);
+             let newTDollar = roundMoney(userData.tDollarBalance || 0);
+             let newPoints = roundMoney(userData.points || 0);
              let newPkgs = { ...(userData.packageBalances || {}) };
              let changed = false;
 
              if (tx.type === 'deduct') {
-                 newTDollar += Number(tx.amount || 0);
+                 newTDollar = roundMoney(newTDollar + Number(tx.amount || 0));
                  changed = true;
              } else if (tx.type === 'deduct_points') {
-                 newPoints += Number(tx.pointsDeducted || 0);
+                 newPoints = roundMoney(newPoints + Number(tx.pointsDeducted || 0));
                  changed = true;
              } else if (tx.type === 'deduct_package') {
                  const pkgName = tx.packageName;
@@ -135,8 +144,8 @@ export default function FinancePage() {
                      changed = true;
                  }
              } else if (tx.type === 'topup') {
-                 newTDollar = Math.max(0, newTDollar - Number(tx.tDollarAdded || 0));
-                 newPoints = Math.max(0, newPoints - Number(tx.pointsAdded || 0));
+                 newTDollar = Math.max(0, roundMoney(newTDollar - Number(tx.tDollarAdded || 0)));
+                 newPoints = Math.max(0, roundMoney(newPoints - Number(tx.pointsAdded || 0)));
                  changed = true;
              } else if (tx.type === 'buy_package') {
                  const pkgName = tx.packageName;
@@ -208,8 +217,8 @@ export default function FinancePage() {
     try {
       const txRef = doc(db, 'transactions', editingTx.id);
       
-      const oldAmount = Number(originalTx.amount || originalTx.bonusAmount || originalTx.amountPaidHKD || originalTx.tDollarAdded || 0);
-      const newAmount = Number(editingTx.amount || editingTx.bonusAmount || editingTx.amountPaidHKD || editingTx.tDollarAdded || 0);
+      const oldAmount = roundMoney(originalTx.amount || originalTx.bonusAmount || originalTx.amountPaidHKD || originalTx.tDollarAdded || 0);
+      const newAmount = roundMoney(editingTx.amount || editingTx.bonusAmount || editingTx.amountPaidHKD || editingTx.tDollarAdded || 0);
       
       const oldItem = originalTx.service || originalTx.packageName || (originalTx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
       const newItem = editingTx.service || editingTx.packageName || (editingTx.type === 'topup' ? 'T-Dollar 增值' : '助手獎金');
@@ -308,7 +317,7 @@ export default function FinancePage() {
     if (transactions.length >= 0 && usersData.length >= 0 && staffConfig.length >= 0) {
       calculateData(); 
     }
-  }, [selectedBranch, transactions, usersData, staffConfig, servicesData, packagesData, globalLabels]);
+  }, [selectedBranch, branches, transactions, usersData, staffConfig, servicesData, packagesData, globalLabels]);
 
   const fetchFinancialData = async () => {
     setLoading(true);
@@ -342,7 +351,7 @@ export default function FinancePage() {
       setPackagesData(pkSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
       const bSnap = await getDocs(collection(db, 'branches'));
-      setBranches(bSnap.docs.map(d => d.data().name));
+      setBranches(bSnap.docs.map(d => d.data().name).filter(Boolean));
 
       const settingsSnap = await getDoc(doc(db, 'settings', 'global_config'));
       if (settingsSnap.exists() && settingsSnap.data().commissionLabels) {
@@ -360,8 +369,8 @@ export default function FinancePage() {
     
     let cashIn = 0; let serviceValue = 0; let givenPoints = 0; let tDollarDeducted = 0;
     let crossBranchIn = 0; let crossBranchOut = 0; 
+    let inMap = {}; let outMap = {};
     
-    // 🚀 新增：統計 SCALP 與 SCALP_PROD 總額
     let totalScalpRevenue = 0;
     let totalScalpProdRevenue = 0;
     
@@ -374,11 +383,11 @@ export default function FinancePage() {
            userMap[phone] = u;
        }
 
-       const bal = Number(u.tDollarBalance) || 0;
+       const bal = roundMoney(u.tDollarBalance || 0);
        if (bal > 0) {
-           totalSystemOutstanding += bal;
+           totalSystemOutstanding = roundMoney(totalSystemOutstanding + bal);
            if ((u.branch || 'ALL') === selectedBranch) {
-               currentBranchOutstanding += bal;
+               currentBranchOutstanding = roundMoney(currentBranchOutstanding + bal);
            }
        }
     });
@@ -389,25 +398,35 @@ export default function FinancePage() {
 
     filteredTx.forEach(tx => {
       if (tx.type === 'topup' || tx.type === 'buy_package') {
-        cashIn += Number(tx.amountPaidHKD || 0);
-        if (tx.type === 'topup') givenPoints += Number(tx.pointsAdded || 0);
+        cashIn = roundMoney(cashIn + Number(tx.amountPaidHKD || 0));
+        if (tx.type === 'topup') givenPoints = roundMoney(givenPoints + Number(tx.pointsAdded || 0));
       } 
       else if (tx.type === 'walkin_cash' || tx.type === 'member_cash') {
-        cashIn += Number(tx.amount || 0);
+        cashIn = roundMoney(cashIn + Number(tx.amount || 0));
       }
       else if (tx.type === 'deduct_points') {
-        cashIn -= Number(tx.pointsDeducted || 0);
+        cashIn = roundMoney(cashIn - Number(tx.pointsDeducted || 0));
       }
 
       if (tx.type === 'deduct') {
-        tDollarDeducted += Number(tx.amount || 0);
+        tDollarDeducted = roundMoney(tDollarDeducted + Number(tx.amount || 0));
       }
     });
 
+    // 動態多店跨店結算：自動建立其餘 N-1 間門店明細（即使金額為 0 也保留顯示）
     if (selectedBranch !== 'ALL') {
+        const otherBranches = branches
+          .filter(b => b && b !== 'ALL' && b !== selectedBranch)
+          .sort((a, b) => a.localeCompare(b, 'zh-HK'));
+
+        otherBranches.forEach(b => {
+          inMap[b] = 0;
+          outMap[b] = 0;
+        });
+
         transactions.forEach(tx => {
            if (tx.type !== 'deduct' && tx.type !== 'deduct_package') return;
-           const txAmount = Number(tx.amount || 0);
+           const txAmount = roundMoney(tx.amount || 0);
            if (txAmount <= 0) return;
 
            const customer = userMap[tx.phoneNumber];
@@ -415,11 +434,15 @@ export default function FinancePage() {
 
            const txBranch = tx.branch || '未指定';
            
+           // 他店客 -> 來本店消費（他店補貼本店）
            if (txBranch === selectedBranch && customer.branch !== selectedBranch) {
-               crossBranchIn += txAmount;
+               crossBranchIn = roundMoney(crossBranchIn + txAmount);
+               inMap[customer.branch] = roundMoney((inMap[customer.branch] || 0) + txAmount);
            }
+           // 本店客 -> 去他店消費（本店應上繳他店）
            else if (customer.branch === selectedBranch && txBranch !== selectedBranch) {
-               crossBranchOut += txAmount;
+               crossBranchOut = roundMoney(crossBranchOut + txAmount);
+               outMap[txBranch] = roundMoney((outMap[txBranch] || 0) + txAmount);
            }
         });
     }
@@ -442,7 +465,7 @@ export default function FinancePage() {
 
            if (tx.type !== 'assistant_bonus' && tx.type !== 'deduct_package') {
                const srvName = tx.service || '一般服務';
-               services[srvName] = (services[srvName] || 0) + Number(tx.amount || 0);
+               services[srvName] = roundMoney((services[srvName] || 0) + Number(tx.amount || 0));
            }
        }
     });
@@ -462,9 +485,8 @@ export default function FinancePage() {
 
         const result = calculateStaffCommissions(staffTxs, staffProfile.commissions, serviceMap, globalLabels);
 
-        // 🚀 聚合所有設計師的 SCALP 與 SCALP_PROD 總額
-        totalScalpRevenue += (result.categoryBreakdown['SCALP'] || 0);
-        totalScalpProdRevenue += (result.categoryBreakdown['SCALP_PROD'] || 0);
+        totalScalpRevenue = roundMoney(totalScalpRevenue + (result.categoryBreakdown['SCALP'] || 0));
+        totalScalpProdRevenue = roundMoney(totalScalpProdRevenue + (result.categoryBreakdown['SCALP_PROD'] || 0));
 
         stylistAggregator[aggKey] = {
             name: aggKey, 
@@ -485,7 +507,7 @@ export default function FinancePage() {
             }))
         };
 
-        serviceValue += result.stats.totalRevenue;
+        serviceValue = roundMoney(serviceValue + result.stats.totalRevenue);
         stylists[aggKey] = result.stats.totalRevenue;
     });
 
@@ -497,12 +519,14 @@ export default function FinancePage() {
       branchOutstandingTDollar: Math.round(currentBranchOutstanding),
       tDollarDeducted: Math.round(tDollarDeducted),
       totalScalpRevenue: Math.round(totalScalpRevenue),
-      totalScalpProdRevenue: Math.round(totalScalpProdRevenue) // 🚀 更新狀態
+      totalScalpProdRevenue: Math.round(totalScalpProdRevenue)
     });
     
     setCrossBranchMetrics({
        crossBranchIn: Math.round(crossBranchIn),
-       crossBranchOut: Math.round(crossBranchOut)
+       crossBranchOut: Math.round(crossBranchOut),
+       inDetails: Object.entries(inMap).map(([branch, amt]) => ({ branch, amount: Math.round(amt) })),
+       outDetails: Object.entries(outMap).map(([branch, amt]) => ({ branch, amount: Math.round(amt) }))
     });
 
     setStylistRanking(Object.entries(stylists).map(([name, val]) => [name, Math.round(val)]).sort((a, b) => b[1] - a[1]));
@@ -567,15 +591,21 @@ export default function FinancePage() {
       csvContent += `充值與售票現金流,$${metrics.totalCashIn}\n`;
       csvContent += `店鋪總產值 (包含扣餘額與現金),$${metrics.totalServiceValue}\n`;
       csvContent += `頭皮療程 (SCALP) 總業績,$${metrics.totalScalpRevenue}\n`; 
-      csvContent += `頭皮產品 (SCALP_PROD) 總業績,$${metrics.totalScalpProdRevenue}\n`; // 🚀 匯出報表新增 SCALP_PROD
+      csvContent += `頭皮產品 (SCALP_PROD) 總業績,$${metrics.totalScalpProdRevenue}\n`;
       csvContent += `使用 T-Dollar 扣抵總額,$${metrics.tDollarDeducted}\n`;
       
       if (selectedBranch === 'ALL') {
           csvContent += `系統全線總未消費餘額 (總負債),$${metrics.outstandingTDollar}\n`;
       } else {
           csvContent += `${selectedBranch} 開戶客未消費餘額 (分店負債),$${metrics.branchOutstandingTDollar}\n`;
-          csvContent += `(跨店) 他店開戶客來本店消費餘額,$${crossBranchMetrics.crossBranchIn}\n`;
-          csvContent += `(跨店) 本店開戶客去他店消費餘額,$${crossBranchMetrics.crossBranchOut}\n`;
+          csvContent += `(跨店總計) 他店開戶客來本店消費餘額 (他店補貼本店),+$${crossBranchMetrics.crossBranchIn}\n`;
+          crossBranchMetrics.inDetails.forEach(item => {
+            csvContent += `  └ ${item.branch}客來${selectedBranch}消費,+$${item.amount}\n`;
+          });
+          csvContent += `(跨店總計) 本店開戶客去他店消費餘額 (本店應上繳他店),-$${crossBranchMetrics.crossBranchOut}\n`;
+          crossBranchMetrics.outDetails.forEach(item => {
+            csvContent += `  └ ${selectedBranch}客去${item.branch}消費,-$${item.amount}\n`;
+          });
       }
       csvContent += `\n`;
 
@@ -738,7 +768,6 @@ export default function FinancePage() {
 
         {viewMode === 'dashboard' && isManagement && (
           <div className="animate-fade-in">
-            {/* 🚀 儀表板最上方列：擴增為 5 格 (xl:grid-cols-5)，加入頭皮療程與頭皮產品專區 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-6">
               
               <div className="bg-[#121212] p-8 rounded-[32px] border border-white/5 relative overflow-hidden group hover:border-green-500/50 transition-colors">
@@ -774,7 +803,6 @@ export default function FinancePage() {
                 </div>
               </div>
 
-              {/* 🟢 新增：頭皮產品專區 */}
               <div className="bg-teal-900/10 p-8 rounded-[32px] border border-teal-500/20 relative overflow-hidden group hover:border-teal-500/40 transition-colors shadow-lg">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-teal-500/10 rounded-bl-[100px] -z-10 group-hover:bg-teal-500/20 transition-colors"></div>
                 <p className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mb-2 flex items-center gap-1">
@@ -809,19 +837,61 @@ export default function FinancePage() {
                 {selectedBranch !== 'ALL' && <p className="text-[9px] text-gray-500 mt-2">💡 此為該店點「使用餘額扣抵」的總額。若有跨店消費，需參閱右側【跨店資金結算】板塊。</p>}
               </div>
 
+              {/* 動態多店跨店資金結算卡片（新版左右分欄排版） */}
               {selectedBranch !== 'ALL' && (
                 <div className="bg-blue-900/10 p-6 rounded-[32px] border border-blue-500/20 relative overflow-hidden flex flex-col justify-between">
                    <p className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-4 border-b border-blue-500/20 pb-2">
                      🔄 跨店資金結算 (本月餘額消費)
                    </p>
-                   <div className="space-y-4">
-                     <div>
-                       <p className="text-[10px] text-gray-400 flex justify-between">他店客 → 來本店消費 <span className="text-green-400 font-bold uppercase">總部應補貼本店</span></p>
-                       <p className="text-xl font-mono text-green-400 font-bold">+${crossBranchMetrics.crossBranchIn.toLocaleString()}</p>
+                   <div className="space-y-5">
+                     {/* 綠色行：他店客 -> 來本店消費 */}
+                     <div className="flex justify-between items-start gap-3">
+                       <div>
+                         <p className="text-[11px] text-gray-300 font-bold">他店客 → 來本店消費</p>
+                         <p className="text-2xl font-mono text-green-400 font-black mt-1">
+                           +${crossBranchMetrics.crossBranchIn.toLocaleString()}
+                         </p>
+                       </div>
+                       <div className="flex flex-col items-end gap-1.5">
+                         <span className="text-[9px] bg-green-500/15 text-green-400 border border-green-500/30 px-2 py-0.5 rounded-full font-bold">
+                           他店補貼本店
+                         </span>
+                         {crossBranchMetrics.inDetails.map(item => (
+                           <div key={`in-${item.branch}`} className="flex items-center gap-1.5 text-xs font-mono">
+                             <span className="bg-white/10 text-gray-200 px-2 py-0.5 rounded-md font-bold text-[10px]">
+                               {item.branch}
+                             </span>
+                             <span className="text-green-400 font-bold min-w-[48px] text-right">
+                               +${item.amount.toLocaleString()}
+                             </span>
+                           </div>
+                         ))}
+                       </div>
                      </div>
-                     <div>
-                       <p className="text-[10px] text-gray-400 flex justify-between">本店客 → 去他店消費 <span className="text-red-400 font-bold uppercase">本店應上繳總部</span></p>
-                       <p className="text-xl font-mono text-red-400 font-bold">-${crossBranchMetrics.crossBranchOut.toLocaleString()}</p>
+
+                     {/* 紅色行：本店客 -> 去他店消費 */}
+                     <div className="flex justify-between items-start gap-3 pt-4 border-t border-white/5">
+                       <div>
+                         <p className="text-[11px] text-gray-300 font-bold">本店客 → 去他店消費</p>
+                         <p className="text-2xl font-mono text-red-400 font-black mt-1">
+                           -${crossBranchMetrics.crossBranchOut.toLocaleString()}
+                         </p>
+                       </div>
+                       <div className="flex flex-col items-end gap-1.5">
+                         <span className="text-[9px] bg-red-500/15 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full font-bold">
+                           本店應上繳他店
+                         </span>
+                         {crossBranchMetrics.outDetails.map(item => (
+                           <div key={`out-${item.branch}`} className="flex items-center gap-1.5 text-xs font-mono">
+                             <span className="bg-white/10 text-gray-200 px-2 py-0.5 rounded-md font-bold text-[10px]">
+                               {item.branch}
+                             </span>
+                             <span className="text-red-400 font-bold min-w-[48px] text-right">
+                               -${item.amount.toLocaleString()}
+                             </span>
+                           </div>
+                         ))}
+                       </div>
                      </div>
                    </div>
                 </div>
@@ -1123,7 +1193,7 @@ export default function FinancePage() {
         </div>
       )}
 
-      {/* 🟢 修改單據：適配全類型資料結構 */}
+      {/* 修改單據：適配全類型資料結構 */}
       {editingTx && (
         <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4 backdrop-blur-sm">
           <div className="bg-[#121212] w-full max-w-md rounded-[32px] p-8 border border-blue-500/30 shadow-2xl relative animate-fade-in">
