@@ -7,9 +7,13 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 
+// 防止浮點數運算誤差的金額四捨五入工具
+const roundMoney = (val) => Math.round((Number(val) || 0) * 100) / 100;
+
 export default function SmartPOS() {
   const router = useRouter();
   const [currentUserRole, setCurrentUserRole] = useState(null);
+  const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserBranch, setCurrentUserBranch] = useState(''); 
   const [branches, setBranches] = useState([]);
   const [currentBranch, setCurrentBranch] = useState('');
@@ -65,6 +69,7 @@ export default function SmartPOS() {
           if (docSnap.exists()) {
               const uData = docSnap.data();
               setCurrentUserRole(uData.role);
+              setCurrentUserName(uData.name || uData.email || 'Staff');
               const branch = uData.branch || 'ALL';
               setCurrentUserBranch(branch);
 
@@ -110,7 +115,7 @@ export default function SmartPOS() {
       setShowBranchModal(true);
     }
 
-    // 🚀 核心升級：抓取 users 表中「已停用」的員工名單 (低消耗查詢，只抓員工)
+    // 抓取 users 表中「已停用」的員工名單 (低消耗查詢，只抓員工)
     let suspendedNames = [];
     try {
         const staffQ = query(collection(db, 'users'), where('role', 'in', ['staff', 'manager', 'admin']));
@@ -313,12 +318,12 @@ export default function SmartPOS() {
     
     let totalPay = 0; let deductMap = {}; 
     cart.forEach(item => {
-      if (item.type === 'pay') totalPay += item.finalPrice;
+      if (item.type === 'pay') totalPay = roundMoney(totalPay + Number(item.finalPrice || 0));
       if (item.type === 'deduct') deductMap[item.name] = (deductMap[item.name] || 0) + item.grids;
     });
 
-    const pointsDeducted = Number(usePoints) || 0;
-    const finalCashToPay = totalPay - pointsDeducted;
+    const pointsDeducted = roundMoney(Number(usePoints) || 0);
+    const finalCashToPay = roundMoney(totalPay - pointsDeducted);
 
     if (pointsDeducted > (checkoutSession.points || 0)) {
        setIsProcessing(false);
@@ -337,6 +342,8 @@ export default function SmartPOS() {
         finalTimestamp = historyDate.toISOString();
     }
 
+    const operator = currentUserName || currentUserRole || 'Staff';
+
     try {
       if (checkoutSession.userId) {
         const userRef = doc(db, "users", checkoutSession.userId);
@@ -344,20 +351,24 @@ export default function SmartPOS() {
           const uDoc = await tx.get(userRef);
           const currentData = uDoc.data();
 
+          let finalTDollarBal = roundMoney(currentData.tDollarBalance || 0);
+          let finalPointsBal = roundMoney(currentData.points || 0);
+          let userUpdatePayload = {};
+
           if (finalCashToPay > 0) {
             if (checkoutPaymentMethod === 't_dollar') {
-               const newBal = (currentData.tDollarBalance || 0) - finalCashToPay;
-               if (newBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance}`);
-               tx.update(userRef, { tDollarBalance: newBal });
+               finalTDollarBal = roundMoney(finalTDollarBal - finalCashToPay);
+               if (finalTDollarBal < 0) throw new Error(`T-Dollar 餘額不足！當前僅剩 $${currentData.tDollarBalance || 0}`);
+               userUpdatePayload.tDollarBalance = finalTDollarBal;
             } else {
-               const newPoints = (currentData.points || 0) + finalCashToPay;
-               tx.update(userRef, { points: newPoints });
+               finalPointsBal = roundMoney(finalPointsBal + finalCashToPay);
+               userUpdatePayload.points = finalPointsBal;
             }
           }
 
           if (pointsDeducted > 0) {
-            const newPoints = (currentData.points || 0) - pointsDeducted;
-            tx.update(userRef, { points: newPoints });
+            finalPointsBal = roundMoney(finalPointsBal - pointsDeducted);
+            userUpdatePayload.points = finalPointsBal;
           }
 
           let newPackageBalances = { ...(currentData.packageBalances || {}) };
@@ -380,23 +391,77 @@ export default function SmartPOS() {
           });
 
           if (Object.keys(deductMap).length > 0 || hasPackageBuy) {
-             tx.update(userRef, { packageBalances: newPackageBalances });
+             userUpdatePayload.packageBalances = newPackageBalances;
           }
 
+          if (Object.keys(userUpdatePayload).length > 0) {
+             tx.update(userRef, userUpdatePayload);
+          }
+
+          // 同步寫入 balanceAfter 與 operatorName 供會員紀錄詳情頁稽核
           cart.forEach(item => {
              const newTxRef = doc(collection(db, "transactions"));
              if (item.type === 'pay') {
                const isCashPayment = checkoutPaymentMethod === 'cash' && finalCashToPay > 0;
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, originalAmount: item.originalPrice, discountRate: checkoutSession.discountRate, service: item.name, stylist: item.stylist, type: isCashPayment ? "member_cash" : "deduct", timestamp: finalTimestamp, pointsUsed: pointsDeducted > 0 });
+               tx.set(newTxRef, {
+                 branch: currentBranch,
+                 userId: userRef.id,
+                 phoneNumber: checkoutSession.phoneNumber,
+                 amount: roundMoney(item.finalPrice),
+                 originalAmount: roundMoney(item.originalPrice),
+                 discountRate: checkoutSession.discountRate,
+                 service: item.name,
+                 stylist: item.stylist,
+                 type: isCashPayment ? "member_cash" : "deduct",
+                 balanceAfter: finalTDollarBal,
+                 operatorName: operator,
+                 timestamp: finalTimestamp,
+                 pointsUsed: pointsDeducted > 0
+               });
              } else if (item.type === 'deduct') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, service: item.name, stylist: item.stylist, type: "deduct_package", packageName: item.name, deductedGrids: item.grids, timestamp: finalTimestamp });
+               tx.set(newTxRef, {
+                 branch: currentBranch,
+                 userId: userRef.id,
+                 phoneNumber: checkoutSession.phoneNumber,
+                 amount: 0,
+                 service: item.name,
+                 stylist: item.stylist,
+                 type: "deduct_package",
+                 packageName: item.name,
+                 deductedGrids: item.grids,
+                 balanceAfter: finalTDollarBal,
+                 operatorName: operator,
+                 timestamp: finalTimestamp
+               });
              } else if (item.type === 'assistant') {
-               tx.set(newTxRef, { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: finalTimestamp });
+               tx.set(newTxRef, {
+                 branch: currentBranch,
+                 userId: userRef.id,
+                 phoneNumber: checkoutSession.phoneNumber,
+                 amount: 0,
+                 bonusAmount: roundMoney(item.bonus),
+                 service: '助手服務',
+                 stylist: item.stylist,
+                 type: "assistant_bonus",
+                 operatorName: operator,
+                 timestamp: finalTimestamp
+               });
              }
           });
           
           if (pointsDeducted > 0) {
-             tx.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: userRef.id, phoneNumber: checkoutSession.phoneNumber, amount: 0, pointsDeducted: pointsDeducted, service: 'T-Point 折抵現金', type: "deduct_points", timestamp: finalTimestamp });
+             tx.set(doc(collection(db, "transactions")), {
+               branch: currentBranch,
+               userId: userRef.id,
+               phoneNumber: checkoutSession.phoneNumber,
+               amount: 0,
+               pointsDeducted: pointsDeducted,
+               service: 'T-Point 折抵現金',
+               type: "deduct_points",
+               balanceAfter: finalTDollarBal,
+               operatorName: operator,
+               timestamp: finalTimestamp
+             });
           }
 
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
@@ -412,9 +477,28 @@ export default function SmartPOS() {
           cart.forEach(item => {
             const newTxRef = doc(collection(db, "transactions"));
             if (item.type === 'pay') {
-              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: item.finalPrice, service: item.name, stylist: item.stylist, type: "walkin_cash", timestamp: finalTimestamp });
+              tx.set(newTxRef, {
+                branch: currentBranch,
+                phoneNumber: checkoutSession.phoneNumber,
+                amount: roundMoney(item.finalPrice),
+                service: item.name,
+                stylist: item.stylist,
+                type: "walkin_cash",
+                operatorName: operator,
+                timestamp: finalTimestamp
+              });
             } else if (item.type === 'assistant') {
-              tx.set(newTxRef, { branch: currentBranch, phoneNumber: checkoutSession.phoneNumber, amount: 0, bonusAmount: item.bonus, service: '助手服務', stylist: item.stylist, type: "assistant_bonus", timestamp: finalTimestamp });
+              tx.set(newTxRef, {
+                branch: currentBranch,
+                phoneNumber: checkoutSession.phoneNumber,
+                amount: 0,
+                bonusAmount: roundMoney(item.bonus),
+                service: '助手服務',
+                stylist: item.stylist,
+                type: "assistant_bonus",
+                operatorName: operator,
+                timestamp: finalTimestamp
+              });
             }
           });
           tx.delete(doc(db, "active_sessions", checkoutSession.id));
@@ -467,14 +551,16 @@ export default function SmartPOS() {
     e.preventDefault();
     if (!currentBranch) return toast.error("系統錯誤：未綁定門市");
     if (!topUpUser) return;
+    const operator = currentUserName || currentUserRole || 'Staff';
+
     try {
       const userRef = doc(db, 'users', topUpUser.id);
       const newExpiry = new Date(Date.now() + globalSettings.validityDays * 24 * 60 * 60 * 1000).toISOString();
 
       if (topUpTab === 'tdollar') {
         if (!topUpForm.amount || isNaN(topUpForm.amount) || topUpForm.amount <= 0) return toast.error("請輸入有效充值金額");
-        const paidHKD = Number(topUpForm.amount);
-        const newTotalTopUp = (topUpUser.totalTopUp || 0) + paidHKD;
+        const paidHKD = roundMoney(topUpForm.amount);
+        const newTotalTopUp = roundMoney((topUpUser.totalTopUp || 0) + paidHKD);
         
         let newTier = { name: '基本會員 (Basic)', discount: 1, upgradeBonus: 0, giftPackageName: '' };
         for (const t of tiers) { if (newTotalTopUp >= Number(t.threshold)) { newTier = t; break; } }
@@ -489,28 +575,55 @@ export default function SmartPOS() {
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
-          const newBalance = (userDoc.data().tDollarBalance || 0) + paidHKD;
-          const newPoints = (userDoc.data().points || 0) + paidHKD + upgradeBonus;
+          const newBalance = roundMoney((userDoc.data().tDollarBalance || 0) + paidHKD);
+          const newPoints = roundMoney((userDoc.data().points || 0) + paidHKD + upgradeBonus);
           let newPackageBalances = userDoc.data().packageBalances || {};
           if (giftPkgGrids > 0) newPackageBalances = { ...newPackageBalances, [giftPkgName]: (newPackageBalances[giftPkgName] || 0) + giftPkgGrids };
 
           transaction.update(userRef, { tDollarBalance: newBalance, points: newPoints, totalTopUp: newTotalTopUp, tier: newTier.name, discount: newTier.discount, tDollarExpiry: newExpiry, packageBalances: newPackageBalances, status: 'active' });
-          transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "topup", tDollarAdded: paidHKD, pointsAdded: paidHKD + upgradeBonus, upgradeBonusAdded: upgradeBonus, giftPackageAdded: giftPkgName, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
+          transaction.set(doc(collection(db, "transactions")), {
+            branch: currentBranch,
+            userId: topUpUser.id,
+            phoneNumber: topUpUser.phoneNumber,
+            type: "topup",
+            tDollarAdded: paidHKD,
+            balanceAfter: newBalance,
+            pointsAdded: roundMoney(paidHKD + upgradeBonus),
+            upgradeBonusAdded: upgradeBonus,
+            giftPackageAdded: giftPkgName,
+            amountPaidHKD: paidHKD,
+            paymentMethod: topUpForm.paymentMethod,
+            operatorName: operator,
+            timestamp: new Date().toISOString()
+          });
         });
         toast.success(`增值成功！已將客人升級至 ${newTier.name}`);
 
       } else if (topUpTab === 'package') {
         const pkg = packages.find(p => p.id === topUpForm.packageId);
         if (!pkg) return toast.error("請選擇套票");
-        const paidHKD = Number(pkg.price);
+        const paidHKD = roundMoney(pkg.price);
         if (!window.confirm(`確認收取 ${topUpForm.paymentMethod} $${paidHKD} 售出【${pkg.name}】？`)) return;
 
         await runTransaction(db, async (transaction) => {
           const userDoc = await transaction.get(userRef);
           const currentPkgs = userDoc.data().packageBalances || {};
+          const currentTDollarBal = roundMoney(userDoc.data().tDollarBalance || 0);
           const newQuantity = (currentPkgs[pkg.name] || 0) + Number(pkg.quantity);
           transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newQuantity }, tDollarExpiry: newExpiry });
-          transaction.set(doc(collection(db, "transactions")), { branch: currentBranch, userId: topUpUser.id, phoneNumber: topUpUser.phoneNumber, type: "buy_package", packageName: pkg.name, gridsAdded: pkg.quantity, amountPaidHKD: paidHKD, paymentMethod: topUpForm.paymentMethod, timestamp: new Date().toISOString() });
+          transaction.set(doc(collection(db, "transactions")), {
+            branch: currentBranch,
+            userId: topUpUser.id,
+            phoneNumber: topUpUser.phoneNumber,
+            type: "buy_package",
+            packageName: pkg.name,
+            gridsAdded: pkg.quantity,
+            amountPaidHKD: paidHKD,
+            balanceAfter: currentTDollarBal,
+            paymentMethod: topUpForm.paymentMethod,
+            operatorName: operator,
+            timestamp: new Date().toISOString()
+          });
         });
         toast.success(`成功售出套票：${pkg.name}`);
       } else if (topUpTab === 'admin_adjust_pkg') {
@@ -526,7 +639,16 @@ export default function SmartPOS() {
             const currentPkgs = userDoc.data().packageBalances || {};
             transaction.update(userRef, { packageBalances: { ...currentPkgs, [pkg.name]: newGrids } });
             transaction.set(doc(collection(db, "audit_logs")), {
-                module: "pos_adjustment", action: "admin_adjust_package", branch: currentBranch, userId: topUpUser.id, customerPhone: topUpUser.phoneNumber, packageName: pkg.name, oldGrids: currentPkgs[pkg.name] || 0, newGrids: newGrids, timestamp: new Date().toISOString(), adminName: currentUserRole
+                module: "pos_adjustment",
+                action: "admin_adjust_package",
+                branch: currentBranch,
+                userId: topUpUser.id,
+                customerPhone: topUpUser.phoneNumber,
+                packageName: pkg.name,
+                oldGrids: currentPkgs[pkg.name] || 0,
+                newGrids: newGrids,
+                timestamp: new Date().toISOString(),
+                adminName: operator
             });
         });
         toast.success(`套票次數已靜默修正為 ${newGrids} 次！`);
