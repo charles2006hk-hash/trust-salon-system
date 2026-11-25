@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { db, auth } from '@/lib/firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, setDoc, query, where, deleteDoc, getDoc, runTransaction, writeBatch } from 'firebase/firestore'; 
 import { onAuthStateChanged, sendPasswordResetEmail } from 'firebase/auth'; 
 import { Toaster, toast } from 'react-hot-toast';
 
 export default function UserManagementPage() {
+  const router = useRouter();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterRole, setFilterRole] = useState('all');
@@ -14,6 +16,7 @@ export default function UserManagementPage() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [currentAdminRole, setCurrentAdminRole] = useState('reception'); 
+  const [currentAdminName, setCurrentAdminName] = useState('');
   const [currentUid, setCurrentUid] = useState(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -45,7 +48,11 @@ export default function UserManagementPage() {
       if (user) {
         setCurrentUid(user.uid);
         const docSnap = await getDoc(doc(db, 'users', user.uid));
-        if (docSnap.exists()) setCurrentAdminRole(docSnap.data().role);
+        if (docSnap.exists()) {
+          const uData = docSnap.data();
+          setCurrentAdminRole(uData.role);
+          setCurrentAdminName(uData.name || uData.email || 'Admin');
+        }
       }
     });
     fetchUsers();
@@ -302,7 +309,7 @@ export default function UserManagementPage() {
         phoneNumber: selectedUser.phoneNumber || '',
         email: selectedUser.email || '',
         branch: selectedUser.branch || 'ALL', 
-        // 🚀 新增：支援直接修改會員等級與連動折扣[cite: 20]
+        // 支援直接修改會員等級與連動折扣
         tier: selectedUser.tier || '基本會員 (Basic)',
         discount: Number(selectedUser.discount) || 1,
         ...(currentAdminRole === 'admin' ? { role: selectedUser.role } : {}),
@@ -357,20 +364,25 @@ export default function UserManagementPage() {
         const uDoc = await tx.get(userRef);
         const data = uDoc.data();
 
-        const newPoints = (data.points || 0) + pts;
-        const newTDollar = (data.tDollarBalance || 0) + td;
+        // 防止浮點數運算誤差
+        const newPoints = Math.round(((Number(data.points) || 0) + pts) * 100) / 100;
+        const newTDollar = Math.round(((Number(data.tDollarBalance) || 0) + td) * 100) / 100;
 
         if (newPoints < 0 || newTDollar < 0) throw new Error("扣除失敗：資產不能小於 0");
 
         tx.update(userRef, { points: newPoints, tDollarBalance: newTDollar });
         
+        // 同步寫入 balanceAfter 與 operatorName 供「檢視紀錄」詳情頁稽核
         tx.set(doc(collection(db, "transactions")), {
           userId: selectedUser.id, 
           phoneNumber: selectedUser.phoneNumber || '未提供號碼', 
+          branch: selectedUser.branch || 'ALL',
           type: "admin_adjustment",
           pointsAdded: pts, 
           tDollarAdded: td, 
+          balanceAfter: newTDollar,
           adminId: currentUid, 
+          operatorName: currentAdminName || 'Admin',
           note: adjustForm.note || '老闆手動調整', 
           timestamp: new Date().toISOString()
         });
@@ -566,6 +578,15 @@ export default function UserManagementPage() {
                     </select>
                   </td>
                   <td className="p-6 text-right flex justify-end gap-2 items-center">
+                     {/* 會員獨立紀錄詳情頁入口（所有內部角色皆可檢視） */}
+                     {u.role === 'member' && (
+                       <button
+                         onClick={() => router.push(`/admin/users/${u.id}/records`)}
+                         className="text-[10px] bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 hover:bg-emerald-600 hover:text-white px-3 py-2 rounded-xl font-bold uppercase tracking-widest transition"
+                       >
+                         檢視紀錄
+                       </button>
+                     )}
                      {currentAdminRole === 'admin' && (
                        <>
                          <button 
@@ -831,7 +852,7 @@ export default function UserManagementPage() {
                     </select>
                   </div>
 
-                  {/* 🚀 新增：會員等級與折扣編輯選單[cite: 20] */}
+                  {/* 會員等級與折扣編輯選單 */}
                   <div className="space-y-1 md:col-span-2">
                     <label className="text-[10px] text-purple-400 font-bold uppercase tracking-widest ml-1">修改會員等級 (Tier & Discount)</label>
                     <select 
