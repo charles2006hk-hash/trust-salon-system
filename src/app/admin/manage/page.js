@@ -62,7 +62,6 @@ export default function AdminManagePage() {
   };
   const [globalLabels, setGlobalLabels] = useState(defaultLabels);
 
-  // 預設加上 isFixed 與 fixedAmount 確保結構完整
   const defaultCommissions = {
     R1: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R2: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R3: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, R4: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 },
     W1: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W2: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W3: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 }, W4: { deduct: 0, percent: 0, isFixed: false, fixedAmount: 0 },
@@ -86,7 +85,8 @@ export default function AdminManagePage() {
     commissionCode: 'W1', templateId: '', templateName: '', 
     commissions: JSON.parse(JSON.stringify({ ...defaultCommissions, bonusTier: { enabled: false, threshold: 3000, triggerCodes: [], bonusRules: defaultCommissions } })), 
     branch: '', phoneNumber: '+852', commissionLabels: defaultLabels,
-    sortWeight: 0, isAssistant: false
+    sortWeight: 0, isAssistant: false,
+    enableCrossBranch: true // 預設開啟跨店資金結算
   };
   const [formData, setFormData] = useState(initialForm);
 
@@ -247,7 +247,7 @@ export default function AdminManagePage() {
             const uDoc = await tx.get(userRef);
             const currentData = uDoc.data();
             
-            let newBalance = (currentData.tDollarBalance || 0) - deductAmt;
+            let newBalance = Math.round(((Number(currentData.tDollarBalance) || 0) - deductAmt) * 100) / 100;
             if (newBalance < 0) newBalance = 0; 
 
             let currentPkgs = currentData.packageBalances || {};
@@ -361,7 +361,8 @@ export default function AdminManagePage() {
       commissions: initCommissions, 
       phoneNumber: item.phoneNumber || '+852', 
       sortWeight: item.sortWeight || 0,
-      isAssistant: item.isAssistant || false
+      isAssistant: item.isAssistant || false,
+      enableCrossBranch: item.enableCrossBranch !== false
     });
     if (item.name && !registeredStaff.includes(item.name) && activeTab === 'staff') { setIsCustomStaff(true); } 
     else { setIsCustomStaff(false); }
@@ -387,7 +388,6 @@ export default function AdminManagePage() {
     } else { setFormData({ ...formData, templateId: templateId, templateName: '' }); }
   };
 
-  // 🚀 核心升級：支援 isFixed 與 fixedAmount 欄位的狀態更新
   const updateCommission = (code, field, value, isBonus = false) => {
     const parsedValue = field === 'isFixed' ? Boolean(value) : Number(value);
     
@@ -450,10 +450,6 @@ export default function AdminManagePage() {
     
     return (
       <div className="col-span-2 pt-6 border-t border-gray-800 space-y-8">
-        
-        {/* ========================================================= */}
-        {/* 1. 基礎拆帳參數 */}
-        {/* ========================================================= */}
         <div>
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2"><i className="fa-solid fa-calculator text-[#D4AF37]"></i> 基礎拆帳參數設定</h3>
@@ -468,7 +464,6 @@ export default function AdminManagePage() {
                  <div className="flex justify-between items-center mb-2">
                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{globalLabels[code] ? `${code} - ${globalLabels[code]}` : code}</span>
                    
-                   {/* 🚀 UI 升級：加入「比例/固定」切換開關 */}
                    <button
                      type="button"
                      onClick={() => updateCommission(code, 'isFixed', !isFixed)}
@@ -503,9 +498,6 @@ export default function AdminManagePage() {
           </div>
         </div>
 
-        {/* ========================================================= */}
-        {/* 2. 階梯式觸發設定 (Bonus Tier) */}
-        {/* ========================================================= */}
         <div className={`p-6 rounded-[32px] border-2 transition-all duration-500 ${isBonusEnabled ? 'bg-indigo-900/20 border-indigo-500/50 shadow-[0_0_30px_rgba(99,102,241,0.15)]' : 'bg-black/30 border-gray-800'}`}>
           <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
              <div>
@@ -609,7 +601,6 @@ export default function AdminManagePage() {
             </div>
           )}
         </div>
-
       </div>
     );
   };
@@ -729,6 +720,24 @@ export default function AdminManagePage() {
                       <div className="space-y-2 col-span-2">
                         <label className="text-sm font-bold text-[#D4AF37] uppercase tracking-widest">門店名稱</label>
                         <input type="text" className="w-full bg-gray-900 p-4 rounded-xl text-white outline-none focus:border-[#D4AF37]" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required placeholder="如：大埔店、樂富店" />
+                      </div>
+                      {/* 跨店資金結算開關 */}
+                      <div className="col-span-2 flex items-center gap-3 bg-gray-900 p-4 rounded-xl border border-white/5">
+                        <input
+                          type="checkbox"
+                          id="enableCrossBranch"
+                          className="w-5 h-5 accent-[#D4AF37]"
+                          checked={formData.enableCrossBranch !== false}
+                          onChange={e => setFormData({...formData, enableCrossBranch: e.target.checked})}
+                        />
+                        <div className="flex flex-col">
+                          <label htmlFor="enableCrossBranch" className="text-sm font-bold text-blue-400 cursor-pointer tracking-widest">
+                            參與跨店資金結算 (Cross-Branch Settlement)
+                          </label>
+                          <span className="text-[10px] text-gray-500">
+                            開啟後，此門店將自動加入全線跨店資金結算池，所有分店報表會自動列出雙向對帳明細。
+                          </span>
+                        </div>
                       </div>
                     </>
                   )}
@@ -1030,8 +1039,13 @@ export default function AdminManagePage() {
                                   {activeTab === 'packages' ? '🎫' : activeTab === 'services' ? '💆' : activeTab === 'staff' ? '✂️' : activeTab === 'templates' ? '💰' : activeTab === 'branches' ? '📍' : activeTab === 'categories' ? '🏷️' : activeTab === 'promos' ? '📢' : activeTab === 'tiers' ? '👑' : (item.icon || '🎁')}
                               </div>
                               <div className="flex-1">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <span className="font-bold text-lg text-white">{item.name || item.title}</span>
+                                  {activeTab === 'branches' && (
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold uppercase tracking-tighter ${item.enableCrossBranch !== false ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-gray-700/40 text-gray-400 border-gray-600'}`}>
+                                      {item.enableCrossBranch !== false ? '🔄 參與跨店結算' : '🚫 不參與跨店結算'}
+                                    </span>
+                                  )}
                                   {['services', 'packages'].includes(activeTab) && item.commissionCode && (
                                     <span className="text-[9px] bg-purple-500/20 text-purple-400 px-1.5 py-0.5 rounded border border-purple-500/30 font-bold uppercase tracking-tighter">
                                       {item.commissionCode} 類
